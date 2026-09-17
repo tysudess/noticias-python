@@ -55,9 +55,6 @@ class HomePage(QWidget):
 
         self.root.addStretch(1)
 
-    # ------------------------------------------------------------------
-    # PRIMEIRA LINHA — MÉTRICAS
-    # ------------------------------------------------------------------
     def _build_metrics(self) -> None:
         wrap = QWidget()
         grid = QGridLayout(wrap)
@@ -119,9 +116,6 @@ class HomePage(QWidget):
 
         self.root.addWidget(wrap)
 
-    # ------------------------------------------------------------------
-    # SEGUNDA LINHA — HERO + AÇÕES RÁPIDAS
-    # ------------------------------------------------------------------
     def _build_monitor_and_actions(self) -> None:
         row = QWidget()
         layout = QHBoxLayout(row)
@@ -145,13 +139,16 @@ class HomePage(QWidget):
 
         title_box = QVBoxLayout()
         title_box.setSpacing(2)
+
         title = QLabel("Central pronta para monitorar")
         title.setObjectName("heroTitle")
+
         subtitle = QLabel(
             "As buscas e os resultados agora são atualizados na própria\n"
             "tela, em tempo real."
         )
         subtitle.setObjectName("heroSubtitle")
+
         title_box.addWidget(title)
         title_box.addWidget(subtitle)
 
@@ -167,8 +164,10 @@ class HomePage(QWidget):
 
         self.ready_title = QLabel("●   Status: Pronto")
         self.ready_title.setObjectName("readyTitle")
+
         self.ready_text = QLabel("Monitoramento ativo e funcionando normalmente.")
         self.ready_text.setObjectName("readyText")
+
         status_l.addWidget(self.ready_title)
         status_l.addWidget(self.ready_text)
         left.addWidget(status)
@@ -182,9 +181,11 @@ class HomePage(QWidget):
         screen = QLabel("▭")
         screen.setObjectName("monitorScreen")
         screen.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
         monitor_text = QLabel("▣  ▬▬▬\n▣  ▬▬▬\n▣  ▬▬▬")
         monitor_text.setObjectName("monitorLines")
         monitor_text.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
         visual_l.addStretch(1)
         visual_l.addWidget(screen)
         visual_l.addWidget(monitor_text)
@@ -195,25 +196,37 @@ class HomePage(QWidget):
         layout.addWidget(hero, 3)
 
         quick, ql = _card("quickCard")
+
         qtitle = QLabel("⚡   Ações rápidas")
         qtitle.setObjectName("sectionTitle")
+
         qsub = QLabel("Execute varreduras prioritárias sem interromper o acompanhamento.")
         qsub.setObjectName("sectionSubtitle")
         qsub.setWordWrap(True)
+
         ql.addWidget(qtitle)
         ql.addWidget(qsub)
 
-        self.news_button = QPushButton("⌕   Buscar notícias\n      Iniciar varredura agora     ›")
+        self.news_button = QPushButton(
+            "⌕   Buscar notícias\n"
+            "      Iniciar varredura agora     ›"
+        )
         self.news_button.setObjectName("quickPrimary")
-        self.news_button.clicked.connect(controller.search_news)
+        self.news_button.clicked.connect(self.controller.search_news)
 
-        self.video_button = QPushButton("▶   Buscar vídeos\n      Pesquisar novos vídeos     ›")
+        self.video_button = QPushButton(
+            "▶   Buscar vídeos\n"
+            "      Pesquisar novos vídeos     ›"
+        )
         self.video_button.setObjectName("quickSecondary")
-        self.video_button.clicked.connect(controller.search_videos)
+        self.video_button.clicked.connect(self.controller.search_videos)
 
-        self.demands_button = QPushButton("▣   Buscar demandas\n      Consultar demandas ativas     ›")
+        self.demands_button = QPushButton(
+            "▣   Buscar demandas\n"
+            "      Consultar demandas ativas     ›"
+        )
         self.demands_button.setObjectName("quickSecondary")
-        self.demands_button.clicked.connect(controller.search_all_demands)
+        self.demands_button.clicked.connect(self.controller.search_all_demands)
 
         for button in (self.news_button, self.video_button, self.demands_button):
             button.setMinimumHeight(58)
@@ -224,9 +237,6 @@ class HomePage(QWidget):
 
         self.root.addWidget(row)
 
-    # ------------------------------------------------------------------
-    # TERCEIRA LINHA — AGENDAMENTO + RESUMO
-    # ------------------------------------------------------------------
     def _build_schedule_and_summary(self) -> None:
         row = QWidget()
         layout = QHBoxLayout(row)
@@ -234,35 +244,52 @@ class HomePage(QWidget):
         layout.setSpacing(12)
 
         schedule, sl = _card("homeCard")
+
         title = QLabel("◴   Agendamento automático")
         title.setObjectName("sectionTitle")
+
         sub = QLabel("O sistema executa buscas automaticamente nos horários definidos.")
         sub.setObjectName("sectionSubtitle")
+
         sl.addWidget(title)
         sl.addWidget(sub)
 
         cells = QHBoxLayout()
         cells.setSpacing(8)
 
-        self.news_schedule = self._schedule_box("▤", "Notícias", "a cada 30 min", "blue")
-        self.demand_schedule = self._schedule_box("▣", "Demandas", "a cada 60 min", "orange")
-        self.video_schedule = self._schedule_box(
-            "▶", "Vídeos", "08:00, 12:00, 15:00, 19:00, 21:00", "purple"
+        self.news_schedule = self._schedule_box(
+            "▤", "Notícias", "a cada 30 min", "blue"
         )
+        self.demand_schedule = self._schedule_box(
+            "▣", "Demandas", "a cada 60 min", "orange"
+        )
+        self.video_schedule = self._schedule_box(
+            "▶",
+            "Vídeos",
+            "08:00, 12:00, 15:00, 19:00, 21:00",
+            "purple",
+        )
+
         cells.addWidget(self.news_schedule)
         cells.addWidget(self.demand_schedule)
         cells.addWidget(self.video_schedule)
+
         sl.addLayout(cells)
 
         summary, dl = _card("homeCard")
+
         head = QHBoxLayout()
+
         title = QLabel("▥   Resumo do dia")
         title.setObjectName("sectionTitle")
+
         period = QLabel("Últimas 24 horas   ˅")
         period.setObjectName("smallPill")
+
         head.addWidget(title)
         head.addStretch()
         head.addWidget(period)
+
         dl.addLayout(head)
 
         sub = QLabel("Panorama geral das últimas 24 horas.")
@@ -271,6 +298,7 @@ class HomePage(QWidget):
 
         graph = QFrame()
         graph.setObjectName("graphFrame")
+
         gl = QVBoxLayout(graph)
         gl.setContentsMargins(12, 8, 12, 8)
 
@@ -282,19 +310,30 @@ class HomePage(QWidget):
             " 0 ┼─●──●──●──●──●──●──●──●──●──●──●──●─"
         )
         self.graph_text.setObjectName("graphText")
-        self.graph_text.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+        self.graph_text.setAlignment(
+            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter
+        )
 
         legend = QLabel("● Notícias     ● Vídeos     ● Demandas")
         legend.setObjectName("graphLegend")
+
         gl.addWidget(self.graph_text)
         gl.addWidget(legend)
+
         dl.addWidget(graph)
 
         layout.addWidget(schedule, 1)
         layout.addWidget(summary, 1)
+
         self.root.addWidget(row)
 
-    def _schedule_box(self, icon: str, title: str, detail: str, tone: str) -> QFrame:
+    def _schedule_box(
+        self,
+        icon: str,
+        title: str,
+        detail: str,
+        tone: str,
+    ) -> QFrame:
         box = QFrame()
         box.setObjectName("scheduleBox")
         box.setProperty("tone", tone)
@@ -311,21 +350,22 @@ class HomePage(QWidget):
 
         text = QVBoxLayout()
         text.setSpacing(0)
+
         title_l = QLabel(title)
         title_l.setObjectName("scheduleTitle")
+
         detail_l = QLabel(detail)
         detail_l.setObjectName("scheduleDetail")
         detail_l.setWordWrap(True)
+
         text.addWidget(title_l)
         text.addWidget(detail_l)
 
         row.addWidget(badge)
         row.addLayout(text, 1)
+
         return box
 
-    # ------------------------------------------------------------------
-    # QUARTA LINHA — FONTES + ATIVIDADES + DICAS
-    # ------------------------------------------------------------------
     def _build_bottom_cards(self) -> None:
         row = QWidget()
         layout = QHBoxLayout(row)
@@ -333,47 +373,65 @@ class HomePage(QWidget):
         layout.setSpacing(12)
 
         sources, sl = _card("homeCard")
+
         head = QHBoxLayout()
+
         title = QLabel("●   Fontes mais relevantes")
         title.setObjectName("sectionTitle")
+
         more = QPushButton("Ver todas")
         more.setObjectName("linkButton")
         more.clicked.connect(lambda: self.navigate.emit("SOURCES"))
+
         head.addWidget(title)
         head.addStretch()
         head.addWidget(more)
+
         sl.addLayout(head)
+
         sub = QLabel("Suas principais fontes monitoradas.")
         sub.setObjectName("sectionSubtitle")
         sl.addWidget(sub)
-        self.sources_text = QLabel("1   ●  Agência Brasil                         ● Ativa")
+
+        self.sources_text = QLabel(
+            "1   ●  Agência Brasil                         ● Ativa"
+        )
         self.sources_text.setObjectName("listText")
         self.sources_text.setWordWrap(True)
         sl.addWidget(self.sources_text)
 
         activities, al = _card("homeCard")
+
         head = QHBoxLayout()
+
         title = QLabel("◷   Últimas atividades")
         title.setObjectName("sectionTitle")
+
         more = QPushButton("Ver histórico")
         more.setObjectName("linkButton")
         more.clicked.connect(lambda: self.navigate.emit("HISTORY"))
+
         head.addWidget(title)
         head.addStretch()
         head.addWidget(more)
+
         al.addLayout(head)
+
         sub = QLabel("Histórico recente de ações no sistema.")
         sub.setObjectName("sectionSubtitle")
         al.addWidget(sub)
+
         self.activities_text = QLabel()
         self.activities_text.setObjectName("listText")
         self.activities_text.setWordWrap(True)
         al.addWidget(self.activities_text)
 
         tips, tl = _card("tipCard")
+
         title = QLabel("💡   Dicas")
         title.setObjectName("sectionTitle")
         tl.addWidget(title)
+
         self.tip_text = QLabel(
             "🎓   Use termos de busca específicos\n\n"
             "Quanto mais específicos os termos, mais\n"
@@ -381,29 +439,38 @@ class HomePage(QWidget):
         )
         self.tip_text.setObjectName("tipText")
         self.tip_text.setWordWrap(True)
+
         tl.addWidget(self.tip_text)
         tl.addStretch(1)
+
         dots = QLabel("●  ○  ○")
         dots.setObjectName("dots")
         dots.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
         tl.addWidget(dots)
 
         layout.addWidget(sources, 1)
         layout.addWidget(activities, 1)
         layout.addWidget(tips, 1)
+
         self.root.addWidget(row)
 
-    # ------------------------------------------------------------------
-    # ATUALIZAÇÃO DE DADOS
-    # ------------------------------------------------------------------
     def refresh(self, state: UiState) -> None:
         now_ms = int(datetime.now().timestamp() * 1000)
         day_ago = now_ms - 86_400_000
 
         news_count = len(state.news)
         videos_count = len(state.videos)
-        today_videos = sum(1 for video in state.videos if video.capturedAt >= day_ago)
-        active_demands = sum(1 for demand in state.demands if demand.active)
+        today_videos = sum(
+            1
+            for video in state.videos
+            if video.capturedAt >= day_ago
+        )
+        active_demands = sum(
+            1
+            for demand in state.demands
+            if demand.active
+        )
         source_count = len(self.controller.news_sources)
 
         self.metric_values["news"].setText(str(news_count))
@@ -413,46 +480,103 @@ class HomePage(QWidget):
         self.metric_values["sources"].setText(str(source_count))
 
         self.metric_subtitles["demands"].setText(
-            f"{active_demands} ativa" if active_demands == 1 else f"{active_demands} ativas"
+            f"{active_demands} ativa"
+            if active_demands == 1
+            else f"{active_demands} ativas"
         )
-        self.metric_subtitles["sources"].setText(f"{source_count} especializadas")
+        self.metric_subtitles["sources"].setText(
+            f"{source_count} especializadas"
+        )
 
         cfg = self.controller.proxy_config
         auto = self.controller.automation_settings
 
         if state.news_busy or state.video_busy:
             self.ready_title.setText("●   Status: Monitorando")
-            self.ready_text.setText("Uma busca está em andamento. Os resultados serão atualizados em tempo real.")
+            self.ready_text.setText(
+                "Uma busca está em andamento. "
+                "Os resultados serão atualizados em tempo real."
+            )
         else:
             self.ready_title.setText("●   Status: Pronto")
-            self.ready_text.setText("Monitoramento ativo e funcionando normalmente.")
+            self.ready_text.setText(
+                "Monitoramento ativo e funcionando normalmente."
+            )
 
-        # Horários reais configurados.
-        news_interval = getattr(auto, "news_interval_minutes", 30)
-        demand_interval = getattr(auto, "demand_interval_minutes", 60)
-        video_times = sorted(getattr(auto, "video_schedule_times", set()) or [])
-        video_detail = ", ".join(video_times) if video_times else "Sem horários definidos"
+        news_interval = getattr(
+            auto,
+            "news_interval_minutes",
+            30,
+        )
+        demand_interval = getattr(
+            auto,
+            "demand_interval_minutes",
+            60,
+        )
+        video_times = sorted(
+            getattr(
+                auto,
+                "video_schedule_times",
+                set(),
+            ) or []
+        )
 
-        self._set_schedule_detail(self.news_schedule, f"a cada {news_interval} min")
-        self._set_schedule_detail(self.demand_schedule, f"a cada {demand_interval} min")
-        self._set_schedule_detail(self.video_schedule, video_detail)
+        video_detail = (
+            ", ".join(video_times)
+            if video_times
+            else "Sem horários definidos"
+        )
 
-        # Fontes mais relevantes: usa as primeiras disponíveis da configuração.
+        self._set_schedule_detail(
+            self.news_schedule,
+            f"a cada {news_interval} min",
+        )
+        self._set_schedule_detail(
+            self.demand_schedule,
+            f"a cada {demand_interval} min",
+        )
+        self._set_schedule_detail(
+            self.video_schedule,
+            video_detail,
+        )
+
         top_sources = list(self.controller.news_sources[:5])
+
         if top_sources:
             lines = []
-            for index, source in enumerate(top_sources, start=1):
-                name = getattr(source, "name", str(source))
-                lines.append(f"{index}   ●  {name:<28}   ● Ativa")
-            self.sources_text.setText("\n".join(lines))
+
+            for index, source in enumerate(
+                top_sources,
+                start=1,
+            ):
+                name = getattr(
+                    source,
+                    "name",
+                    str(source),
+                )
+                lines.append(
+                    f"{index}   ●  {name:<28}   ● Ativa"
+                )
+
+            self.sources_text.setText(
+                "\n".join(lines)
+            )
         else:
-            self.sources_text.setText("Nenhuma fonte cadastrada.")
+            self.sources_text.setText(
+                "Nenhuma fonte cadastrada."
+            )
 
         unstable = (
             "Nenhuma"
             if not state.unstable_video_sources
             else ", ".join(
-                str(getattr(item, "sourceName", item))
+                str(
+                    getattr(
+                        item,
+                        "sourceName",
+                        item,
+                    )
+                )
                 for item in state.unstable_video_sources
             )
         )
@@ -460,15 +584,20 @@ class HomePage(QWidget):
         self.activities_text.setText(
             "●  Sistema iniciado\n"
             "    Monitor de Notícias v4.0.2\n\n"
-            f"⚙  Configuração carregada\n"
+            "⚙  Configuração carregada\n"
             f"    {cfg.status_label}\n\n"
-            f"◴  Agendamento {'ativo' if auto.automatic_monitoring else 'pausado'}\n"
+            f"◴  Agendamento "
+            f"{'ativo' if auto.automatic_monitoring else 'pausado'}\n"
             f"    Fontes instáveis: {unstable}"
         )
 
     @staticmethod
-    def _set_schedule_detail(frame: QFrame, value: str) -> None:
+    def _set_schedule_detail(
+        frame: QFrame,
+        value: str,
+    ) -> None:
         labels = frame.findChildren(QLabel)
+
         for label in labels:
             if label.objectName() == "scheduleDetail":
                 label.setText(value)
