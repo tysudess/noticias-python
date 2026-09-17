@@ -3,8 +3,7 @@ name: Build e Release Windows Portable
 on:
   workflow_dispatch:
   push:
-    branches:
-      - main
+    branches: [main]
     paths:
       - "src/**"
       - "resources/**"
@@ -12,18 +11,21 @@ on:
       - "run.py"
       - "requirements*.txt"
       - "MonitorDeNoticias.spec"
-      - ".github/workflows/build-portable-release.yml"
+      - ".github/workflows/build-portable.yml"
 
 permissions:
   contents: write
+  actions: read
+
+env:
+  PORTABLE_NAME: MonitorDeNoticias-Windows-Portable-x64.zip
+  ARTIFACT_NAME: monitor-portable-release
 
 jobs:
-  build-release:
+  build:
+    name: Gerar portable
     runs-on: windows-latest
-    timeout-minutes: 50
-
-    env:
-      PORTABLE_NAME: MonitorDeNoticias-Windows-Portable-x64.zip
+    timeout-minutes: 45
 
     steps:
       - name: Checkout
@@ -48,9 +50,7 @@ jobs:
         shell: pwsh
         run: |
           python -m PyInstaller --noconfirm --clean MonitorDeNoticias.spec
-
-          $exe = "dist/MonitorDeNoticias/MonitorDeNoticias.exe"
-          if (-not (Test-Path $exe)) {
+          if (-not (Test-Path "dist/MonitorDeNoticias/MonitorDeNoticias.exe")) {
             throw "MonitorDeNoticias.exe não foi gerado."
           }
 
@@ -58,27 +58,15 @@ jobs:
         shell: pwsh
         run: |
           $root = Resolve-Path "dist/MonitorDeNoticias"
-
-          foreach ($dir in @(
-            "resources",
-            "bin",
-            "data",
-            "logs",
-            "temp",
-            "Videos",
-            "VideoEditorExports"
-          )) {
+          foreach ($dir in @("resources","bin","data","logs","temp","Videos","VideoEditorExports")) {
             New-Item -ItemType Directory -Force -Path (Join-Path $root $dir) | Out-Null
           }
-
           if (Test-Path "resources") {
             Copy-Item "resources/*" (Join-Path $root "resources") -Recurse -Force
           }
-
           if (Test-Path "portable/README_PORTABLE.txt") {
             Copy-Item "portable/README_PORTABLE.txt" $root -Force
           }
-
           if (Test-Path "portable/THIRD_PARTY_NOTICES.txt") {
             Copy-Item "portable/THIRD_PARTY_NOTICES.txt" $root -Force
           }
@@ -87,230 +75,139 @@ jobs:
         shell: pwsh
         run: |
           $bin = Resolve-Path "dist/MonitorDeNoticias/bin"
-
           Invoke-WebRequest `
             -Uri "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe" `
             -OutFile (Join-Path $bin "yt-dlp.exe") `
             -TimeoutSec 180
 
-          if (-not (Test-Path (Join-Path $bin "yt-dlp.exe"))) {
-            throw "yt-dlp.exe não foi baixado."
-          }
-
       - name: Baixar FFmpeg e FFprobe
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
-
           $tmpZip = Join-Path $env:RUNNER_TEMP "ffmpeg-download.zip"
           $tmpDir = Join-Path $env:RUNNER_TEMP "ffmpeg-extracted"
-
-          if (Test-Path $tmpZip) {
-            Remove-Item $tmpZip -Force
-          }
-          if (Test-Path $tmpDir) {
-            Remove-Item $tmpDir -Recurse -Force
-          }
-
-          # Usa GitHub Releases do BtbN em vez de gyan.dev.
-          # Primeiro tenta a linha FFmpeg 9.0; se houver indisponibilidade,
-          # usa o build master mais recente como fallback.
           $urls = @(
             "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-n9.0-latest-win64-gpl-9.0.zip",
             "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl.zip"
           )
-
-          $downloaded = $false
-
+          $ok = $false
           foreach ($url in $urls) {
             for ($attempt = 1; $attempt -le 3; $attempt++) {
               try {
-                Write-Host "Baixando FFmpeg: $url"
-                Write-Host "Tentativa $attempt de 3"
-
-                Invoke-WebRequest `
-                  -Uri $url `
-                  -OutFile $tmpZip `
-                  -TimeoutSec 300 `
-                  -MaximumRedirection 10
-
-                if ((Test-Path $tmpZip) -and ((Get-Item $tmpZip).Length -gt 10000000)) {
-                  $downloaded = $true
-                  Write-Host "Download do FFmpeg concluído."
+                if (Test-Path $tmpZip) { Remove-Item $tmpZip -Force }
+                Invoke-WebRequest -Uri $url -OutFile $tmpZip -TimeoutSec 300 -MaximumRedirection 10
+                if ((Get-Item $tmpZip).Length -gt 10000000) {
+                  $ok = $true
                   break
                 }
-
-                throw "Arquivo baixado está ausente ou pequeno demais."
-              }
-              catch {
-                Write-Warning "Falha ao baixar FFmpeg: $($_.Exception.Message)"
-
-                if (Test-Path $tmpZip) {
-                  Remove-Item $tmpZip -Force
-                }
-
-                if ($attempt -lt 3) {
-                  Start-Sleep -Seconds (10 * $attempt)
-                }
+              } catch {
+                Write-Warning $_.Exception.Message
+                if ($attempt -lt 3) { Start-Sleep -Seconds (10 * $attempt) }
               }
             }
-
-            if ($downloaded) {
-              break
-            }
+            if ($ok) { break }
           }
-
-          if (-not $downloaded) {
-            throw "Não foi possível baixar FFmpeg após múltiplas tentativas e fallback."
-          }
-
+          if (-not $ok) { throw "Não foi possível baixar FFmpeg." }
           Expand-Archive $tmpZip $tmpDir -Force
-
           $ffmpeg = Get-ChildItem $tmpDir -Filter "ffmpeg.exe" -Recurse | Select-Object -First 1
           $ffprobe = Get-ChildItem $tmpDir -Filter "ffprobe.exe" -Recurse | Select-Object -First 1
-
-          if (-not $ffmpeg -or -not $ffprobe) {
-            throw "ffmpeg.exe/ffprobe.exe não encontrados no pacote baixado."
-          }
-
+          if (-not $ffmpeg -or -not $ffprobe) { throw "FFmpeg/FFprobe não encontrados." }
           Copy-Item $ffmpeg.FullName "dist/MonitorDeNoticias/bin/ffmpeg.exe" -Force
           Copy-Item $ffprobe.FullName "dist/MonitorDeNoticias/bin/ffprobe.exe" -Force
-
-          if (-not (Test-Path "dist/MonitorDeNoticias/bin/ffmpeg.exe")) {
-            throw "ffmpeg.exe não foi copiado para o portable."
-          }
-          if (-not (Test-Path "dist/MonitorDeNoticias/bin/ffprobe.exe")) {
-            throw "ffprobe.exe não foi copiado para o portable."
-          }
-
-          Write-Host "FFmpeg e FFprobe adicionados ao portable com sucesso."
 
       - name: Criar UM ÚNICO ZIP portable
         shell: pwsh
         run: |
           $zip = $env:PORTABLE_NAME
-
-          if (Test-Path $zip) {
-            Remove-Item $zip -Force
-          }
-
-          # IMPORTANTE:
-          # compacta somente o CONTEÚDO da pasta portable.
-          # O ZIP resultante será enviado diretamente para a Release.
-          # Não existe segunda compactação.
-          Compress-Archive `
-            -Path "dist/MonitorDeNoticias/*" `
-            -DestinationPath $zip `
-            -CompressionLevel Optimal
-
-          if (-not (Test-Path $zip)) {
-            throw "ZIP portable não foi gerado."
-          }
-
+          if (Test-Path $zip) { Remove-Item $zip -Force }
+          Compress-Archive -Path "dist/MonitorDeNoticias/*" -DestinationPath $zip -CompressionLevel Optimal
+          if (-not (Test-Path $zip)) { throw "ZIP portable não foi gerado." }
           $sizeMB = [math]::Round((Get-Item $zip).Length / 1MB, 2)
           Write-Host "Arquivo final: $zip"
           Write-Host "Tamanho: $sizeMB MB"
 
-      - name: Validar estrutura do ZIP final
+      - name: Validar estrutura do ZIP
         shell: pwsh
         run: |
           Add-Type -AssemblyName System.IO.Compression.FileSystem
-
           $zipPath = (Resolve-Path $env:PORTABLE_NAME).Path
           $archive = [System.IO.Compression.ZipFile]::OpenRead($zipPath)
-
           try {
-            # PyInstaller cria _internal/base_library.zip normalmente.
-            # Isso NÃO significa que o portable foi compactado duas vezes.
-            $allowedInternalZips = @(
-              "_internal/base_library.zip"
-            )
-
-            $zipEntries = $archive.Entries | Where-Object {
-              $_.FullName.ToLowerInvariant().EndsWith(".zip")
-            }
-
-            $suspiciousZips = $zipEntries | Where-Object {
+            $allowedInternalZips = @("_internal/base_library.zip")
+            $zipEntries = $archive.Entries | Where-Object { $_.FullName.ToLowerInvariant().EndsWith(".zip") }
+            $suspicious = $zipEntries | Where-Object {
               $normalized = $_.FullName.Replace("\", "/").ToLowerInvariant()
-
-              $isAllowedInternal = $allowedInternalZips -contains $normalized
-              $isPortableInsidePortable = (
-                $normalized -like "*monitordenoticias-windows-portable*.zip" -or
-                $normalized -like "*monitor-de-noticias*portable*.zip"
-              )
-              $isZipAtRoot = -not $normalized.Contains("/")
-
-              (-not $isAllowedInternal) -and ($isPortableInsidePortable -or $isZipAtRoot)
+              $allowed = $allowedInternalZips -contains $normalized
+              $portableInside = ($normalized -like "*monitordenoticias-windows-portable*.zip" -or $normalized -like "*monitor-de-noticias*portable*.zip")
+              $rootZip = -not $normalized.Contains("/")
+              (-not $allowed) -and ($portableInside -or $rootZip)
             }
-
-            if ($suspiciousZips) {
-              $names = ($suspiciousZips | ForEach-Object { $_.FullName }) -join ", "
-              throw "Foi detectada compactação indevida dentro do ZIP final: $names"
+            if ($suspicious) {
+              $names = ($suspicious | ForEach-Object { $_.FullName }) -join ", "
+              throw "ZIP aninhado indevido: $names"
             }
-
-            $exe = $archive.Entries | Where-Object {
-              $_.FullName.Replace("\", "/") -ieq "MonitorDeNoticias.exe"
-            } | Select-Object -First 1
-
-            if (-not $exe) {
-              throw "MonitorDeNoticias.exe não está na raiz do ZIP final."
-            }
-
-            Write-Host "Validação OK."
-            Write-Host "Portable compactado uma única vez."
-            Write-Host "_internal/base_library.zip permitido: arquivo interno normal do PyInstaller."
-
-            if ($zipEntries) {
-              Write-Host "ZIPs internos encontrados:"
-              $zipEntries | ForEach-Object {
-                Write-Host " - $($_.FullName)"
-              }
-            }
-          }
-          finally {
+            $exe = $archive.Entries | Where-Object { $_.FullName.Replace("\", "/") -ieq "MonitorDeNoticias.exe" } | Select-Object -First 1
+            if (-not $exe) { throw "MonitorDeNoticias.exe não está na raiz do ZIP." }
+          } finally {
             $archive.Dispose()
           }
 
-      - name: Definir tag e nome da Release
-        shell: pwsh
+      - name: Guardar ZIP para o job de Release
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.ARTIFACT_NAME }}
+          path: ${{ env.PORTABLE_NAME }}
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 2
+
+  release:
+    name: Publicar Release
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    steps:
+      - name: Baixar o ZIP gerado
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ env.ARTIFACT_NAME }}
+          path: release-files
+
+      - name: Definir tag da Release
+        shell: bash
         run: |
-          $shortSha = "${{ github.sha }}".Substring(0, 7)
-          $tag = "portable-${{ github.run_number }}-$shortSha"
-          $releaseName = "Monitor de Notícias Portable - Build ${{ github.run_number }}"
+          echo "RELEASE_TAG=portable-${GITHUB_RUN_NUMBER}-${GITHUB_SHA:0:7}" >> "$GITHUB_ENV"
+          echo "RELEASE_NAME=Monitor de Notícias Portable - Build ${GITHUB_RUN_NUMBER}" >> "$GITHUB_ENV"
 
-          "RELEASE_TAG=$tag" | Out-File -FilePath $env:GITHUB_ENV -Append
-          "RELEASE_NAME=$releaseName" | Out-File -FilePath $env:GITHUB_ENV -Append
-
-      - name: Publicar somente o ZIP na Release
-        shell: pwsh
-        timeout-minutes: 20
+      - name: Criar Release
+        shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          $ErrorActionPreference = "Stop"
+          set -euo pipefail
+          gh release create "$RELEASE_TAG"             --repo "$GITHUB_REPOSITORY"             --target "$GITHUB_SHA"             --title "$RELEASE_NAME"             --generate-notes             --latest
 
-          $zip = $env:PORTABLE_NAME
-          $tag = $env:RELEASE_TAG
-          $name = $env:RELEASE_NAME
-
-          if (-not (Test-Path $zip)) {
-            throw "ZIP final não encontrado: $zip"
-          }
-
-          Write-Host "Criando Release: $tag"
-          Write-Host "Enviando somente: $zip"
-
-          gh release create $tag `
-            $zip `
-            --repo "${{ github.repository }}" `
-            --target "${{ github.sha }}" `
-            --title $name `
-            --generate-notes `
-            --latest
-
-          if ($LASTEXITCODE -ne 0) {
-            throw "Falha ao criar a Release ou enviar o ZIP."
-          }
-
-          Write-Host "Release publicada com sucesso."
-          Write-Host "Nenhum arquivo .sha256 foi criado ou enviado."
+      - name: Enviar somente o ZIP para a Release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          FILE="release-files/${PORTABLE_NAME}"
+          if [ ! -f "$FILE" ]; then
+            echo "Arquivo não encontrado: $FILE"
+            exit 1
+          fi
+          ls -lh "$FILE"
+          for ATTEMPT in 1 2 3; do
+            echo "Tentativa ${ATTEMPT} de 3"
+            if gh release upload "$RELEASE_TAG" "$FILE" --repo "$GITHUB_REPOSITORY" --clobber; then
+              echo "Upload concluído."
+              exit 0
+            fi
+            if [ "$ATTEMPT" -lt 3 ]; then
+              sleep $((ATTEMPT * 30))
+            fi
+          done
+          exit 1
