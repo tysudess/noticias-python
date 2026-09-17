@@ -207,11 +207,9 @@ jobs:
             throw "ZIP portable não foi gerado."
           }
 
-          $hash = (Get-FileHash $zip -Algorithm SHA256).Hash.ToLowerInvariant()
-          "$hash  $zip" | Set-Content -Path "$zip.sha256" -Encoding ascii
-
+          $sizeMB = [math]::Round((Get-Item $zip).Length / 1MB, 2)
           Write-Host "Arquivo final: $zip"
-          Write-Host "SHA-256: $hash"
+          Write-Host "Tamanho: $sizeMB MB"
 
       - name: Validar estrutura do ZIP final
         shell: pwsh
@@ -283,16 +281,36 @@ jobs:
           "RELEASE_TAG=$tag" | Out-File -FilePath $env:GITHUB_ENV -Append
           "RELEASE_NAME=$releaseName" | Out-File -FilePath $env:GITHUB_ENV -Append
 
-      - name: Publicar ZIP diretamente na Release
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ env.RELEASE_TAG }}
-          name: ${{ env.RELEASE_NAME }}
-          target_commitish: ${{ github.sha }}
-          generate_release_notes: true
-          make_latest: true
-          files: |
-            ${{ env.PORTABLE_NAME }}
-            ${{ env.PORTABLE_NAME }}.sha256
+      - name: Publicar somente o ZIP na Release
+        shell: pwsh
+        timeout-minutes: 20
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          $zip = $env:PORTABLE_NAME
+          $tag = $env:RELEASE_TAG
+          $name = $env:RELEASE_NAME
+
+          if (-not (Test-Path $zip)) {
+            throw "ZIP final não encontrado: $zip"
+          }
+
+          Write-Host "Criando Release: $tag"
+          Write-Host "Enviando somente: $zip"
+
+          gh release create $tag `
+            $zip `
+            --repo "${{ github.repository }}" `
+            --target "${{ github.sha }}" `
+            --title $name `
+            --generate-notes `
+            --latest
+
+          if ($LASTEXITCODE -ne 0) {
+            throw "Falha ao criar a Release ou enviar o ZIP."
+          }
+
+          Write-Host "Release publicada com sucesso."
+          Write-Host "Nenhum arquivo .sha256 foi criado ou enviado."
