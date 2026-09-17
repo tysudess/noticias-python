@@ -1,0 +1,105 @@
+name: Build Windows Portable
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ "main" ]
+    paths:
+      - "src/**"
+      - "resources/**"
+      - "run.py"
+      - "requirements*.txt"
+      - "MonitorDeNoticias.spec"
+      - ".github/workflows/build-portable.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+          cache-dependency-path: |
+            requirements.txt
+            requirements-build.txt
+
+      - name: Instalar dependências
+        shell: pwsh
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt -r requirements-build.txt
+
+      - name: Gerar aplicativo com PyInstaller
+        shell: pwsh
+        run: |
+          python -m PyInstaller --noconfirm --clean MonitorDeNoticias.spec
+          if (-not (Test-Path "dist/MonitorDeNoticias/MonitorDeNoticias.exe")) {
+            throw "MonitorDeNoticias.exe não foi gerado."
+          }
+
+      - name: Preparar estrutura portable
+        shell: pwsh
+        run: |
+          $root = Resolve-Path "dist/MonitorDeNoticias"
+          foreach ($dir in @("resources","bin","data","logs","temp","Videos","VideoEditorExports")) {
+            New-Item -ItemType Directory -Force -Path (Join-Path $root $dir) | Out-Null
+          }
+          Copy-Item "resources/*" (Join-Path $root "resources") -Recurse -Force
+          if (Test-Path "portable/README_PORTABLE.txt") {
+            Copy-Item "portable/README_PORTABLE.txt" $root -Force
+          }
+          if (Test-Path "portable/THIRD_PARTY_NOTICES.txt") {
+            Copy-Item "portable/THIRD_PARTY_NOTICES.txt" $root -Force
+          }
+
+      - name: Baixar yt-dlp
+        shell: pwsh
+        run: |
+          $bin = Resolve-Path "dist/MonitorDeNoticias/bin"
+          Invoke-WebRequest `
+            -Uri "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe" `
+            -OutFile (Join-Path $bin "yt-dlp.exe") `
+            -TimeoutSec 180
+
+      - name: Baixar FFmpeg e FFprobe
+        shell: pwsh
+        run: |
+          $tmp = Join-Path $env:RUNNER_TEMP "ffmpeg.zip"
+          $out = Join-Path $env:RUNNER_TEMP "ffmpeg"
+          Invoke-WebRequest `
+            -Uri "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip" `
+            -OutFile $tmp `
+            -TimeoutSec 240
+          Expand-Archive $tmp $out -Force
+          $ffmpeg = Get-ChildItem $out -Filter "ffmpeg.exe" -Recurse | Select-Object -First 1
+          $ffprobe = Get-ChildItem $out -Filter "ffprobe.exe" -Recurse | Select-Object -First 1
+          if (-not $ffmpeg -or -not $ffprobe) { throw "FFmpeg/FFprobe não encontrados." }
+          Copy-Item $ffmpeg.FullName "dist/MonitorDeNoticias/bin/ffmpeg.exe" -Force
+          Copy-Item $ffprobe.FullName "dist/MonitorDeNoticias/bin/ffprobe.exe" -Force
+
+      - name: Criar ZIP portable
+        shell: pwsh
+        run: |
+          $zip = "MonitorDeNoticias-Windows-Portable-x64.zip"
+          if (Test-Path $zip) { Remove-Item $zip -Force }
+          Compress-Archive -Path "dist/MonitorDeNoticias/*" -DestinationPath $zip -CompressionLevel Optimal
+          Get-FileHash $zip -Algorithm SHA256 | Format-List
+          "PORTABLE_SHA=$( (Get-FileHash $zip -Algorithm SHA256).Hash )" | Out-File -FilePath $env:GITHUB_ENV -Append
+
+      - name: Upload do portable
+        uses: actions/upload-artifact@v4
+        with:
+          name: MonitorDeNoticias-Windows-Portable-x64
+          path: MonitorDeNoticias-Windows-Portable-x64.zip
+          if-no-files-found: error
+          retention-days: 14
