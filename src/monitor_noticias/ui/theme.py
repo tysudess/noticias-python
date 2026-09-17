@@ -285,6 +285,213 @@ QToolTip {{
     color: white;
     border: 0;
 }}
+
+
+/* =========================
+   HOME — referência imagem 2
+   ========================= */
+QFrame#metricCard {
+    background: white;
+    border: 1px solid #D6E6F7;
+    border-radius: 14px;
+}
+QLabel#metricTitle {
+    color: #173E75;
+    font-size: 12px;
+    font-weight: 700;
+}
+QLabel#metricValue {
+    color: #071D55;
+    font-size: 28px;
+    font-weight: 900;
+}
+QLabel#metricSubtitle {
+    color: #6B81A7;
+    font-size: 10px;
+}
+QLabel#metricDelta {
+    color: #00A96E;
+    font-size: 11px;
+    font-weight: 800;
+}
+QLabel#metricIcon, QLabel#scheduleIcon {
+    border-radius: 12px;
+    font-size: 24px;
+    font-weight: 900;
+}
+QLabel#metricIcon[tone="blue"], QLabel#scheduleIcon[tone="blue"] {
+    background: #DDEEFF;
+    color: #0C77F5;
+}
+QLabel#metricIcon[tone="purple"], QLabel#scheduleIcon[tone="purple"] {
+    background: #EFE2FF;
+    color: #743AF3;
+}
+QLabel#metricIcon[tone="green"], QLabel#scheduleIcon[tone="green"] {
+    background: #DDF8EC;
+    color: #049E68;
+}
+QLabel#metricIcon[tone="orange"], QLabel#scheduleIcon[tone="orange"] {
+    background: #FFF0C9;
+    color: #E69A00;
+}
+QLabel#metricIcon[tone="pink"] {
+    background: #FFE1ED;
+    color: #C4005C;
+}
+
+QFrame#heroCard, QFrame#homeCard, QFrame#quickCard, QFrame#tipCard {
+    background: white;
+    border: 1px solid #D6E6F7;
+    border-radius: 14px;
+}
+QLabel#heroRadioIcon {
+    background: #E9F4FF;
+    color: #0B79F6;
+    border-radius: 35px;
+    font-size: 42px;
+    font-weight: 900;
+}
+QLabel#heroTitle {
+    color: #08245F;
+    font-size: 24px;
+    font-weight: 900;
+}
+QLabel#heroSubtitle {
+    color: #5E79A6;
+    font-size: 12px;
+}
+QFrame#readyCard {
+    background: #EAF9F2;
+    border: 1px solid #C2ECDB;
+    border-radius: 10px;
+}
+QLabel#readyTitle {
+    color: #078B5F;
+    font-size: 14px;
+    font-weight: 900;
+}
+QLabel#readyText {
+    color: #3F6B60;
+    font-size: 11px;
+}
+QFrame#monitorVisual {
+    background: #F4F9FF;
+    border: 0;
+    border-radius: 18px;
+}
+QLabel#monitorScreen {
+    color: #0B4D9C;
+    font-size: 86px;
+    font-weight: 900;
+}
+QLabel#monitorLines {
+    color: #72A9E8;
+    font-size: 16px;
+    font-weight: 700;
+}
+
+QLabel#sectionTitle {
+    color: #08245F;
+    font-size: 16px;
+    font-weight: 900;
+}
+QLabel#sectionSubtitle {
+    color: #6A80A5;
+    font-size: 10px;
+}
+
+QPushButton#quickPrimary {
+    text-align: left;
+    background: qlineargradient(x1:0,y1:0,x2:1,y2:0,stop:0 #0A75EA,stop:1 #0B8EFF);
+    color: white;
+    border: 0;
+    border-radius: 10px;
+    padding: 10px 18px;
+    font-size: 12px;
+    font-weight: 800;
+}
+QPushButton#quickSecondary {
+    text-align: left;
+    background: #F8FBFF;
+    color: #0A3A79;
+    border: 1px solid #D4E4F5;
+    border-radius: 10px;
+    padding: 10px 18px;
+    font-size: 12px;
+    font-weight: 800;
+}
+QPushButton#quickSecondary:hover {
+    background: #EEF6FF;
+}
+
+QFrame#scheduleBox {
+    background: #F8FBFF;
+    border: 1px solid #DFEBF7;
+    border-radius: 10px;
+}
+QLabel#scheduleTitle {
+    color: #0A326D;
+    font-size: 11px;
+    font-weight: 800;
+}
+QLabel#scheduleDetail {
+    color: #526E9B;
+    font-size: 10px;
+}
+QLabel#smallPill {
+    background: #F8FBFF;
+    color: #365D8F;
+    border: 1px solid #D6E5F4;
+    border-radius: 8px;
+    padding: 6px 10px;
+}
+QFrame#graphFrame {
+    background: white;
+    border: 0;
+}
+QLabel#graphText {
+    color: #7EA8DD;
+    font-family: "Consolas";
+    font-size: 10px;
+}
+QLabel#graphLegend {
+    color: #426891;
+    font-size: 10px;
+}
+
+QPushButton#linkButton {
+    background: transparent;
+    color: #087AF7;
+    border: 0;
+    padding: 2px 4px;
+    min-height: 18px;
+    font-weight: 700;
+}
+QPushButton#linkButton:hover {
+    color: #075FC0;
+    background: transparent;
+}
+QLabel#listText {
+    color: #244B7B;
+    font-size: 10px;
+    line-height: 1.35;
+}
+QFrame#tipCard {
+    background: #FFFFFF;
+}
+QLabel#tipText {
+    background: #EDF7FF;
+    color: #355D89;
+    border-radius: 10px;
+    padding: 12px;
+    font-size: 11px;
+}
+QLabel#dots {
+    color: #0A7BF7;
+    font-size: 12px;
+}
+
 """
 
 def repolish(widget) -> None:

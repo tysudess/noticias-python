@@ -16,8 +16,9 @@ from monitor_noticias.ui.extractor_page import ExtractorPage
 from monitor_noticias.ui.layout_refresh import apply_reference_layout
 from monitor_noticias.ui.pdf_editor_page import PdfEditorPage
 from monitor_noticias.ui.video_editor_page import VideoEditorPage
+from monitor_noticias.ui.home_page import HomePage
 from monitor_noticias.ui.pages import (
-    DemandsPage, HistoryPage, HomePage, NewsPage, SettingsPage, StopPage, VideosPage,
+    DemandsPage, HistoryPage, NewsPage, SettingsPage, StopPage, VideosPage,
 )
 from monitor_noticias.ui.runtime_pages import TermsPage
 from monitor_noticias.ui.source_page import SourcesPage
