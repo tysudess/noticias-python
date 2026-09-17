@@ -100,13 +100,69 @@ jobs:
       - name: Baixar FFmpeg e FFprobe
         shell: pwsh
         run: |
+          $ErrorActionPreference = "Stop"
+
           $tmpZip = Join-Path $env:RUNNER_TEMP "ffmpeg-download.zip"
           $tmpDir = Join-Path $env:RUNNER_TEMP "ffmpeg-extracted"
 
-          Invoke-WebRequest `
-            -Uri "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip" `
-            -OutFile $tmpZip `
-            -TimeoutSec 240
+          if (Test-Path $tmpZip) {
+            Remove-Item $tmpZip -Force
+          }
+          if (Test-Path $tmpDir) {
+            Remove-Item $tmpDir -Recurse -Force
+          }
+
+          # Usa GitHub Releases do BtbN em vez de gyan.dev.
+          # Primeiro tenta a linha FFmpeg 9.0; se houver indisponibilidade,
+          # usa o build master mais recente como fallback.
+          $urls = @(
+            "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-n9.0-latest-win64-gpl-9.0.zip",
+            "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl.zip"
+          )
+
+          $downloaded = $false
+
+          foreach ($url in $urls) {
+            for ($attempt = 1; $attempt -le 3; $attempt++) {
+              try {
+                Write-Host "Baixando FFmpeg: $url"
+                Write-Host "Tentativa $attempt de 3"
+
+                Invoke-WebRequest `
+                  -Uri $url `
+                  -OutFile $tmpZip `
+                  -TimeoutSec 300 `
+                  -MaximumRedirection 10
+
+                if ((Test-Path $tmpZip) -and ((Get-Item $tmpZip).Length -gt 10000000)) {
+                  $downloaded = $true
+                  Write-Host "Download do FFmpeg concluído."
+                  break
+                }
+
+                throw "Arquivo baixado está ausente ou pequeno demais."
+              }
+              catch {
+                Write-Warning "Falha ao baixar FFmpeg: $($_.Exception.Message)"
+
+                if (Test-Path $tmpZip) {
+                  Remove-Item $tmpZip -Force
+                }
+
+                if ($attempt -lt 3) {
+                  Start-Sleep -Seconds (10 * $attempt)
+                }
+              }
+            }
+
+            if ($downloaded) {
+              break
+            }
+          }
+
+          if (-not $downloaded) {
+            throw "Não foi possível baixar FFmpeg após múltiplas tentativas e fallback."
+          }
 
           Expand-Archive $tmpZip $tmpDir -Force
 
@@ -114,11 +170,20 @@ jobs:
           $ffprobe = Get-ChildItem $tmpDir -Filter "ffprobe.exe" -Recurse | Select-Object -First 1
 
           if (-not $ffmpeg -or -not $ffprobe) {
-            throw "FFmpeg/FFprobe não encontrados."
+            throw "ffmpeg.exe/ffprobe.exe não encontrados no pacote baixado."
           }
 
           Copy-Item $ffmpeg.FullName "dist/MonitorDeNoticias/bin/ffmpeg.exe" -Force
           Copy-Item $ffprobe.FullName "dist/MonitorDeNoticias/bin/ffprobe.exe" -Force
+
+          if (-not (Test-Path "dist/MonitorDeNoticias/bin/ffmpeg.exe")) {
+            throw "ffmpeg.exe não foi copiado para o portable."
+          }
+          if (-not (Test-Path "dist/MonitorDeNoticias/bin/ffprobe.exe")) {
+            throw "ffprobe.exe não foi copiado para o portable."
+          }
+
+          Write-Host "FFmpeg e FFprobe adicionados ao portable com sucesso."
 
       - name: Criar UM ÚNICO ZIP portable
         shell: pwsh
@@ -231,4 +296,3 @@ jobs:
             ${{ env.PORTABLE_NAME }}.sha256
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
