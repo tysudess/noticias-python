@@ -1,30 +1,35 @@
-name: Build Windows Portable
+name: Build e Release Windows Portable
 
 on:
   workflow_dispatch:
   push:
-    branches: [ "main" ]
+    branches:
+      - main
     paths:
       - "src/**"
       - "resources/**"
+      - "portable/**"
       - "run.py"
       - "requirements*.txt"
       - "MonitorDeNoticias.spec"
-      - ".github/workflows/build-portable.yml"
+      - ".github/workflows/build-portable-release.yml"
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
-  build:
+  build-release:
     runs-on: windows-latest
-    timeout-minutes: 45
+    timeout-minutes: 50
+
+    env:
+      PORTABLE_NAME: MonitorDeNoticias-Windows-Portable-x64.zip
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Python 3.12
+      - name: Configurar Python 3.12
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
@@ -43,7 +48,9 @@ jobs:
         shell: pwsh
         run: |
           python -m PyInstaller --noconfirm --clean MonitorDeNoticias.spec
-          if (-not (Test-Path "dist/MonitorDeNoticias/MonitorDeNoticias.exe")) {
+
+          $exe = "dist/MonitorDeNoticias/MonitorDeNoticias.exe"
+          if (-not (Test-Path $exe)) {
             throw "MonitorDeNoticias.exe não foi gerado."
           }
 
@@ -51,13 +58,27 @@ jobs:
         shell: pwsh
         run: |
           $root = Resolve-Path "dist/MonitorDeNoticias"
-          foreach ($dir in @("resources","bin","data","logs","temp","Videos","VideoEditorExports")) {
+
+          foreach ($dir in @(
+            "resources",
+            "bin",
+            "data",
+            "logs",
+            "temp",
+            "Videos",
+            "VideoEditorExports"
+          )) {
             New-Item -ItemType Directory -Force -Path (Join-Path $root $dir) | Out-Null
           }
-          Copy-Item "resources/*" (Join-Path $root "resources") -Recurse -Force
+
+          if (Test-Path "resources") {
+            Copy-Item "resources/*" (Join-Path $root "resources") -Recurse -Force
+          }
+
           if (Test-Path "portable/README_PORTABLE.txt") {
             Copy-Item "portable/README_PORTABLE.txt" $root -Force
           }
+
           if (Test-Path "portable/THIRD_PARTY_NOTICES.txt") {
             Copy-Item "portable/THIRD_PARTY_NOTICES.txt" $root -Force
           }
@@ -66,40 +87,119 @@ jobs:
         shell: pwsh
         run: |
           $bin = Resolve-Path "dist/MonitorDeNoticias/bin"
+
           Invoke-WebRequest `
             -Uri "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe" `
             -OutFile (Join-Path $bin "yt-dlp.exe") `
             -TimeoutSec 180
 
+          if (-not (Test-Path (Join-Path $bin "yt-dlp.exe"))) {
+            throw "yt-dlp.exe não foi baixado."
+          }
+
       - name: Baixar FFmpeg e FFprobe
         shell: pwsh
         run: |
-          $tmp = Join-Path $env:RUNNER_TEMP "ffmpeg.zip"
-          $out = Join-Path $env:RUNNER_TEMP "ffmpeg"
+          $tmpZip = Join-Path $env:RUNNER_TEMP "ffmpeg-download.zip"
+          $tmpDir = Join-Path $env:RUNNER_TEMP "ffmpeg-extracted"
+
           Invoke-WebRequest `
             -Uri "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip" `
-            -OutFile $tmp `
+            -OutFile $tmpZip `
             -TimeoutSec 240
-          Expand-Archive $tmp $out -Force
-          $ffmpeg = Get-ChildItem $out -Filter "ffmpeg.exe" -Recurse | Select-Object -First 1
-          $ffprobe = Get-ChildItem $out -Filter "ffprobe.exe" -Recurse | Select-Object -First 1
-          if (-not $ffmpeg -or -not $ffprobe) { throw "FFmpeg/FFprobe não encontrados." }
+
+          Expand-Archive $tmpZip $tmpDir -Force
+
+          $ffmpeg = Get-ChildItem $tmpDir -Filter "ffmpeg.exe" -Recurse | Select-Object -First 1
+          $ffprobe = Get-ChildItem $tmpDir -Filter "ffprobe.exe" -Recurse | Select-Object -First 1
+
+          if (-not $ffmpeg -or -not $ffprobe) {
+            throw "FFmpeg/FFprobe não encontrados."
+          }
+
           Copy-Item $ffmpeg.FullName "dist/MonitorDeNoticias/bin/ffmpeg.exe" -Force
           Copy-Item $ffprobe.FullName "dist/MonitorDeNoticias/bin/ffprobe.exe" -Force
 
-      - name: Criar ZIP portable
+      - name: Criar UM ÚNICO ZIP portable
         shell: pwsh
         run: |
-          $zip = "MonitorDeNoticias-Windows-Portable-x64.zip"
-          if (Test-Path $zip) { Remove-Item $zip -Force }
-          Compress-Archive -Path "dist/MonitorDeNoticias/*" -DestinationPath $zip -CompressionLevel Optimal
-          Get-FileHash $zip -Algorithm SHA256 | Format-List
-          "PORTABLE_SHA=$( (Get-FileHash $zip -Algorithm SHA256).Hash )" | Out-File -FilePath $env:GITHUB_ENV -Append
+          $zip = $env:PORTABLE_NAME
 
-      - name: Upload do portable
-        uses: actions/upload-artifact@v4
+          if (Test-Path $zip) {
+            Remove-Item $zip -Force
+          }
+
+          # IMPORTANTE:
+          # compacta somente o CONTEÚDO da pasta portable.
+          # O ZIP resultante será enviado diretamente para a Release.
+          # Não existe segunda compactação.
+          Compress-Archive `
+            -Path "dist/MonitorDeNoticias/*" `
+            -DestinationPath $zip `
+            -CompressionLevel Optimal
+
+          if (-not (Test-Path $zip)) {
+            throw "ZIP portable não foi gerado."
+          }
+
+          $hash = (Get-FileHash $zip -Algorithm SHA256).Hash.ToLowerInvariant()
+          "$hash  $zip" | Set-Content -Path "$zip.sha256" -Encoding ascii
+
+          Write-Host "Arquivo final: $zip"
+          Write-Host "SHA-256: $hash"
+
+      - name: Validar que não existe ZIP dentro do ZIP
+        shell: pwsh
+        run: |
+          Add-Type -AssemblyName System.IO.Compression.FileSystem
+
+          $zipPath = (Resolve-Path $env:PORTABLE_NAME).Path
+          $archive = [System.IO.Compression.ZipFile]::OpenRead($zipPath)
+
+          try {
+            $nestedZip = $archive.Entries | Where-Object {
+              $_.FullName.ToLowerInvariant().EndsWith(".zip")
+            }
+
+            if ($nestedZip) {
+              $names = ($nestedZip | ForEach-Object { $_.FullName }) -join ", "
+              throw "Foi detectado ZIP dentro do ZIP final: $names"
+            }
+
+            $exe = $archive.Entries | Where-Object {
+              $_.FullName -ieq "MonitorDeNoticias.exe"
+            } | Select-Object -First 1
+
+            if (-not $exe) {
+              throw "MonitorDeNoticias.exe não está na raiz do ZIP final."
+            }
+
+            Write-Host "Validação OK: ZIP único, sem ZIP aninhado."
+          }
+          finally {
+            $archive.Dispose()
+          }
+
+      - name: Definir tag e nome da Release
+        shell: pwsh
+        run: |
+          $shortSha = "${{ github.sha }}".Substring(0, 7)
+          $tag = "portable-${{ github.run_number }}-$shortSha"
+          $releaseName = "Monitor de Notícias Portable - Build ${{ github.run_number }}"
+
+          "RELEASE_TAG=$tag" | Out-File -FilePath $env:GITHUB_ENV -Append
+          "RELEASE_NAME=$releaseName" | Out-File -FilePath $env:GITHUB_ENV -Append
+
+      - name: Publicar ZIP diretamente na Release
+        uses: softprops/action-gh-release@v2
         with:
-          name: MonitorDeNoticias-Windows-Portable-x64
-          path: MonitorDeNoticias-Windows-Portable-x64.zip
-          if-no-files-found: error
-          retention-days: 14
+          tag_name: ${{ env.RELEASE_TAG }}
+          name: ${{ env.RELEASE_NAME }}
+          target_commitish: ${{ github.sha }}
+          generate_release_notes: true
+          make_latest: true
+          files: |
+            ${{ env.PORTABLE_NAME }}
+            ${{ env.PORTABLE_NAME }}.sha256
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
