@@ -148,7 +148,7 @@ jobs:
           Write-Host "Arquivo final: $zip"
           Write-Host "SHA-256: $hash"
 
-      - name: Validar que não existe ZIP dentro do ZIP
+      - name: Validar estrutura do ZIP final
         shell: pwsh
         run: |
           Add-Type -AssemblyName System.IO.Compression.FileSystem
@@ -157,24 +157,52 @@ jobs:
           $archive = [System.IO.Compression.ZipFile]::OpenRead($zipPath)
 
           try {
-            $nestedZip = $archive.Entries | Where-Object {
+            # PyInstaller cria _internal/base_library.zip normalmente.
+            # Isso NÃO significa que o portable foi compactado duas vezes.
+            $allowedInternalZips = @(
+              "_internal/base_library.zip"
+            )
+
+            $zipEntries = $archive.Entries | Where-Object {
               $_.FullName.ToLowerInvariant().EndsWith(".zip")
             }
 
-            if ($nestedZip) {
-              $names = ($nestedZip | ForEach-Object { $_.FullName }) -join ", "
-              throw "Foi detectado ZIP dentro do ZIP final: $names"
+            $suspiciousZips = $zipEntries | Where-Object {
+              $normalized = $_.FullName.Replace("\", "/").ToLowerInvariant()
+
+              $isAllowedInternal = $allowedInternalZips -contains $normalized
+              $isPortableInsidePortable = (
+                $normalized -like "*monitordenoticias-windows-portable*.zip" -or
+                $normalized -like "*monitor-de-noticias*portable*.zip"
+              )
+              $isZipAtRoot = -not $normalized.Contains("/")
+
+              (-not $isAllowedInternal) -and ($isPortableInsidePortable -or $isZipAtRoot)
+            }
+
+            if ($suspiciousZips) {
+              $names = ($suspiciousZips | ForEach-Object { $_.FullName }) -join ", "
+              throw "Foi detectada compactação indevida dentro do ZIP final: $names"
             }
 
             $exe = $archive.Entries | Where-Object {
-              $_.FullName -ieq "MonitorDeNoticias.exe"
+              $_.FullName.Replace("\", "/") -ieq "MonitorDeNoticias.exe"
             } | Select-Object -First 1
 
             if (-not $exe) {
               throw "MonitorDeNoticias.exe não está na raiz do ZIP final."
             }
 
-            Write-Host "Validação OK: ZIP único, sem ZIP aninhado."
+            Write-Host "Validação OK."
+            Write-Host "Portable compactado uma única vez."
+            Write-Host "_internal/base_library.zip permitido: arquivo interno normal do PyInstaller."
+
+            if ($zipEntries) {
+              Write-Host "ZIPs internos encontrados:"
+              $zipEntries | ForEach-Object {
+                Write-Host " - $($_.FullName)"
+              }
+            }
           }
           finally {
             $archive.Dispose()
@@ -203,3 +231,4 @@ jobs:
             ${{ env.PORTABLE_NAME }}.sha256
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
