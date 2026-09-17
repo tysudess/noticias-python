@@ -17,8 +17,9 @@ from monitor_noticias.ui.layout_refresh import apply_reference_layout
 from monitor_noticias.ui.pdf_editor_page import PdfEditorPage
 from monitor_noticias.ui.video_editor_page import VideoEditorPage
 from monitor_noticias.ui.home_page import HomePage
+from monitor_noticias.ui.news_page import NewsPage
 from monitor_noticias.ui.pages import (
-    DemandsPage, HistoryPage, NewsPage, SettingsPage, StopPage, VideosPage,
+    DemandsPage, HistoryPage, SettingsPage, StopPage, VideosPage,
 )
 from monitor_noticias.ui.runtime_pages import TermsPage
 from monitor_noticias.ui.source_page import SourcesPage
@@ -73,9 +74,9 @@ class MainWindow(QMainWindow):
         outer.setContentsMargins(0, 0, 0, 0)
         outer.setSpacing(0)
 
-        # Sidebar
         self.sidebar = QFrame()
         self.sidebar.setObjectName("sidebar")
+        self.sidebar.setProperty("dark", True)
         self.sidebar.setFixedWidth(232)
         side = QVBoxLayout(self.sidebar)
         side.setContentsMargins(16, 22, 16, 16)
@@ -125,7 +126,6 @@ class MainWindow(QMainWindow):
         side.addWidget(version)
         outer.addWidget(self.sidebar)
 
-        # Área principal
         content = QWidget()
         cl = QVBoxLayout(content)
         cl.setContentsMargins(18, 12, 18, 10)
@@ -134,7 +134,9 @@ class MainWindow(QMainWindow):
         header = QHBoxLayout()
         header.setSpacing(12)
 
-        text = QVBoxLayout()
+        self.header_identity = QWidget()
+        text = QVBoxLayout(self.header_identity)
+        text.setContentsMargins(0, 0, 0, 0)
         text.setSpacing(0)
         self.kicker = QLabel("CENTRAL DE INTELIGÊNCIA DE MÍDIA")
         self.kicker.setObjectName("pageKicker")
@@ -145,7 +147,7 @@ class MainWindow(QMainWindow):
         text.addWidget(self.kicker)
         text.addWidget(self.title)
         text.addWidget(self.subtitle)
-        header.addLayout(text, 2)
+        header.addWidget(self.header_identity, 2)
 
         self.global_search = QLineEdit()
         self.global_search.setPlaceholderText("🔎  Buscar notícias, vídeos, demandas ou fontes...    Ctrl + K")
@@ -191,6 +193,10 @@ class MainWindow(QMainWindow):
         home = self.pages[Section.HOME]
         if isinstance(home, HomePage):
             home.navigate.connect(lambda name: self.navigate(Section[name]))
+
+        news_page = self.pages[Section.NEWS]
+        if isinstance(news_page, NewsPage):
+            news_page.extract_requested.connect(self._open_extractor_link)
 
         pdf_page = self.pages[Section.PDF_EDITOR]
         if isinstance(pdf_page, PdfEditorPage):
@@ -252,7 +258,6 @@ class MainWindow(QMainWindow):
         if not text:
             self.controller.search_news()
             return
-        # O campo global é prioritariamente navegação/atalho visual.
         lowered = text.lower()
         if "video" in lowered or "vídeo" in lowered:
             self.navigate(Section.VIDEOS)
@@ -266,6 +271,14 @@ class MainWindow(QMainWindow):
             if hasattr(page, "query"):
                 page.query.setText(text)
 
+    def _open_extractor_link(self, url: str) -> None:
+        extractor = self.pages.get(Section.EXTRACTOR)
+        if isinstance(extractor, ExtractorPage):
+            field = getattr(extractor, "url", None)
+            if field is not None:
+                field.setText(url)
+            self.navigate(Section.EXTRACTOR)
+
     def navigate(self, section: Section) -> None:
         self._current = section
         self.stack.setCurrentIndex(SECTION_ORDER.index(section))
@@ -276,9 +289,10 @@ class MainWindow(QMainWindow):
         self.title.setText(section.value.label)
         self.subtitle.setText(section.value.subtitle)
 
-        # Nas telas de referência, Início e Demandas usam sidebar azul.
-        self.sidebar.setProperty("dark", section in (Section.HOME, Section.DEMANDS))
+        self.sidebar.setProperty("dark", True)
         repolish(self.sidebar)
+
+        self.header_identity.setVisible(section != Section.NEWS)
 
         self.pages[section].refresh(self.controller.state)
 
