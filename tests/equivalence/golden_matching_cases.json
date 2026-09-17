@@ -1,0 +1,17 @@
+{
+  "news_subject": [
+    {"text": "São Paulo recebe evento naval", "subject": "sao paulo", "expected": true},
+    {"text": "prioridade nacional", "subject": "rio", "expected": false},
+    {"text": "Janeiro recebe evento no Rio", "subject": "Rio de Janeiro", "expected": true}
+  ],
+  "video_phrase": [
+    {"text": "Militares participam de operação", "phrase": "militar", "expected": true},
+    {"text": "Desfile de 7 de Setembro", "phrase": "comemoração 7 setembro", "expected": true},
+    {"text": "prioridade nacional", "phrase": "rio", "expected": false}
+  ],
+  "canonical_url": [
+    {"value": "https://youtu.be/abcdef12?t=30", "expected": "https://www.youtube.com/watch?v=abcdef12"},
+    {"value": "https://www.youtube.com/live/abcdef12?si=x", "expected": "https://www.youtube.com/watch?v=abcdef12"},
+    {"value": "https://example.com/a/?utm=1#x", "expected": "https://example.com/a"}
+  ]
+}

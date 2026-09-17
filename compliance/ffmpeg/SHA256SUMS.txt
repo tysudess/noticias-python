@@ -1,0 +1,2 @@
+54a2b6472bfa13b7bdb35ee25f0793461d890e774074eab350e6e9eb812f35eb  MONITOR-DE-NOTICIAS-FFMPEG-CORRESPONDING-SOURCE-n9.0.1-29-gad500d59cb-20260913.zip
+# O SHA-256 do próximo portable ainda não existe e não é inventado neste Passo 26.

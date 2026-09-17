@@ -1,0 +1,21 @@
+MONITOR DE NOTÍCIAS — THIRD-PARTY NOTICES
+
+Esta distribuição inclui componentes de terceiros. Os textos oficiais de licença/notice coletados para o candidato Windows portable ficam em `licenses/`; o inventário gerado da build fica em `LICENSES-MANIFEST.json`.
+
+Componentes principais redistribuídos no candidato:
+
+- Python 3.12.x — Python Software Foundation License; texto em `licenses/python-runtime/LICENSE.txt`.
+- PySide6 / Qt for Python 6.9.1 / Shiboken6 — arquivos oficiais de licença fornecidos pelas distribuições instaladas são preservados sob `licenses/python/`.
+- requests e dependências transitivas, beautifulsoup4/soupsieve, lxml, pypdf, pypdfium2/PDFium e Pillow — arquivos oficiais de licença/notice fornecidos pelas distribuições instaladas são preservados sob `licenses/python/`.
+- yt-dlp stable e nightly — LICENSE/THIRD_PARTY_LICENSES preservados sob `licenses/yt-dlp-stable/` e `licenses/yt-dlp-nightly/`.
+- Deno 2.9.6 — licença MIT oficial em `licenses/deno/LICENSE.md`.
+- FFmpeg/FFprobe `n9.0.1-29-gad500d59cb-20260913` — build Windows x64 static GPL/version3 de BtbN/FFmpeg-Builds; build recipe commit `3e6685eda92f9288c15ac320139622dcedca09a4`; FFmpeg source commit `ad500d59cb6e0126add4fcb95afb4e2557c4292c`. Textos GPL/FFmpeg permanecem em `licenses/ffmpeg/`.
+
+Corresponding Source FFmpeg preparado para futura distribuição junto ao portable:
+`MONITOR-DE-NOTICIAS-FFMPEG-CORRESPONDING-SOURCE-n9.0.1-29-gad500d59cb-20260913.zip`
+SHA-256: `54a2b6472bfa13b7bdb35ee25f0793461d890e774074eab350e6e9eb812f35eb`
+Tamanho: `4466155388` bytes.
+
+PUBLICATION TARGET: mesma futura GitHub Release do projeto que distribuir o portable Windows. A URL pública final ainda não existe e não é inventada.
+
+`LICENSES-MANIFEST.json` registra a origem e o caminho dos arquivos copiados/baixados pela build de compliance. `FFMPEG_SOURCE_INFO.txt` registra a relação entre os binários FFmpeg/FFprobe e o Corresponding Source preparado.
