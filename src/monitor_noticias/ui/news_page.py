@@ -7,7 +7,7 @@ from PySide6.QtCore import QDate, Qt, QTime, QUrl, Signal
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
     QApplication, QCheckBox, QDateEdit, QFrame, QHBoxLayout, QLabel,
-    QLineEdit, QProgressBar, QPushButton, QScrollArea, QTimeEdit,
+    QLineEdit, QProgressBar, QPushButton, QScrollArea, QSizePolicy, QTimeEdit,
     QVBoxLayout, QWidget,
 )
 
@@ -299,6 +299,10 @@ class NewsPage(QWidget):
         )
 
         self.list_widget = QWidget()
+        self.list_widget.setSizePolicy(
+            QSizePolicy.Policy.Expanding,
+            QSizePolicy.Policy.MinimumExpanding,
+        )
 
         self.list_layout = QVBoxLayout(self.list_widget)
         self.list_layout.setContentsMargins(0, 0, 3, 0)
@@ -610,6 +614,11 @@ class NewsPage(QWidget):
     def _news_item(self, news) -> QFrame:
         card = QFrame()
         card.setObjectName("newsItem")
+        card.setMinimumHeight(66)
+        card.setSizePolicy(
+            QSizePolicy.Policy.Expanding,
+            QSizePolicy.Policy.Fixed,
+        )
 
         row = QHBoxLayout(card)
         row.setContentsMargins(11, 7, 11, 7)
@@ -760,3 +769,14 @@ class NewsPage(QWidget):
                 self.list_layout.count() - 1,
                 self._news_item(news),
             )
+
+        # QScrollArea com widgetResizable=True pode comprimir o conteúdo quando
+        # há muitas matérias. A altura mínima garante que os cards mantenham
+        # tamanho legível e que o scroll vertical seja criado corretamente.
+        if rows:
+            estimated_height = (len(rows) * 72) + max(0, len(rows) - 1) * 6 + 12
+            self.list_widget.setMinimumHeight(estimated_height)
+        else:
+            self.list_widget.setMinimumHeight(120)
+
+        self.list_widget.adjustSize()

@@ -180,9 +180,9 @@ class HomePage(QWidget):
         QPushButton#quickSecondary {
             text-align:left;
             border-radius:9px;
-            padding:8px 16px;
-            min-height:44px;
-            font-size:11px;
+            padding:7px 15px;
+            min-height:45px;
+            font-size:12px;
             font-weight:800;
         }
         QPushButton#quickPrimary {
@@ -344,11 +344,11 @@ class HomePage(QWidget):
 
         hero = QFrame()
         hero.setObjectName("heroCard")
-        hero.setMinimumHeight(205)
+        hero.setMinimumHeight(252)
 
         hero_layout = QHBoxLayout(hero)
-        hero_layout.setContentsMargins(22, 17, 22, 17)
-        hero_layout.setSpacing(20)
+        hero_layout.setContentsMargins(22, 16, 22, 16)
+        hero_layout.setSpacing(18)
 
         left = QVBoxLayout()
         left.setSpacing(8)
@@ -385,7 +385,7 @@ class HomePage(QWidget):
         status.setObjectName("readyCard")
 
         status_l = QVBoxLayout(status)
-        status_l.setContentsMargins(17, 11, 17, 11)
+        status_l.setContentsMargins(17, 12, 17, 12)
         status_l.setSpacing(3)
 
         self.ready_title = QLabel("●   Status: Pronto")
@@ -404,7 +404,7 @@ class HomePage(QWidget):
 
         visual = QFrame()
         visual.setObjectName("monitorVisual")
-        visual.setMinimumWidth(250)
+        visual.setMinimumWidth(235)
 
         visual_l = QVBoxLayout(visual)
         visual_l.setContentsMargins(16, 10, 16, 10)
@@ -429,7 +429,9 @@ class HomePage(QWidget):
         layout.addWidget(hero, 3)
 
         quick, ql = _card("quickCard")
-        quick.setMinimumHeight(205)
+        quick.setMinimumHeight(252)
+        ql.setContentsMargins(18, 15, 18, 15)
+        ql.setSpacing(7)
 
         qtitle = QLabel("⚡   Ações rápidas")
         qtitle.setObjectName("sectionTitle")
@@ -475,7 +477,7 @@ class HomePage(QWidget):
             self.video_button,
             self.demands_button,
         ):
-            button.setMinimumHeight(47)
+            button.setMinimumHeight(50)
             ql.addWidget(button)
 
         ql.addStretch()
