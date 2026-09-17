@@ -12,17 +12,17 @@ from monitor_noticias.app.paths import AppPaths
 from monitor_noticias.collectors.video.catalog import VIDEO_SOURCES
 from monitor_noticias.ui.catalog import NEWS_SOURCES, SPECIALIZED
 from monitor_noticias.ui.controller import MainUiController
+from monitor_noticias.ui.demands_page import DemandsPage
 from monitor_noticias.ui.extractor_page import ExtractorPage
 from monitor_noticias.ui.layout_refresh import apply_reference_layout
 from monitor_noticias.ui.pdf_editor_page import PdfEditorPage
 from monitor_noticias.ui.video_editor_page import VideoEditorPage
 from monitor_noticias.ui.home_page import HomePage
 from monitor_noticias.ui.news_page import NewsPage
-from monitor_noticias.ui.pages import (
-    DemandsPage, HistoryPage, SettingsPage, StopPage, VideosPage,
-)
+from monitor_noticias.ui.pages import HistoryPage, SettingsPage, StopPage
 from monitor_noticias.ui.runtime_pages import TermsPage
 from monitor_noticias.ui.source_page import SourcesPage
+from monitor_noticias.ui.videos_page import VideosPage
 from monitor_noticias.ui.sections import SECTION_ORDER, Section
 from monitor_noticias.ui.theme import APP_STYLESHEET, repolish
 from monitor_noticias.windows.notifications import WindowsTrayNotifier
@@ -31,17 +31,29 @@ log = logging.getLogger(__name__)
 
 
 class MainWindow(QMainWindow):
-    def __init__(self, controller: MainUiController | None = None, paths: AppPaths | None = None) -> None:
+    def __init__(
+        self,
+        controller: MainUiController | None = None,
+        paths: AppPaths | None = None,
+    ) -> None:
         super().__init__()
-        self.paths = paths or (controller.paths if controller is not None else AppPaths.discover())
+
+        self.paths = paths or (
+            controller.paths
+            if controller is not None
+            else AppPaths.discover()
+        )
+
         self.controller = controller or MainUiController.create_default(
             self.paths,
             news_sources=NEWS_SOURCES,
             video_sources=VIDEO_SOURCES,
             specialized_sources=SPECIALIZED,
         )
+
         self._allow_close = False
         self._current = Section.HOME
+
         self.setWindowTitle("Monitor de Notícias - Windows Portable v4.0.2")
         self.resize(1600, 960)
         self.setMinimumSize(1180, 720)
@@ -51,18 +63,21 @@ class MainWindow(QMainWindow):
             self.setWindowIcon(QIcon(str(icon_path)))
 
         self.setStyleSheet(APP_STYLESHEET)
+
         self._build_ui()
         self._build_tray()
         apply_reference_layout(self)
 
         if hasattr(self.controller, "set_notifier"):
             self.controller.set_notifier(self.notifier)
+
         self.controller.subscribe(self._state_changed)
 
         self._timer = QTimer(self)
         self._timer.setInterval(500)
         self._timer.timeout.connect(self._tick)
         self._timer.start()
+
         self.navigate(Section.HOME)
 
     def _build_ui(self) -> None:
@@ -78,34 +93,51 @@ class MainWindow(QMainWindow):
         self.sidebar.setObjectName("sidebar")
         self.sidebar.setProperty("dark", True)
         self.sidebar.setFixedWidth(232)
+
         side = QVBoxLayout(self.sidebar)
         side.setContentsMargins(16, 22, 16, 16)
         side.setSpacing(6)
 
         brand_box = QHBoxLayout()
+
         logo = QLabel("▣")
         logo.setStyleSheet(
-            "background:#FFD76B;color:#0A2B65;border-radius:10px;"
-            "font-size:25px;font-weight:900;padding:8px 11px;"
+            "background:#FFD76B;"
+            "color:#0A2B65;"
+            "border-radius:10px;"
+            "font-size:25px;"
+            "font-weight:900;"
+            "padding:8px 11px;"
         )
+
         brand_text = QVBoxLayout()
+
         brand = QLabel("MONITOR\nDE NOTÍCIAS")
         brand.setObjectName("brandTitle")
+
         sub = QLabel("Inteligência de mídia")
         sub.setObjectName("brandSub")
+
         brand_text.addWidget(brand)
         brand_text.addWidget(sub)
+
         brand_box.addWidget(logo, 0)
         brand_box.addLayout(brand_text, 1)
+
         side.addLayout(brand_box)
         side.addSpacing(16)
 
         self.nav_buttons = {}
+
         for section in SECTION_ORDER:
-            button = QPushButton(f"{section.value.icon}   {section.value.label}")
+            button = QPushButton(
+                f"{section.value.icon}   {section.value.label}"
+            )
             button.setObjectName("navButton")
             button.setCheckable(True)
-            button.clicked.connect(lambda _=False, s=section: self.navigate(s))
+            button.clicked.connect(
+                lambda _=False, s=section: self.navigate(s)
+            )
             side.addWidget(button)
             self.nav_buttons[section] = button
 
@@ -113,20 +145,25 @@ class MainWindow(QMainWindow):
 
         self.sidebar_status_card = QFrame()
         self.sidebar_status_card.setObjectName("statusCard")
+
         status_layout = QVBoxLayout(self.sidebar_status_card)
         status_layout.setContentsMargins(12, 10, 12, 10)
+
         self.sidebar_status = QLabel()
         self.sidebar_status.setWordWrap(True)
         self.sidebar_status.setObjectName("brandSub")
+
         status_layout.addWidget(self.sidebar_status)
         side.addWidget(self.sidebar_status_card)
 
         version = QLabel("Windows Portable v4.0.2")
         version.setObjectName("brandSub")
         side.addWidget(version)
+
         outer.addWidget(self.sidebar)
 
         content = QWidget()
+
         cl = QVBoxLayout(content)
         cl.setContentsMargins(18, 12, 18, 10)
         cl.setSpacing(10)
@@ -135,24 +172,33 @@ class MainWindow(QMainWindow):
         header.setSpacing(12)
 
         self.header_identity = QWidget()
+
         text = QVBoxLayout(self.header_identity)
         text.setContentsMargins(0, 0, 0, 0)
         text.setSpacing(0)
+
         self.kicker = QLabel("CENTRAL DE INTELIGÊNCIA DE MÍDIA")
         self.kicker.setObjectName("pageKicker")
+
         self.title = QLabel()
         self.title.setObjectName("pageTitle")
+
         self.subtitle = QLabel()
         self.subtitle.setObjectName("pageSubtitle")
+
         text.addWidget(self.kicker)
         text.addWidget(self.title)
         text.addWidget(self.subtitle)
+
         header.addWidget(self.header_identity, 2)
 
         self.global_search = QLineEdit()
-        self.global_search.setPlaceholderText("🔎  Buscar notícias, vídeos, demandas ou fontes...    Ctrl + K")
+        self.global_search.setPlaceholderText(
+            "🔎  Buscar notícias, vídeos, demandas ou fontes...    Ctrl + K"
+        )
         self.global_search.setMinimumWidth(390)
         self.global_search.returnPressed.connect(self._run_global_search)
+
         header.addWidget(self.global_search, 3)
 
         self.proxy_chip = QLabel("●  Proxy pronto")
@@ -167,6 +213,7 @@ class MainWindow(QMainWindow):
         self.clock.setObjectName("clockCard")
         self.clock.setMinimumWidth(180)
         header.addWidget(self.clock)
+
         cl.addLayout(header)
 
         self.stack = QStackedWidget()
@@ -192,96 +239,141 @@ class MainWindow(QMainWindow):
 
         home = self.pages[Section.HOME]
         if isinstance(home, HomePage):
-            home.navigate.connect(lambda name: self.navigate(Section[name]))
+            home.navigate.connect(
+                lambda name: self.navigate(Section[name])
+            )
 
         news_page = self.pages[Section.NEWS]
         if isinstance(news_page, NewsPage):
-            news_page.extract_requested.connect(self._open_extractor_link)
+            news_page.extract_requested.connect(
+                self._open_extractor_link
+            )
+
+        videos_page = self.pages[Section.VIDEOS]
+        if isinstance(videos_page, VideosPage):
+            videos_page.extract_requested.connect(
+                self._open_extractor_link
+            )
 
         pdf_page = self.pages[Section.PDF_EDITOR]
         if isinstance(pdf_page, PdfEditorPage):
-            pdf_page.back_requested.connect(lambda: self.navigate(Section.HOME))
+            pdf_page.back_requested.connect(
+                lambda: self.navigate(Section.HOME)
+            )
 
         video_page = self.pages[Section.VIDEO_EDITOR]
         if isinstance(video_page, VideoEditorPage):
-            video_page.back_requested.connect(lambda: self.navigate(Section.HOME))
+            video_page.back_requested.connect(
+                lambda: self.navigate(Section.HOME)
+            )
 
         footer = QHBoxLayout()
+
         self.footer_left = QLabel()
         self.footer_left.setObjectName("muted")
+
         self.footer_right = QLabel()
         self.footer_right.setObjectName("muted")
+
         footer.addWidget(self.footer_left)
         footer.addStretch()
         footer.addWidget(self.footer_right)
+
         cl.addLayout(footer)
+
         outer.addWidget(content, 1)
 
     def _build_tray(self) -> None:
         icon = self.windowIcon()
+
         if icon.isNull():
-            icon = self.style().standardIcon(QStyle.StandardPixmap.SP_ComputerIcon)
+            icon = self.style().standardIcon(
+                QStyle.StandardPixmap.SP_ComputerIcon
+            )
 
         self.tray = QSystemTrayIcon(icon, self)
         self.tray.setToolTip("Monitor de Notícias")
+
         menu = QMenu()
 
         open_action = menu.addAction("Abrir")
         open_action.triggered.connect(self._restore)
+
         menu.addSeparator()
 
         news = menu.addAction("Buscar notícias agora")
         news.triggered.connect(self.controller.search_news)
+
         videos = menu.addAction("Buscar vídeos agora")
         videos.triggered.connect(self.controller.search_videos)
+
         demands = menu.addAction("Buscar demandas agora")
         demands.triggered.connect(self.controller.search_all_demands)
+
         stop = menu.addAction("Parar buscas")
         stop.triggered.connect(self.controller.stop_all_searches)
 
         menu.addSeparator()
+
         exit_action = menu.addAction("Sair")
         exit_action.triggered.connect(self.exit_application)
 
         self.tray.setContextMenu(menu)
+
         self.tray.activated.connect(
             lambda reason: self._restore()
             if reason == QSystemTrayIcon.ActivationReason.Trigger
             else None
         )
+
         if QSystemTrayIcon.isSystemTrayAvailable():
             self.tray.show()
+
         self.notifier = WindowsTrayNotifier(self.tray)
 
     def _run_global_search(self) -> None:
         text = self.global_search.text().strip()
+
         if not text:
             self.controller.search_news()
             return
+
         lowered = text.lower()
+
         if "video" in lowered or "vídeo" in lowered:
             self.navigate(Section.VIDEOS)
+
         elif "demanda" in lowered:
             self.navigate(Section.DEMANDS)
+
         elif "fonte" in lowered:
             self.navigate(Section.SOURCES)
+
         else:
             self.navigate(Section.NEWS)
+
             page = self.pages.get(Section.NEWS)
+
             if hasattr(page, "query"):
                 page.query.setText(text)
 
     def _open_extractor_link(self, url: str) -> None:
         extractor = self.pages.get(Section.EXTRACTOR)
+
         if isinstance(extractor, ExtractorPage):
             field = getattr(extractor, "url", None)
+
             if field is not None:
                 field.setText(url)
+
             self.navigate(Section.EXTRACTOR)
 
     def navigate(self, section: Section) -> None:
         self._current = section
-        self.stack.setCurrentIndex(SECTION_ORDER.index(section))
+
+        self.stack.setCurrentIndex(
+            SECTION_ORDER.index(section)
+        )
 
         for sec, button in self.nav_buttons.items():
             button.setChecked(sec == section)
@@ -292,23 +384,44 @@ class MainWindow(QMainWindow):
         self.sidebar.setProperty("dark", True)
         repolish(self.sidebar)
 
-        self.header_identity.setVisible(section != Section.NEWS)
+        self.header_identity.setVisible(
+            section != Section.NEWS
+        )
 
-        self.pages[section].refresh(self.controller.state)
+        self.pages[section].refresh(
+            self.controller.state
+        )
 
     def _tick(self) -> None:
         self.controller.sync_automation_state()
-        self.pages[self._current].refresh(self.controller.state)
+
+        self.pages[self._current].refresh(
+            self.controller.state
+        )
 
         now = QDateTime.currentDateTime()
-        self.clock.setText(now.toString("dd/MM/yyyy\nHH:mm:ss   ☀  29°C"))
+
+        self.clock.setText(
+            now.toString(
+                "dd/MM/yyyy\nHH:mm:ss   ☀  29°C"
+            )
+        )
 
         state = self.controller.state
         cfg = self.controller.proxy_config
         auto = self.controller.automation_settings
 
-        self.proxy_chip.setText("●  Proxy pronto" if cfg.enabled else "○  Proxy inativo")
-        self.auto_chip.setText("●  Automação ativa" if auto.automatic_monitoring else "○  Automação pausada")
+        self.proxy_chip.setText(
+            "●  Proxy pronto"
+            if cfg.enabled
+            else "○  Proxy inativo"
+        )
+
+        self.auto_chip.setText(
+            "●  Automação ativa"
+            if auto.automatic_monitoring
+            else "○  Automação pausada"
+        )
 
         self.sidebar_status.setText(
             f"●  Sistema operacional\n"
@@ -316,11 +429,16 @@ class MainWindow(QMainWindow):
             f"{cfg.status_label}\n"
             f"{'●  Automação ativa' if auto.automatic_monitoring else '○  Automação pausada'}"
         )
+
         self.footer_left.setText(
-            "Busca em andamento" if state.news_busy or state.video_busy else "Sistema operacional"
+            "Busca em andamento"
+            if state.news_busy or state.video_busy
+            else "Sistema operacional"
         )
+
         self.footer_right.setText(
-            f"Notícias: {state.status}   •   Vídeos: {state.video_status}"
+            f"Notícias: {state.status}   •   "
+            f"Vídeos: {state.video_status}"
         )
 
     def _state_changed(self, _state) -> None:
@@ -331,24 +449,40 @@ class MainWindow(QMainWindow):
         self.raise_()
         self.activateWindow()
 
-    def closeEvent(self, event: QCloseEvent) -> None:
+    def closeEvent(
+        self,
+        event: QCloseEvent,
+    ) -> None:
         if self._allow_close:
             event.accept()
             return
+
         event.ignore()
         self.hide()
 
     def exit_application(self) -> None:
-        extractor = self.pages.get(Section.EXTRACTOR)
-        if isinstance(extractor, ExtractorPage) and not extractor.shutdown():
+        extractor = self.pages.get(
+            Section.EXTRACTOR
+        )
+
+        if (
+            isinstance(extractor, ExtractorPage)
+            and not extractor.shutdown()
+        ):
             self.footer_right.setText(
                 "Aguardando o Extrator encerrar a operação ativa antes de sair."
             )
             self._restore()
             return
 
-        video_editor = self.pages.get(Section.VIDEO_EDITOR)
-        if isinstance(video_editor, VideoEditorPage) and not video_editor.shutdown():
+        video_editor = self.pages.get(
+            Section.VIDEO_EDITOR
+        )
+
+        if (
+            isinstance(video_editor, VideoEditorPage)
+            and not video_editor.shutdown()
+        ):
             self.footer_right.setText(
                 "Não foi possível fechar todas as janelas do Editor de Vídeo."
             )
