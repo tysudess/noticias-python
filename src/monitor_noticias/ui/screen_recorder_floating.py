@@ -279,6 +279,23 @@ class FloatingRecorderWidget(QWidget):
                 "color:#6F8198;"
             )
 
+    def set_area_editing(
+        self,
+        editing: bool,
+    ) -> None:
+        self.area.setText(
+            "OK ÁREA"
+            if editing
+            else "ÁREA"
+        )
+        self.area.setToolTip(
+            (
+                "Concluir o ajuste contínuo da área"
+                if editing
+                else "Mover ou redimensionar a área mesmo durante a gravação"
+            )
+        )
+
     def mousePressEvent(
         self,
         event: QMouseEvent,

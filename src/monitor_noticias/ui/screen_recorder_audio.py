@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import threading
+import time
 import wave
 from dataclasses import dataclass
 from pathlib import Path
@@ -332,10 +333,25 @@ class WasapiSegmentRecorder:
         self._wave = None
         self._lock = threading.Lock()
         self._error: str | None = None
+        self._started_at: float | None = None
+        self._first_callback_at: float | None = None
+        self._stopped_at: float | None = None
 
     @property
     def error(self) -> str | None:
         return self._error
+
+    @property
+    def started_at(self) -> float | None:
+        return self._started_at
+
+    @property
+    def first_callback_at(self) -> float | None:
+        return self._first_callback_at
+
+    @property
+    def stopped_at(self) -> float | None:
+        return self._stopped_at
 
     def start(self) -> None:
         self.output.parent.mkdir(
@@ -370,6 +386,9 @@ class WasapiSegmentRecorder:
             _time_info,
             _status_flags,
         ):
+            if self._first_callback_at is None:
+                self._first_callback_at = time.perf_counter()
+
             try:
                 with self._lock:
                     if (
@@ -400,6 +419,7 @@ class WasapiSegmentRecorder:
                 stream_callback=callback,
             )
             self._stream.start_stream()
+            self._started_at = time.perf_counter()
 
         except Exception:
             self.stop()
@@ -430,6 +450,8 @@ class WasapiSegmentRecorder:
                     wav.close()
                 except Exception:
                     pass
+
+        self._stopped_at = time.perf_counter()
 
         manager = self._manager
         self._manager = None

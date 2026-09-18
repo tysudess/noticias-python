@@ -185,12 +185,14 @@ class CaptureAreaOutline(QWidget):
 class RegionEditorOverlay(QWidget):
     """Editor de área em tela cheia.
 
-    Pode criar uma área do zero ou editar uma área existente.
-    A tela cheia evita o problema da versão anterior em que a própria moldura
-    mudava WindowTransparentForInput e depois deixava de receber o mouse.
+    - Nova área: arraste e solte; aplica automaticamente.
+    - Ajustar área: permanece aberto após soltar o mouse, permitindo mover e
+      redimensionar várias vezes, inclusive durante a gravação.
+    - O botão ÁREA do widget flutuante encerra o modo de ajuste.
     """
 
-    accepted = Signal(QRect)
+    applied = Signal(QRect)
+    finished = Signal(QRect)
     cancelled = Signal()
     cleared = Signal()
 
@@ -202,10 +204,13 @@ class RegionEditorOverlay(QWidget):
         self,
         screen: QScreen,
         initial: QRect | None = None,
+        *,
+        continuous: bool = False,
     ) -> None:
         super().__init__(None)
 
         self.screen = screen
+        self.continuous = continuous
         self._screen_geometry = QRect(
             screen.geometry()
         )
@@ -267,20 +272,50 @@ class RegionEditorOverlay(QWidget):
         except Exception:
             pass
 
+    def _global_selection(self) -> QRect:
+        rect = QRect(self._selection)
+
+        if rect.isEmpty():
+            return rect
+
+        rect.translate(
+            self._screen_geometry.x(),
+            self._screen_geometry.y(),
+        )
+        return rect
+
+    def finish_current(self) -> None:
+        rect = self._global_selection()
+
+        if (
+            rect.width() >= self.MIN_W
+            and rect.height() >= self.MIN_H
+        ):
+            self.finished.emit(rect)
+        else:
+            self.cancelled.emit()
+
+        self.close()
+
     def keyPressEvent(
         self,
         event: QKeyEvent,
     ) -> None:
         if event.key() == Qt.Key.Key_Escape:
-            self.cancelled.emit()
-            self.close()
+            # No ajuste contínuo, Esc apenas encerra mantendo a última posição
+            # já aplicada. Em uma nova seleção, cancela.
+            if self.continuous and not self._selection.isEmpty():
+                self.finish_current()
+            else:
+                self.cancelled.emit()
+                self.close()
             return
 
         if event.key() in (
             Qt.Key.Key_Return,
             Qt.Key.Key_Enter,
         ):
-            self._confirm()
+            self.finish_current()
             return
 
         if event.key() in (
@@ -304,9 +339,7 @@ class RegionEditorOverlay(QWidget):
             else 1
         )
 
-        rect = QRect(
-            self._selection
-        )
+        rect = QRect(self._selection)
 
         if event.key() == Qt.Key.Key_Left:
             rect.translate(-step, 0)
@@ -320,9 +353,7 @@ class RegionEditorOverlay(QWidget):
             super().keyPressEvent(event)
             return
 
-        self._selection = self._clamp(
-            rect
-        )
+        self._selection = self._clamp(rect)
         self.update()
 
     def mousePressEvent(
@@ -337,32 +368,25 @@ class RegionEditorOverlay(QWidget):
         if self._selection.isEmpty():
             self._creating = True
             self._drag_start = point
-            self._selection = QRect(
-                point,
-                point,
-            )
+            self._selection = QRect(point, point)
             self.update()
             return
 
         mode = self._hit_test(point)
 
         if not mode:
-            # Clicar fora começa uma NOVA seleção imediatamente.
+            # Em "Nova área", clicar fora começa outra seleção.
+            # Em ajuste contínuo, também permite redesenhar do zero.
             self._creating = True
             self._drag_start = point
-            self._selection = QRect(
-                point,
-                point,
-            )
+            self._selection = QRect(point, point)
             self.update()
             return
 
         self._creating = False
         self._drag_mode = mode
         self._drag_start = point
-        self._drag_rect = QRect(
-            self._selection
-        )
+        self._drag_rect = QRect(self._selection)
 
     def mouseMoveEvent(
         self,
@@ -370,10 +394,7 @@ class RegionEditorOverlay(QWidget):
     ) -> None:
         point = event.position().toPoint()
 
-        if (
-            event.buttons()
-            & Qt.MouseButton.LeftButton
-        ):
+        if event.buttons() & Qt.MouseButton.LeftButton:
             if self._creating:
                 self._selection = self._clamp(
                     QRect(
@@ -385,13 +406,8 @@ class RegionEditorOverlay(QWidget):
                 return
 
             if self._drag_mode:
-                delta = (
-                    point
-                    - self._drag_start
-                )
-                rect = QRect(
-                    self._drag_rect
-                )
+                delta = point - self._drag_start
+                rect = QRect(self._drag_rect)
 
                 if self._drag_mode == "move":
                     rect.translate(
@@ -420,12 +436,10 @@ class RegionEditorOverlay(QWidget):
                             + delta.y()
                         )
 
-                rect = rect.normalized()
-                rect = self._minimum(
-                    rect
-                )
                 self._selection = self._clamp(
-                    rect
+                    self._minimum(
+                        rect.normalized()
+                    )
                 )
                 self.update()
                 return
@@ -446,10 +460,8 @@ class RegionEditorOverlay(QWidget):
             self._creating = False
 
             if (
-                self._selection.width()
-                < self.MIN_W
-                or self._selection.height()
-                < self.MIN_H
+                self._selection.width() < self.MIN_W
+                or self._selection.height() < self.MIN_H
             ):
                 self._selection = QRect()
 
@@ -459,48 +471,37 @@ class RegionEditorOverlay(QWidget):
         )
         self.update()
 
-        # V18.1: soltar o mouse já confirma. Não é mais necessário apertar Enter.
+        if not (was_creating or had_drag):
+            return
+
+        rect = self._global_selection()
+
         if (
-            (was_creating or had_drag)
-            and not self._selection.isEmpty()
-            and self._selection.width() >= self.MIN_W
-            and self._selection.height() >= self.MIN_H
+            rect.width() < self.MIN_W
+            or rect.height() < self.MIN_H
         ):
-            self._confirm()
+            return
+
+        # Sem Enter: soltar o mouse já aplica.
+        if self.continuous:
+            # Permanece aberto para o usuário continuar movendo/redimensionando.
+            self.applied.emit(rect)
+        else:
+            self.finished.emit(rect)
+            self.close()
 
     def mouseDoubleClickEvent(
         self,
         event: QMouseEvent,
     ) -> None:
         if (
-            event.button()
-            == Qt.MouseButton.LeftButton
+            event.button() == Qt.MouseButton.LeftButton
             and not self._selection.isEmpty()
             and self._selection.contains(
                 event.position().toPoint()
             )
         ):
-            self._confirm()
-
-    def _confirm(self) -> None:
-        if (
-            self._selection.width()
-            < self.MIN_W
-            or self._selection.height()
-            < self.MIN_H
-        ):
-            return
-
-        rect = QRect(
-            self._selection
-        )
-        rect.translate(
-            self._screen_geometry.x(),
-            self._screen_geometry.y(),
-        )
-
-        self.accepted.emit(rect)
-        self.close()
+            self.finish_current()
 
     def _hit_test(
         self,
@@ -509,26 +510,12 @@ class RegionEditorOverlay(QWidget):
         if self._selection.isEmpty():
             return ""
 
-        rect = QRect(
-            self._selection
-        )
+        rect = QRect(self._selection)
 
-        near_left = abs(
-            point.x()
-            - rect.left()
-        ) <= self.HANDLE
-        near_right = abs(
-            point.x()
-            - rect.right()
-        ) <= self.HANDLE
-        near_top = abs(
-            point.y()
-            - rect.top()
-        ) <= self.HANDLE
-        near_bottom = abs(
-            point.y()
-            - rect.bottom()
-        ) <= self.HANDLE
+        near_left = abs(point.x() - rect.left()) <= self.HANDLE
+        near_right = abs(point.x() - rect.right()) <= self.HANDLE
+        near_top = abs(point.y() - rect.top()) <= self.HANDLE
+        near_bottom = abs(point.y() - rect.bottom()) <= self.HANDLE
 
         if near_left and near_top:
             return "left-top"
@@ -574,62 +561,39 @@ class RegionEditorOverlay(QWidget):
             )
         )
 
-    def _minimum(
-        self,
-        rect: QRect,
-    ) -> QRect:
+    def _minimum(self, rect: QRect) -> QRect:
         rect = QRect(rect)
 
         if rect.width() < self.MIN_W:
-            rect.setWidth(
-                self.MIN_W
-            )
+            rect.setWidth(self.MIN_W)
 
         if rect.height() < self.MIN_H:
-            rect.setHeight(
-                self.MIN_H
-            )
+            rect.setHeight(self.MIN_H)
 
         return rect
 
-    def _clamp(
-        self,
-        rect: QRect,
-    ) -> QRect:
+    def _clamp(self, rect: QRect) -> QRect:
         bounds = QRect(
             0,
             0,
             self.width(),
             self.height(),
         )
-
         rect = QRect(rect)
 
         if rect.width() > bounds.width():
-            rect.setWidth(
-                bounds.width()
-            )
+            rect.setWidth(bounds.width())
         if rect.height() > bounds.height():
-            rect.setHeight(
-                bounds.height()
-            )
+            rect.setHeight(bounds.height())
 
         if rect.left() < bounds.left():
-            rect.moveLeft(
-                bounds.left()
-            )
+            rect.moveLeft(bounds.left())
         if rect.top() < bounds.top():
-            rect.moveTop(
-                bounds.top()
-            )
+            rect.moveTop(bounds.top())
         if rect.right() > bounds.right():
-            rect.moveRight(
-                bounds.right()
-            )
+            rect.moveRight(bounds.right())
         if rect.bottom() > bounds.bottom():
-            rect.moveBottom(
-                bounds.bottom()
-            )
+            rect.moveBottom(bounds.bottom())
 
         return rect
 
@@ -640,15 +604,19 @@ class RegionEditorOverlay(QWidget):
             True,
         )
 
+        # Mais transparente durante o ajuste para enxergar melhor o conteúdo.
         painter.fillRect(
             self.rect(),
-            QColor(4, 14, 28, 155),
+            QColor(
+                4,
+                14,
+                28,
+                90 if self.continuous else 150,
+            ),
         )
 
         if self._selection.isEmpty():
-            painter.setPen(
-                QColor("#FFFFFF")
-            )
+            painter.setPen(QColor("#FFFFFF"))
             painter.setFont(
                 QFont(
                     "Segoe UI",
@@ -659,14 +627,12 @@ class RegionEditorOverlay(QWidget):
             painter.drawText(
                 self.rect(),
                 Qt.AlignmentFlag.AlignCenter,
-                "ARRASTE PARA CRIAR UMA NOVA ÁREA\n"
+                "ARRASTE PARA CRIAR UMA ÁREA\n"
                 "Solte o mouse para aplicar • Esc cancela",
             )
             return
 
-        rect = QRect(
-            self._selection
-        )
+        rect = QRect(self._selection)
 
         painter.setCompositionMode(
             QPainter.CompositionMode.CompositionMode_Clear
@@ -685,14 +651,10 @@ class RegionEditorOverlay(QWidget):
                 4,
             )
         )
-        painter.setBrush(
-            Qt.BrushStyle.NoBrush
-        )
+        painter.setBrush(Qt.BrushStyle.NoBrush)
         painter.drawRect(rect)
 
-        painter.setPen(
-            QColor("#FFFFFF")
-        )
+        painter.setPen(QColor("#FFFFFF"))
         painter.setFont(
             QFont(
                 "Segoe UI",
@@ -700,6 +662,16 @@ class RegionEditorOverlay(QWidget):
                 QFont.Weight.Bold,
             )
         )
+
+        help_text = (
+            f"{rect.width()}×{rect.height()} • "
+            "ARRASTE PARA MOVER/REDIMENSIONAR • "
+            "SOLTE PARA APLICAR"
+        )
+
+        if self.continuous:
+            help_text += " • ÁREA novamente para concluir"
+
         painter.drawText(
             rect.adjusted(
                 12,
@@ -709,14 +681,10 @@ class RegionEditorOverlay(QWidget):
             ),
             Qt.AlignmentFlag.AlignTop
             | Qt.AlignmentFlag.AlignLeft,
-            f"{rect.width()}×{rect.height()}  "
-            "• arraste centro para mover "
-            "• bordas/cantos para redimensionar",
+            help_text,
         )
 
-        painter.setBrush(
-            QColor("#FF274B")
-        )
+        painter.setBrush(QColor("#FF274B"))
         painter.setPen(
             QPen(
                 QColor("#FFFFFF"),
@@ -729,22 +697,10 @@ class RegionEditorOverlay(QWidget):
             rect.topRight(),
             rect.bottomLeft(),
             rect.bottomRight(),
-            QPoint(
-                rect.center().x(),
-                rect.top(),
-            ),
-            QPoint(
-                rect.center().x(),
-                rect.bottom(),
-            ),
-            QPoint(
-                rect.left(),
-                rect.center().y(),
-            ),
-            QPoint(
-                rect.right(),
-                rect.center().y(),
-            ),
+            QPoint(rect.center().x(), rect.top()),
+            QPoint(rect.center().x(), rect.bottom()),
+            QPoint(rect.left(), rect.center().y()),
+            QPoint(rect.right(), rect.center().y()),
         ]
 
         for point in points:
@@ -817,6 +773,7 @@ class ScreenRecorderPage(QWidget):
         self._audio_devices: dict[str, AudioDevice] = {}
         self._audio_engine: WasapiSegmentRecorder | None = None
         self._audio_segments: list[Path | None] = []
+        self._segment_audio_offsets: list[float] = []
         self._session_audio_device: AudioDevice | None = None
         self._session_output_size: tuple[int, int] | None = None
 
@@ -1050,8 +1007,9 @@ class ScreenRecorderPage(QWidget):
 
         capture_help = QLabel(
             "Você pode recriar a área quantas vezes quiser. "
-            "Arraste e solte: a mudança é aplicada automaticamente, sem Enter. "
-            "Durante a gravação use Ajustar área ou o botão ÁREA do controle flutuante."
+            "No Ajustar área, arraste e solte quantas vezes quiser: "
+            "a mudança entra em vigor sem Enter, inclusive durante a gravação. "
+            "Clique ÁREA novamente no controle flutuante para concluir."
         )
         capture_help.setObjectName(
             "recAudioStatus"
@@ -1782,9 +1740,10 @@ class ScreenRecorderPage(QWidget):
         editor = RegionEditorOverlay(
             screen,
             None,
+            continuous=False,
         )
-        editor.accepted.connect(
-            self._region_accepted
+        editor.finished.connect(
+            self._region_new_finished
         )
         editor.cancelled.connect(
             self._region_editor_cancelled
@@ -1795,8 +1754,14 @@ class ScreenRecorderPage(QWidget):
 
         self._region_editor = editor
         editor.show()
+        self.floating.raise_()
 
     def _adjust_region(self) -> None:
+        """Modo de ajuste CONTÍNUO.
+
+        Continua aberto após cada movimento. Durante a gravação, cada vez que
+        o usuário solta o mouse a nova área entra em vigor automaticamente.
+        """
         if (
             not self._module_enabled
             or self._region is None
@@ -1820,9 +1785,13 @@ class ScreenRecorderPage(QWidget):
         editor = RegionEditorOverlay(
             screen,
             self._region,
+            continuous=True,
         )
-        editor.accepted.connect(
-            self._region_accepted
+        editor.applied.connect(
+            self._region_live_applied
+        )
+        editor.finished.connect(
+            self._region_adjust_finished
         )
         editor.cancelled.connect(
             self._region_editor_cancelled
@@ -1832,42 +1801,90 @@ class ScreenRecorderPage(QWidget):
         )
 
         self._region_editor = editor
+        self.floating.set_area_editing(True)
         editor.show()
+        self.floating.raise_()
+
+        self.status_text.setText(
+            "Ajuste ativo: arraste a área durante a gravação. "
+            "Solte o mouse para aplicar. Clique ÁREA novamente para concluir."
+        )
 
     def _floating_area_action(self) -> None:
-        """Botão ÁREA do widget flutuante.
+        editor = self._region_editor
 
-        Se já há área personalizada, abre Ajustar.
-        Caso contrário, abre Nova área.
-        """
+        if editor is not None:
+            editor.finish_current()
+            return
+
         if self._region is None:
             self._choose_region()
         else:
             self._adjust_region()
 
-    def _region_accepted(
+    def _region_new_finished(
         self,
         rect: QRect,
     ) -> None:
         self._region_editor = None
+        self.floating.set_area_editing(False)
         self._commit_capture_change(
             QRect(rect.normalized()),
             custom=True,
             message=(
-                "Área aplicada automaticamente ao soltar o mouse."
+                "Nova área aplicada automaticamente."
             ),
+        )
+
+    def _region_live_applied(
+        self,
+        rect: QRect,
+    ) -> None:
+        # NÃO fecha o editor. Isso permite continuar movendo/redimensionando.
+        self._commit_capture_change(
+            QRect(rect.normalized()),
+            custom=True,
+            message=(
+                "Área movida/redimensionada."
+            ),
+        )
+
+        if self._region_editor is not None:
+            self._region_editor.raise_()
+            self.floating.raise_()
+
+    def _region_adjust_finished(
+        self,
+        rect: QRect,
+    ) -> None:
+        self._region_editor = None
+        self.floating.set_area_editing(False)
+
+        # A última posição já foi aplicada no mouseRelease. Apenas garantimos
+        # que a moldura persistente volte a aparecer.
+        if rect is not None and not rect.isEmpty():
+            self._region = QRect(
+                rect.normalized()
+            )
+
+        self._update_capture_labels()
+        self._update_capture_overlay()
+        self.status_text.setText(
+            "Ajuste da área concluído."
         )
 
     def _region_editor_cancelled(self) -> None:
         self._region_editor = None
+        self.floating.set_area_editing(False)
         self._update_capture_overlay()
         self.status_text.setText(
-            "Ajuste cancelado."
+            "Ajuste encerrado."
         )
 
     def _close_region_editor(self) -> None:
         editor = self._region_editor
         self._region_editor = None
+        self.floating.set_area_editing(False)
 
         if editor is not None:
             try:
@@ -1902,12 +1919,11 @@ class ScreenRecorderPage(QWidget):
         custom: bool,
         message: str,
     ) -> None:
-        """Aplica mudança de área sem interromper a sessão do usuário.
+        """Aplica a área também DURANTE a gravação.
 
-        FFmpeg/gdigrab não muda offset/tamanho de uma captura já aberta.
-        Portanto, durante gravação, fechamos o segmento atual e abrimos outro
-        automaticamente com a nova área. Na finalização, os segmentos são
-        unidos em um único MP4.
+        gdigrab não altera offset/tamanho de uma captura já aberta. Para evitar
+        travamento, fechamos apenas o segmento atual e abrimos o próximo com a
+        nova área. A gravação da sessão continua e tudo é unido ao final.
         """
         was_recording = (
             self._state == self.RECORDING
@@ -1915,7 +1931,7 @@ class ScreenRecorderPage(QWidget):
 
         if was_recording:
             self.status_text.setText(
-                "Aplicando nova área à gravação…"
+                "Aplicando nova posição da área…"
             )
             QApplication.processEvents()
             self._finish_current_segment()
@@ -1944,26 +1960,21 @@ class ScreenRecorderPage(QWidget):
                 self._apply_state(
                     self.RECORDING,
                     message
-                    + " A gravação continuou automaticamente.",
+                    + " Gravação continuou automaticamente.",
                 )
             else:
                 self._apply_state(
                     self.ERROR,
-                    "A área foi alterada, mas não foi possível "
-                    "reiniciar a captura.",
+                    "A área mudou, mas a captura não conseguiu reiniciar.",
                 )
         else:
-            self.status_text.setText(
-                message
-            )
+            self.status_text.setText(message)
 
     def _mode_changed(
         self,
         value: str,
     ) -> None:
         if self.is_active:
-            # Durante gravação use Nova área / Ajustar área / Remover área
-            # ou o botão ÁREA do widget flutuante.
             return
 
         if value == "Tela inteira":
@@ -2586,6 +2597,7 @@ class ScreenRecorderPage(QWidget):
         )
         self._segments = []
         self._audio_segments = []
+        self._segment_audio_offsets = []
         self._session_audio_device = (
             self._selected_audio_device()
         )
@@ -2676,9 +2688,7 @@ class ScreenRecorderPage(QWidget):
         if self._session_dir is None:
             return False
 
-        segment_number = len(
-            self._segments
-        ) + 1
+        segment_number = len(self._segments) + 1
 
         segment = (
             self._session_dir
@@ -2693,19 +2703,25 @@ class ScreenRecorderPage(QWidget):
         fps = self._fps()
         crf = self._crf()
 
-        # Áudio via WASAPI loopback/microfone em arquivo WAV paralelo.
+        # Inicia o áudio primeiro e mede exatamente quanto ele antecedeu o
+        # processo de vídeo. Esse valor é compensado no mux final.
+        recorder = None
+        audio_started_at = None
         self._audio_engine = None
 
         if self._session_audio_device is not None:
             try:
-                recorder = (
-                    WasapiSegmentRecorder(
-                        self._session_audio_device,
-                        audio_path,
-                    )
+                recorder = WasapiSegmentRecorder(
+                    self._session_audio_device,
+                    audio_path,
                 )
                 recorder.start()
                 self._audio_engine = recorder
+                audio_started_at = (
+                    recorder.first_callback_at
+                    or recorder.started_at
+                    or time.perf_counter()
+                )
             except Exception as exc:
                 self.audio_status.setText(
                     "Falha ao iniciar áudio WASAPI: "
@@ -2729,9 +2745,7 @@ class ScreenRecorderPage(QWidget):
             "-framerate",
             str(fps),
             "-draw_mouse",
-            "1"
-            if self.draw_mouse.isChecked()
-            else "0",
+            "1" if self.draw_mouse.isChecked() else "0",
             "-offset_x",
             str(rect.x()),
             "-offset_y",
@@ -2757,23 +2771,14 @@ class ScreenRecorderPage(QWidget):
                 rect.height(),
             )
         )
-        target_w = max(
-            2,
-            int(target_size[0]),
-        )
-        target_h = max(
-            2,
-            int(target_size[1]),
-        )
+        target_w = max(2, int(target_size[0]))
+        target_h = max(2, int(target_size[1]))
 
         if target_w % 2:
             target_w -= 1
         if target_h % 2:
             target_h -= 1
 
-        # Mantém todos os segmentos na mesma resolução, mesmo que a área
-        # seja redimensionada durante a gravação. Isso permite concatenar
-        # tudo em um único MP4 no final.
         command += [
             "-vf",
             (
@@ -2822,6 +2827,7 @@ class ScreenRecorderPage(QWidget):
                 stderr=self._log_handle,
                 creationflags=CREATE_NO_WINDOW,
             )
+            video_started_at = time.perf_counter()
 
         except Exception as exc:
             self._stop_audio_engine()
@@ -2838,33 +2844,44 @@ class ScreenRecorderPage(QWidget):
             self._close_log()
             return False
 
-        self._segments.append(
-            segment
-        )
+        audio_offset = 0.0
+
+        if (
+            self._session_audio_device is not None
+            and audio_started_at is not None
+        ):
+            # Negativo = áudio começou antes do vídeo (será cortado).
+            # Positivo = áudio começou depois do vídeo (será atrasado com silêncio).
+            audio_offset = (
+                audio_started_at
+                - video_started_at
+            )
+
+        self._segments.append(segment)
         self._audio_segments.append(
             audio_path
             if self._session_audio_device is not None
             else None
         )
+        self._segment_audio_offsets.append(
+            audio_offset
+        )
+
         self._segment_started_at = (
-            time.monotonic()
+            video_started_at
         )
 
         if self._session_audio_device is None:
-            self.audio_value.setText(
-                "Sem áudio"
-            )
+            self.audio_value.setText("Sem áudio")
         else:
             self.audio_value.setText(
                 "Sistema"
-                if (
-                    self._session_audio_device.kind
-                    == "system"
-                )
+                if self._session_audio_device.kind == "system"
                 else "Microfone"
             )
 
         return True
+
 
     def _stop_audio_engine(self) -> None:
         recorder = self._audio_engine
@@ -2910,6 +2927,10 @@ class ScreenRecorderPage(QWidget):
         )
 
     def stop_recording(self) -> None:
+        """Finaliza e ZERA o estado da sessão.
+
+        O botão Parar do widget flutuante chama exatamente este método.
+        """
         if self._state not in {
             self.STARTING,
             self.RECORDING,
@@ -2918,50 +2939,95 @@ class ScreenRecorderPage(QWidget):
         }:
             return
 
+        self._close_region_editor()
+
         if self._state == self.STARTING:
-            self._apply_state(
-                self.IDLE,
-                "Gravação cancelada antes de iniciar.",
+            self._cleanup_session()
+            self._reset_recording_state(
+                "Gravação cancelada. Pronto para uma nova gravação."
             )
+            self._restore_window_after_recording()
             return
 
         if self._state == self.RECORDING:
             self._finish_current_segment()
 
         if not self._segments:
-            self._apply_state(
-                self.IDLE,
-                "Nenhum segmento foi gravado.",
+            self._cleanup_session()
+            self._reset_recording_state(
+                "Nenhum segmento foi gravado. Pronto."
             )
             self._restore_window_after_recording()
             return
 
         self._apply_state(
             self.FINALIZING,
-            "Finalizando arquivo MP4…",
+            "Finalizando e sincronizando áudio/vídeo…",
         )
 
         QApplication.processEvents()
 
+        final_path = (
+            Path(self._final_path)
+            if self._final_path is not None
+            else None
+        )
+
         ok = self._finalize_session()
 
-        if ok and self._final_path is not None:
-            self._apply_state(
-                self.IDLE,
-                f"Gravação salva: {self._final_path.name}",
-            )
+        if ok and final_path is not None:
             self.recording_finished.emit(
-                str(self._final_path)
+                str(final_path)
+            )
+            result_message = (
+                f"Pronto para nova gravação. "
+                f"Último arquivo: {final_path.name}"
             )
         else:
-            self._apply_state(
-                self.ERROR,
-                "Não foi possível finalizar a gravação. Consulte o log.",
+            result_message = (
+                "A sessão foi zerada, mas houve falha ao salvar. "
+                "Consulte logs/screen_recorder.log."
             )
 
         self._cleanup_session()
         self._refresh_recordings()
+        self._reset_recording_state(
+            result_message
+        )
         self._restore_window_after_recording()
+
+    def _reset_recording_state(
+        self,
+        message: str,
+    ) -> None:
+        """Zera cronômetro, pausa, processo e estado temporário.
+
+        Mantém apenas as preferências do usuário (área, FPS, áudio e qualidade)
+        para que uma nova gravação possa começar rapidamente.
+        """
+        self._process = None
+        self._segment_started_at = None
+        self._elapsed_before_segment = 0.0
+        self._countdown_remaining = 0
+        self._final_path = None
+
+        self.duration_value.setText(
+            "00:00:00"
+        )
+
+        if hasattr(self, "floating"):
+            self.floating.set_elapsed(
+                "00:00:00"
+            )
+            self.floating.set_area_editing(
+                False
+            )
+
+        self._apply_state(
+            self.IDLE,
+            message,
+        )
+
 
     def _finish_current_segment(self) -> None:
         if self._segment_started_at is not None:
@@ -3011,7 +3077,7 @@ class ScreenRecorderPage(QWidget):
             return False
 
         records: list[
-            tuple[Path, Path | None]
+            tuple[Path, Path | None, float]
         ] = []
 
         for index, video in enumerate(
@@ -3028,8 +3094,14 @@ class ScreenRecorderPage(QWidget):
                 if index < len(self._audio_segments)
                 else None
             )
+            offset = (
+                self._segment_audio_offsets[index]
+                if index < len(self._segment_audio_offsets)
+                else 0.0
+            )
+
             records.append(
-                (video, audio)
+                (video, audio, offset)
             )
 
         if not records:
@@ -3046,6 +3118,7 @@ class ScreenRecorderPage(QWidget):
         for index, (
             video,
             audio,
+            audio_offset,
         ) in enumerate(records, start=1):
             if self._session_audio_device is None:
                 prepared.append(video)
@@ -3060,6 +3133,7 @@ class ScreenRecorderPage(QWidget):
                 video,
                 audio,
                 muxed,
+                audio_offset=audio_offset,
             ):
                 return False
 
@@ -3170,11 +3244,74 @@ class ScreenRecorderPage(QWidget):
             fallback
         )
 
+    def _probe_duration(
+        self,
+        path: Path,
+    ) -> float:
+        ffprobe = (
+            self.app_root
+            / "bin"
+            / "ffprobe.exe"
+        )
+
+        if not ffprobe.is_file():
+            return 0.0
+
+        try:
+            result = subprocess.run(
+                [
+                    str(ffprobe),
+                    "-v",
+                    "error",
+                    "-show_entries",
+                    "format=duration",
+                    "-of",
+                    "default=noprint_wrappers=1:nokey=1",
+                    str(path),
+                ],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL,
+                text=True,
+                encoding="utf-8",
+                errors="ignore",
+                timeout=20,
+                creationflags=CREATE_NO_WINDOW,
+            )
+            return max(
+                0.0,
+                float(result.stdout.strip() or 0.0),
+            )
+        except Exception:
+            return 0.0
+
+    @staticmethod
+    def _atempo_filters(
+        factor: float,
+    ) -> list[str]:
+        """Divide atempo para permanecer na faixa suportada 0.5–2.0."""
+        factor = max(0.05, min(20.0, factor))
+        parts: list[str] = []
+
+        while factor < 0.5:
+            parts.append("atempo=0.5")
+            factor /= 0.5
+
+        while factor > 2.0:
+            parts.append("atempo=2.0")
+            factor /= 2.0
+
+        parts.append(
+            f"atempo={factor:.8f}"
+        )
+        return parts
+
     def _mux_audio_segment(
         self,
         video: Path,
         audio: Path | None,
         output: Path,
+        *,
+        audio_offset: float = 0.0,
     ) -> bool:
         device = self._session_audio_device
 
@@ -3187,7 +3324,90 @@ class ScreenRecorderPage(QWidget):
             and audio.stat().st_size > 64
         )
 
+        video_duration = self._probe_duration(
+            video
+        )
+
+        if video_duration <= 0:
+            video_duration = max(
+                0.1,
+                self._elapsed_seconds(),
+            )
+
         if has_audio:
+            audio_duration = self._probe_duration(
+                audio
+            )
+
+            # audio_offset:
+            # < 0 -> áudio começou antes do vídeo: cortar o início do WAV.
+            # > 0 -> áudio começou depois do vídeo: inserir silêncio no começo.
+            lead_trim = max(
+                0.0,
+                -audio_offset,
+            )
+            delay = max(
+                0.0,
+                audio_offset,
+            )
+
+            effective_audio = max(
+                0.001,
+                audio_duration - lead_trim,
+            )
+            desired_content = max(
+                0.001,
+                video_duration - delay,
+            )
+
+            # Corrige drift dos relógios independentes PortAudio/FFmpeg.
+            tempo_factor = (
+                effective_audio
+                / desired_content
+            )
+
+            filters: list[str] = []
+
+            if lead_trim > 0.0005:
+                filters += [
+                    f"atrim=start={lead_trim:.6f}",
+                    "asetpts=PTS-STARTPTS",
+                ]
+            else:
+                filters.append(
+                    "asetpts=PTS-STARTPTS"
+                )
+
+            # Não mexe no tempo se a diferença for insignificante.
+            if abs(tempo_factor - 1.0) > 0.0005:
+                filters.extend(
+                    self._atempo_filters(
+                        tempo_factor
+                    )
+                )
+
+            filters.append(
+                "aresample=async=1:first_pts=0"
+            )
+
+            if delay > 0.0005:
+                delay_ms = max(
+                    0,
+                    int(round(delay * 1000.0)),
+                )
+                delays = "|".join(
+                    [str(delay_ms)]
+                    * max(1, device.channels)
+                )
+                filters.append(
+                    f"adelay={delays}"
+                )
+
+            filters += [
+                "apad",
+                f"atrim=duration={video_duration:.6f}",
+            ]
+
             command = [
                 str(self.ffmpeg),
                 "-y",
@@ -3204,11 +3424,12 @@ class ScreenRecorderPage(QWidget):
                 "1:a:0",
                 "-c:v",
                 "copy",
+                "-af",
+                ",".join(filters),
                 "-c:a",
                 "aac",
                 "-b:a",
                 "192k",
-                "-shortest",
                 "-movflags",
                 "+faststart",
                 str(output),
@@ -3304,6 +3525,7 @@ class ScreenRecorderPage(QWidget):
         self._stop_audio_engine()
         self._segments = []
         self._audio_segments = []
+        self._segment_audio_offsets = []
         self._session_audio_device = None
         self._session_output_size = None
 
