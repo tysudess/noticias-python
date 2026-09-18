@@ -9,7 +9,7 @@ import time
 from datetime import datetime
 from pathlib import Path
 
-from PySide6.QtCore import QPoint, QRect, Qt, QTimer, Signal
+from PySide6.QtCore import QPoint, QRect, Qt, QTimer, Signal, QUrl
 from PySide6.QtGui import (
     QColor,
     QDesktopServices,
@@ -19,7 +19,6 @@ from PySide6.QtGui import (
     QPen,
     QPixmap,
     QScreen,
-    QUrl,
 )
 from PySide6.QtWidgets import (
     QApplication,
