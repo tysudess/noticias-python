@@ -2,7 +2,7 @@
   "name": "extrator-materias-portable-v12519",
   "version": "1.25.19",
   "description": "Extrator de Materias Windows Portable V1.25.19 com corretor PT-BR rigido e acentuacao obrigatoria",
-  "main": "main.js",
+  "main": "monitor-main.js",
   "author": "",
   "license": "UNLICENSED",
   "scripts": {
@@ -25,6 +25,7 @@
     "productName": "Extrator de Materias",
     "asar": true,
     "files": [
+      "monitor-main.js",
       "main.js",
       "preload.js",
       "engine/**/*",
@@ -38,7 +39,9 @@
       "target": [
         {
           "target": "portable",
-          "arch": ["x64"]
+          "arch": [
+            "x64"
+          ]
         }
       ]
     },

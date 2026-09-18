@@ -1,40 +1,46 @@
 from __future__ import annotations
 
-import ctypes
-import os
-import subprocess
-import sys
+import json
+import uuid
 from pathlib import Path
 
-from PySide6.QtCore import QTimer, Qt, Signal
-from PySide6.QtWidgets import QFrame, QLabel, QVBoxLayout, QWidget
+from PySide6.QtCore import (
+    QProcess,
+    QProcessEnvironment,
+    QUrl,
+    Qt,
+    Signal,
+)
+from PySide6.QtGui import QDesktopServices
+from PySide6.QtWidgets import (
+    QApplication,
+    QFrame,
+    QGridLayout,
+    QHBoxLayout,
+    QLabel,
+    QLineEdit,
+    QPlainTextEdit,
+    QPushButton,
+    QVBoxLayout,
+    QWidget,
+)
 
 from monitor_noticias.ui.url_tools import resolve_article_url
 
 
 class NewsExtractorPage(QWidget):
+    """Extrator de matérias realmente incorporado ao Monitor.
+
+    A interface é PySide6 e vive diretamente no QStackedWidget.
+    O Electron fica somente como motor headless durante a extração e não
+    cria BrowserWindow nem aparece fora do programa.
+    """
+
     back_requested = Signal()
-
-    GWL_STYLE = -16
-    GWL_EXSTYLE = -20
-
-    WS_CAPTION = 0x00C00000
-    WS_THICKFRAME = 0x00040000
-    WS_POPUP = 0x80000000
-    WS_CHILD = 0x40000000
-
-    WS_EX_APPWINDOW = 0x00040000
-    WS_EX_TOOLWINDOW = 0x00000080
-
-    SW_HIDE = 0
-    SW_SHOW = 5
-    SWP_NOZORDER = 0x0004
-    SWP_NOACTIVATE = 0x0010
-    SWP_FRAMECHANGED = 0x0020
-    SWP_SHOWWINDOW = 0x0040
 
     def __init__(self, app_root: Path) -> None:
         super().__init__()
+
         self.app_root = Path(app_root)
         self.exe = (
             self.app_root
@@ -43,252 +49,491 @@ class NewsExtractorPage(QWidget):
             / "ExtratorMateriasPortable-V1.25.19.exe"
         )
 
-        self.process = None
-        self._hwnd = None
-        self._pending_url = ""
-        self._poll_count = 0
+        self.process: QProcess | None = None
+        self.result_file: Path | None = None
 
+        self._build_ui()
+        self._set_idle()
+
+    def _build_ui(self) -> None:
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
-        root.setSpacing(0)
+        root.setSpacing(10)
 
-        self.host = QFrame()
-        self.host.setAttribute(Qt.WidgetAttribute.WA_NativeWindow, True)
-        self.host.setStyleSheet("background:#08111f;border:0;")
-        root.addWidget(self.host, 1)
+        input_card = QFrame()
+        input_card.setObjectName("extractCard")
 
-        self.message = QLabel("Carregando Extrator de Notícias...", self.host)
-        self.message.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.message.setStyleSheet(
-            "color:#91A2B9;background:#08111F;font-size:14px;"
+        il = QVBoxLayout(input_card)
+        il.setContentsMargins(18, 16, 18, 16)
+        il.setSpacing(9)
+
+        kicker = QLabel("NOVA EXTRAÇÃO")
+        kicker.setObjectName("extractKicker")
+        il.addWidget(kicker)
+
+        title = QLabel("Cole o link da matéria")
+        title.setObjectName("extractTitle")
+        il.addWidget(title)
+
+        row = QHBoxLayout()
+        row.setSpacing(10)
+
+        self.url = QLineEdit()
+        self.url.setObjectName("extractUrl")
+        self.url.setPlaceholderText(
+            "https://veiculo.com.br/noticia/materia-completa"
         )
-        self.message.setGeometry(self.host.rect())
+        self.url.returnPressed.connect(self.extract)
+        row.addWidget(self.url, 1)
 
-        self._poll = QTimer(self)
-        self._poll.setInterval(80)
-        self._poll.timeout.connect(self._try_embed)
+        self.extract_button = QPushButton("⇩  Extrair matéria")
+        self.extract_button.setObjectName("extractPrimary")
+        self.extract_button.clicked.connect(self.extract)
+        row.addWidget(self.extract_button)
 
-        self._fit_timer = QTimer(self)
-        self._fit_timer.setInterval(300)
-        self._fit_timer.timeout.connect(self._resize_embedded)
+        il.addLayout(row)
+
+        note = QLabel(
+            "O link recebido da aba Notícias usa o mesmo endereço direto "
+            "de “Abrir matéria” e “Copiar link”."
+        )
+        note.setObjectName("extractMuted")
+        il.addWidget(note)
+
+        actions = QHBoxLayout()
+        actions.setSpacing(8)
+
+        clear = QPushButton("×  Limpar")
+        clear.clicked.connect(self.clear)
+        actions.addWidget(clear)
+
+        folder = QPushButton("▣  Abrir pasta")
+        folder.clicked.connect(self.open_folder)
+        actions.addWidget(folder)
+
+        copy = QPushButton("▣  Copiar texto")
+        copy.clicked.connect(self.copy_text)
+        actions.addWidget(copy)
+
+        actions.addStretch(1)
+        il.addLayout(actions)
+
+        root.addWidget(input_card)
+
+        self.status_card = QFrame()
+        self.status_card.setObjectName("statusCardNative")
+        sl = QHBoxLayout(self.status_card)
+        sl.setContentsMargins(14, 9, 14, 9)
+
+        self.status_dot = QLabel("●")
+        self.status_dot.setObjectName("statusDot")
+        sl.addWidget(self.status_dot)
+
+        self.status = QLabel()
+        self.status.setObjectName("extractStatus")
+        self.status.setWordWrap(True)
+        sl.addWidget(self.status, 1)
+
+        root.addWidget(self.status_card)
+
+        result = QHBoxLayout()
+        result.setSpacing(10)
+
+        meta_card = QFrame()
+        meta_card.setObjectName("extractCard")
+        meta_card.setMinimumWidth(330)
+        meta_card.setMaximumWidth(430)
+
+        ml = QVBoxLayout(meta_card)
+        ml.setContentsMargins(16, 14, 16, 14)
+        ml.setSpacing(9)
+
+        mh = QLabel("Dados identificados")
+        mh.setObjectName("extractTitleSmall")
+        ml.addWidget(mh)
+
+        self.meta_labels = {}
+
+        grid = QGridLayout()
+        grid.setHorizontalSpacing(10)
+        grid.setVerticalSpacing(7)
+
+        for r, (key, label) in enumerate(
+            (
+                ("title", "TÍTULO"),
+                ("source", "VEÍCULO"),
+                ("date", "DATA"),
+                ("author", "AUTOR"),
+                ("subtitle", "SUBTÍTULO"),
+            )
+        ):
+            cap = QLabel(label)
+            cap.setObjectName("metaCaption")
+
+            value = QLabel("—")
+            value.setObjectName("metaValue")
+            value.setWordWrap(True)
+            value.setTextInteractionFlags(
+                Qt.TextInteractionFlag.TextSelectableByMouse
+            )
+
+            grid.addWidget(cap, r * 2, 0)
+            grid.addWidget(value, r * 2 + 1, 0)
+            self.meta_labels[key] = value
+
+        ml.addLayout(grid)
+        ml.addStretch(1)
+        result.addWidget(meta_card, 1)
+
+        text_card = QFrame()
+        text_card.setObjectName("extractCard")
+
+        tl = QVBoxLayout(text_card)
+        tl.setContentsMargins(16, 14, 16, 14)
+        tl.setSpacing(8)
+
+        th = QHBoxLayout()
+
+        text_title = QLabel("Texto da matéria")
+        text_title.setObjectName("extractTitleSmall")
+        th.addWidget(text_title)
+
+        th.addStretch(1)
+
+        self.counter = QLabel("Nenhuma matéria extraída")
+        self.counter.setObjectName("extractMuted")
+        th.addWidget(self.counter)
+
+        tl.addLayout(th)
+
+        self.text = QPlainTextEdit()
+        self.text.setObjectName("extractText")
+        self.text.setPlaceholderText(
+            "O conteúdo extraído aparecerá aqui."
+        )
+        tl.addWidget(self.text, 1)
+
+        result.addWidget(text_card, 2)
+        root.addLayout(result, 1)
+
+        self.setStyleSheet(
+            """
+            QFrame#extractCard {
+                background:#FFFFFF;
+                border:1px solid #D6E6F7;
+                border-radius:12px;
+            }
+            QLabel#extractKicker {
+                color:#087AF7;
+                font-size:10px;
+                font-weight:900;
+            }
+            QLabel#extractTitle {
+                color:#08245F;
+                font-size:18px;
+                font-weight:900;
+            }
+            QLabel#extractTitleSmall {
+                color:#08245F;
+                font-size:15px;
+                font-weight:900;
+            }
+            QLabel#extractMuted {
+                color:#6079A5;
+                font-size:10px;
+            }
+            QLineEdit#extractUrl {
+                min-height:42px;
+                padding:0 13px;
+                background:#FFFFFF;
+                color:#08245F;
+                border:1px solid #BED6EE;
+                border-radius:9px;
+                font-size:12px;
+            }
+            QPushButton#extractPrimary {
+                min-height:42px;
+                min-width:180px;
+                background:#087AF7;
+                color:#FFFFFF;
+                border:0;
+                border-radius:9px;
+                padding:0 18px;
+                font-weight:900;
+                font-size:12px;
+            }
+            QPushButton#extractPrimary:disabled {
+                background:#9FC7F2;
+            }
+            QFrame#statusCardNative {
+                background:#EAF9F2;
+                border:1px solid #BFE8D5;
+                border-radius:10px;
+            }
+            QLabel#statusDot {
+                color:#08A66B;
+                font-size:15px;
+            }
+            QLabel#extractStatus {
+                color:#087A59;
+                font-size:11px;
+                font-weight:700;
+            }
+            QLabel#metaCaption {
+                color:#087AF7;
+                font-size:9px;
+                font-weight:900;
+            }
+            QLabel#metaValue {
+                color:#08245F;
+                font-size:11px;
+                padding:3px 0 7px 0;
+            }
+            QPlainTextEdit#extractText {
+                background:#F8FBFF;
+                color:#102A55;
+                border:1px solid #D5E4F4;
+                border-radius:9px;
+                padding:10px;
+                font-family:'Segoe UI';
+                font-size:11px;
+                selection-background-color:#1689F8;
+            }
+            QPushButton {
+                background:#FFFFFF;
+                color:#0C3974;
+                border:1px solid #C9DDF2;
+                border-radius:8px;
+                padding:7px 12px;
+                font-weight:700;
+            }
+            QPushButton:hover {
+                background:#EDF6FF;
+            }
+            """
+        )
 
     def refresh(self, _state=None) -> None:
-        if self.process is None:
-            self.launch()
+        pass
 
     def open_url(self, url: str) -> None:
         raw = str(url or "").strip()
 
-        # Mesma resolução usada por Abrir matéria / Copiar link.
+        if not raw:
+            self.url.clear()
+            return
+
+        self.status.setText("Resolvendo link direto do veículo…")
+        QApplication.processEvents()
+
         direct = resolve_article_url(raw)
-        self._pending_url = str(direct or raw).strip()
+        direct = str(direct or raw).strip()
 
-        self.restart()
+        self.url.setText(direct)
+        self.url.setCursorPosition(len(direct))
+        self.url.setFocus()
 
-    def launch(self) -> None:
-        if self.process is not None and self.process.poll() is None:
-            if self._hwnd:
-                self._resize_embedded()
+        self.status.setText(
+            "Link direto do veículo recebido. Clique em “Extrair matéria”."
+        )
+
+    def extract(self) -> None:
+        if self.process is not None:
+            return
+
+        raw = self.url.text().strip()
+
+        if not raw:
+            self.status.setText("Informe o link da matéria.")
+            self.url.setFocus()
+            return
+
+        direct = resolve_article_url(raw)
+        direct = str(direct or raw).strip()
+        self.url.setText(direct)
+
+        if not direct.lower().startswith(("http://", "https://")):
+            self.status.setText("O link precisa começar com http:// ou https://.")
             return
 
         if not self.exe.is_file():
-            self._show_message(
-                "Extrator de Notícias não encontrado no portable:\n"
+            self.status.setText(
+                "Motor do Extrator não encontrado no portable: "
                 f"{self.exe}"
             )
             return
 
-        env = os.environ.copy()
-        env["MONITOR_EMBEDDED"] = "1"
+        temp_dir = self.app_root / "temp"
+        temp_dir.mkdir(parents=True, exist_ok=True)
 
-        if self._pending_url:
-            env["MONITOR_NEWS_URL"] = self._pending_url
-        else:
-            env.pop("MONITOR_NEWS_URL", None)
+        self.result_file = (
+            temp_dir
+            / f"news-extractor-{uuid.uuid4().hex}.json"
+        )
 
-        try:
-            creationflags = 0
-            if sys.platform == "win32":
-                creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+        env = QProcessEnvironment.systemEnvironment()
+        env.insert("MONITOR_HEADLESS", "1")
+        env.insert("MONITOR_NEWS_URL", direct)
+        env.insert(
+            "MONITOR_RESULT_FILE",
+            str(self.result_file),
+        )
 
-            self.process = subprocess.Popen(
-                [str(self.exe)],
-                env=env,
-                creationflags=creationflags,
-            )
+        proc = QProcess(self)
+        proc.setProcessEnvironment(env)
+        proc.setProgram(str(self.exe))
+        proc.setWorkingDirectory(str(self.exe.parent))
+        proc.finished.connect(self._finished)
+        proc.errorOccurred.connect(self._process_error)
 
-            self._hwnd = None
-            self._poll_count = 0
-            self._show_message("Carregando Extrator de Notícias...")
-            self._poll.start()
+        self.process = proc
 
-        except Exception as exc:
-            self._show_message(f"Falha ao iniciar Extrator de Notícias:\n{exc}")
+        self.extract_button.setEnabled(False)
+        self.extract_button.setText("Extraindo…")
+        self.status.setText(
+            "Extraindo matéria dentro do Monitor. Aguarde…"
+        )
 
-    def restart(self) -> None:
-        self._stop_process()
-        QTimer.singleShot(180, self.launch)
+        proc.start()
 
-    def _show_message(self, text: str) -> None:
-        self.message.setText(text)
-        self.message.setGeometry(self.host.rect())
-        self.message.raise_()
-        self.message.show()
+    def _process_error(self, _error) -> None:
+        if self.process is None:
+            return
 
-    def _stop_process(self) -> None:
-        self._poll.stop()
-        self._fit_timer.stop()
-        self._hwnd = None
+        self.status.setText(
+            "Não foi possível iniciar o motor de extração."
+        )
 
-        if self.process is not None:
+    def _finished(self, _code=0, _status=None) -> None:
+        proc = self.process
+        self.process = None
+
+        self.extract_button.setEnabled(True)
+        self.extract_button.setText("⇩  Extrair matéria")
+
+        result = None
+
+        if (
+            self.result_file is not None
+            and self.result_file.is_file()
+        ):
             try:
-                if self.process.poll() is None:
-                    self.process.terminate()
-                    try:
-                        self.process.wait(timeout=3)
-                    except Exception:
-                        self.process.kill()
+                result = json.loads(
+                    self.result_file.read_text(
+                        encoding="utf-8"
+                    )
+                )
+            except Exception as exc:
+                self.status.setText(
+                    f"Resultado da extração inválido: {exc}"
+                )
+
+            try:
+                self.result_file.unlink(missing_ok=True)
             except Exception:
                 pass
 
-        self.process = None
+        self.result_file = None
 
-    def _find_window(self):
-        if sys.platform != "win32":
-            return None
+        if not isinstance(result, dict):
+            if proc is not None:
+                err = bytes(proc.readAllStandardError()).decode(
+                    "utf-8",
+                    "ignore",
+                ).strip()
+            else:
+                err = ""
 
-        user32 = ctypes.windll.user32
-        matches = []
-        target_pid = self.process.pid if self.process else 0
+            self.status.setText(
+                err
+                or "O motor terminou sem retornar o resultado."
+            )
+            return
 
-        EnumWindowsProc = ctypes.WINFUNCTYPE(
-            ctypes.c_bool,
-            ctypes.c_void_p,
-            ctypes.c_void_p,
+        if not result.get("ok"):
+            self.status.setText(
+                str(
+                    result.get("erro")
+                    or "Não foi possível extrair a matéria."
+                )
+            )
+            return
+
+        self.meta_labels["title"].setText(
+            str(result.get("titulo") or "—")
+        )
+        self.meta_labels["source"].setText(
+            str(result.get("veiculo") or "—")
+        )
+        self.meta_labels["date"].setText(
+            str(result.get("data") or "—")
+        )
+        self.meta_labels["author"].setText(
+            str(result.get("autor") or "—")
+        )
+        self.meta_labels["subtitle"].setText(
+            str(result.get("subtitulo") or "—")
         )
 
-        def callback(hwnd, _lparam):
-            if not user32.IsWindow(hwnd):
-                return True
+        formatted = str(result.get("formatado") or "")
+        self.text.setPlainText(formatted)
 
-            pid = ctypes.c_ulong()
-            user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+        chars = int(
+            result.get("corpoCaracteres")
+            or len(formatted)
+        )
 
-            length = user32.GetWindowTextLengthW(hwnd)
-            title = ""
+        self.counter.setText(
+            f"{chars:,} caracteres".replace(",", ".")
+        )
 
-            if length > 0:
-                buf = ctypes.create_unicode_buffer(length + 1)
-                user32.GetWindowTextW(hwnd, buf, length + 1)
-                title = buf.value.lower()
+        self.status.setText(
+            "✓ Matéria extraída com sucesso. "
+            "O conteúdo pode ser revisado e editado nesta tela."
+        )
 
-            by_pid = bool(target_pid and pid.value == target_pid)
-            by_title = (
-                "extrator de matérias" in title
-                or "extrator de materias" in title
-                or "extrator de notícias" in title
-                or "extrator de noticias" in title
-            )
-
-            if by_pid or by_title:
-                matches.append(int(hwnd))
-                return False
-
-            return True
-
-        user32.EnumWindows(EnumWindowsProc(callback), 0)
-        return matches[0] if matches else None
-
-    def _try_embed(self) -> None:
-        self._poll_count += 1
-        hwnd = self._find_window()
-
-        if not hwnd:
-            if self._poll_count >= 400:
-                self._poll.stop()
-                self._show_message(
-                    "O Extrator iniciou, mas não foi possível incorporá-lo ao Monitor."
-                )
+    def clear(self) -> None:
+        if self.process is not None:
             return
 
-        try:
-            user32 = ctypes.windll.user32
-            host_hwnd = int(self.host.winId())
+        self.url.clear()
+        self.text.clear()
+        self.counter.setText("Nenhuma matéria extraída")
 
-            user32.ShowWindow(hwnd, self.SW_HIDE)
-            user32.SetParent(hwnd, host_hwnd)
+        for label in self.meta_labels.values():
+            label.setText("—")
 
-            style = user32.GetWindowLongW(hwnd, self.GWL_STYLE)
-            style &= ~self.WS_CAPTION
-            style &= ~self.WS_THICKFRAME
-            style &= ~self.WS_POPUP
-            style |= self.WS_CHILD
-            user32.SetWindowLongW(hwnd, self.GWL_STYLE, style)
+        self._set_idle()
 
-            exstyle = user32.GetWindowLongW(hwnd, self.GWL_EXSTYLE)
-            exstyle &= ~self.WS_EX_APPWINDOW
-            exstyle |= self.WS_EX_TOOLWINDOW
-            user32.SetWindowLongW(hwnd, self.GWL_EXSTYLE, exstyle)
+    def copy_text(self) -> None:
+        text = self.text.toPlainText()
 
-            self._hwnd = hwnd
-            self._resize_embedded()
-            user32.ShowWindow(hwnd, self.SW_SHOW)
-
-            self._poll.stop()
-            self.message.hide()
-            self._fit_timer.start()
-
-        except Exception as exc:
-            self._poll.stop()
-            self._show_message(
-                "O Extrator abriu, mas não foi possível incorporá-lo ao Monitor:\n"
-                f"{exc}"
+        if text:
+            QApplication.clipboard().setText(text)
+            self.status.setText(
+                "Texto da matéria copiado para a área de transferência."
             )
 
-    def _resize_embedded(self) -> None:
-        if not self._hwnd or sys.platform != "win32":
-            return
+    def open_folder(self) -> None:
+        folder = Path.home() / "Downloads" / "ExtratorMaterias"
+        folder.mkdir(parents=True, exist_ok=True)
 
-        try:
-            user32 = ctypes.windll.user32
-            rect = ctypes.wintypes.RECT()
-            host_hwnd = int(self.host.winId())
+        QDesktopServices.openUrl(
+            QUrl.fromLocalFile(str(folder))
+        )
 
-            if user32.GetClientRect(host_hwnd, ctypes.byref(rect)):
-                width = max(1, int(rect.right - rect.left))
-                height = max(1, int(rect.bottom - rect.top))
-            else:
-                width = max(1, self.host.width())
-                height = max(1, self.host.height())
-
-            user32.SetWindowPos(
-                self._hwnd,
-                0,
-                0,
-                0,
-                width,
-                height,
-                self.SWP_NOZORDER
-                | self.SWP_NOACTIVATE
-                | self.SWP_FRAMECHANGED
-                | self.SWP_SHOWWINDOW,
-            )
-        except Exception:
-            pass
-
-    def resizeEvent(self, event) -> None:
-        super().resizeEvent(event)
-        self.message.setGeometry(self.host.rect())
-        if self._hwnd:
-            QTimer.singleShot(0, self._resize_embedded)
-
-    def showEvent(self, event) -> None:
-        super().showEvent(event)
-        if self.process is None:
-            QTimer.singleShot(0, self.launch)
-        elif self._hwnd:
-            QTimer.singleShot(0, self._resize_embedded)
+    def _set_idle(self) -> None:
+        self.status.setText(
+            "Pronto para receber um link da aba Notícias."
+        )
 
     def shutdown(self) -> bool:
-        self._stop_process()
+        if self.process is not None:
+            try:
+                self.process.kill()
+                self.process.waitForFinished(1500)
+            except Exception:
+                pass
+            self.process = None
+
         return True
