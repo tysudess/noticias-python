@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QSize, Qt
 from PySide6.QtWidgets import (
-    QCheckBox, QComboBox, QFrame, QHBoxLayout, QLabel, QLineEdit, QListWidget,
-    QListWidgetItem, QPushButton, QTabWidget, QVBoxLayout, QWidget,
+    QButtonGroup, QCheckBox, QComboBox, QFrame, QHBoxLayout, QLabel, QLineEdit, QListWidget,
+    QListWidgetItem, QPushButton, QVBoxLayout, QWidget,
 )
 
 from monitor_noticias.ui.catalog import REGIONS, STATES
@@ -29,16 +29,20 @@ class SourcesPage(BasePage):
         first = QHBoxLayout()
         first.setSpacing(8)
 
-        self.tabs = QTabWidget()
-        self.tabs.setObjectName("sourceTabs")
-        self.news_tab = QWidget()
-        self.video_tab = QWidget()
-        self.special_tab = QWidget()
-        self.tabs.addTab(self.news_tab, "Notícias")
-        self.tabs.addTab(self.video_tab, "Vídeos")
-        self.tabs.addTab(self.special_tab, "Mídia especializada")
-        self.tabs.tabBar().setExpanding(False)
-        first.addWidget(self.tabs, 0)
+        self.tab_group = QButtonGroup(self)
+        self.tab_group.setExclusive(True)
+        self.tab_buttons: list[QPushButton] = []
+
+        for index, text in enumerate(("Notícias", "Vídeos", "Mídia especializada")):
+            button = QPushButton(text)
+            button.setObjectName("sourceTabButton")
+            button.setCheckable(True)
+            button.setProperty("tabIndex", index)
+            if index == 0:
+                button.setChecked(True)
+            self.tab_group.addButton(button, index)
+            self.tab_buttons.append(button)
+            first.addWidget(button)
 
         first.addStretch()
 
@@ -161,7 +165,7 @@ class SourcesPage(BasePage):
         self.query.textChanged.connect(lambda _: self.refresh(controller.state))
         self.region.currentTextChanged.connect(self._region_changed)
         self.state.currentTextChanged.connect(lambda _: self.refresh(controller.state))
-        self.tabs.currentChanged.connect(self._tab_changed)
+        self.tab_group.idClicked.connect(self._tab_changed)
         self.all_news.toggled.connect(self._all_news_changed)
 
         self.select_visible.clicked.connect(lambda: self._set_visible(True))
@@ -184,18 +188,16 @@ class SourcesPage(BasePage):
             border:1px solid #D5E5F5;
             border-radius:12px;
         }
-        QTabWidget#sourceTabs::pane { border:0; background:transparent; }
-        QTabWidget#sourceTabs QTabBar::tab {
+        QPushButton#sourceTabButton {
             background:#F8FBFF;
             color:#183E72;
             border:1px solid #D2E2F4;
             border-radius:8px;
             padding:10px 18px;
-            margin-right:4px;
-            min-width:105px;
+            min-width:115px;
             font-weight:800;
         }
-        QTabWidget#sourceTabs QTabBar::tab:selected {
+        QPushButton#sourceTabButton:checked {
             background:#0A7DF8;
             color:white;
             border-color:#0A7DF8;
@@ -284,6 +286,10 @@ class SourcesPage(BasePage):
         QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height:0; }
         """
 
+    def _tab_index(self) -> int:
+        checked = self.tab_group.checkedId()
+        return 0 if checked < 0 else checked
+
     def _tab_changed(self, index: int) -> None:
         for i, listw in enumerate((self.news_list, self.video_list, self.special_list)):
             listw.setVisible(i == index)
@@ -314,7 +320,7 @@ class SourcesPage(BasePage):
         self.refresh(self.controller.state)
 
     def _selected_sources(self):
-        tab = self.tabs.currentIndex()
+        tab = self._tab_index()
         region = self.region.currentText()
         state = self.state.currentText()
         query = self.query.text().strip().lower()
@@ -352,7 +358,7 @@ class SourcesPage(BasePage):
     def _make_row(self, listw: QListWidget, source, checked: bool, enabled: bool) -> None:
         item = QListWidgetItem()
         item.setData(Qt.ItemDataRole.UserRole, source.id)
-        item.setSizeHint(item.sizeHint())
+        item.setSizeHint(QSize(0, 58))
 
         row = QFrame()
         row.setStyleSheet(
@@ -380,12 +386,12 @@ class SourcesPage(BasePage):
         texts = QVBoxLayout()
         texts.setSpacing(1)
         title = QLabel(source.name)
-        title.setStyleSheet("color:#08245F;font-size:11px;font-weight:900;")
+        title.setStyleSheet("color:#08245F;font-size:12px;font-weight:900;")
         meta = QLabel(
             f"{source.group}  •  {getattr(source,'region','Nacional')}  •  "
             f"{getattr(source,'state','') or 'BR'}"
         )
-        meta.setStyleSheet("color:#6079A5;font-size:9px;")
+        meta.setStyleSheet("color:#6079A5;font-size:10px;")
         texts.addWidget(title)
         texts.addWidget(meta)
         lay.addLayout(texts, 1)
@@ -405,7 +411,7 @@ class SourcesPage(BasePage):
         def changed(value: bool, source_id=source.id):
             if self._guard:
                 return
-            if self.tabs.currentIndex() == 1:
+            if self._tab_index() == 1:
                 self.controller.set_video_source(source_id, value)
             else:
                 self.controller.set_news_source(source_id, value)
@@ -425,7 +431,7 @@ class SourcesPage(BasePage):
         self.all_news.setChecked(self.controller.news_all_sources)
         self.all_news.blockSignals(False)
 
-        tab = self.tabs.currentIndex()
+        tab = self._tab_index()
         visible = self._selected_sources()
 
         if tab == 0:
@@ -489,7 +495,7 @@ class SourcesPage(BasePage):
         self._guard = False
 
     def _set_visible(self, checked: bool) -> None:
-        tab = self.tabs.currentIndex()
+        tab = self._tab_index()
         for source in self._selected_sources():
             if tab == 1:
                 self.controller.set_video_source(source.id, checked)
@@ -498,7 +504,7 @@ class SourcesPage(BasePage):
         self.refresh(self.controller.state)
 
     def _set_all(self, checked: bool) -> None:
-        tab = self.tabs.currentIndex()
+        tab = self._tab_index()
         base = (
             self.controller.video_sources
             if tab == 1

@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 from datetime import datetime
-from urllib.parse import quote
+from urllib.parse import quote, urlparse
+import html
+import re
+import requests
 
 from PySide6.QtCore import (
     QAbstractListModel,
@@ -50,11 +53,92 @@ def _duration(ms: int) -> str:
 
 def _open_url(url: str) -> None:
     if url:
-        QDesktopServices.openUrl(QUrl(url))
+        QDesktopServices.openUrl(QUrl(_resolve_vehicle_url(url)))
+
+
+_RESOLVED_URL_CACHE: dict[str, str] = {}
+
+
+def _resolve_vehicle_url(url: str) -> str:
+    """Resolve link do Google News para a URL direta do veículo.
+
+    Usa redirects HTTP e, se o Google mantiver a página intermediária,
+    procura canonical/og:url/links externos no HTML.
+    """
+    if not url:
+        return url
+
+    cached = _RESOLVED_URL_CACHE.get(url)
+    if cached:
+        return cached
+
+    host = urlparse(url).netloc.lower()
+    if "news.google.com" not in host:
+        _RESOLVED_URL_CACHE[url] = url
+        return url
+
+    headers = {
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 Chrome/131 Safari/537.36"
+        ),
+        "Accept-Language": "pt-BR,pt;q=0.9,en;q=0.7",
+    }
+
+    try:
+        response = requests.get(
+            url,
+            headers=headers,
+            timeout=(5, 10),
+            allow_redirects=True,
+        )
+
+        final_url = response.url
+        final_host = urlparse(final_url).netloc.lower()
+
+        if final_host and "google." not in final_host:
+            _RESOLVED_URL_CACHE[url] = final_url
+            return final_url
+
+        body = response.text or ""
+
+        candidates: list[str] = []
+
+        for pattern in (
+            r'<link[^>]+rel=["\']canonical["\'][^>]+href=["\']([^"\']+)',
+            r'<meta[^>]+property=["\']og:url["\'][^>]+content=["\']([^"\']+)',
+            r'<meta[^>]+content=["\']([^"\']+)["\'][^>]+property=["\']og:url["\']',
+            r'href=["\'](https?://[^"\']+)["\']',
+        ):
+            candidates.extend(re.findall(pattern, body, flags=re.I))
+
+        for candidate in candidates:
+            candidate = html.unescape(candidate).replace("&amp;", "&")
+            candidate_host = urlparse(candidate).netloc.lower()
+
+            if not candidate_host:
+                continue
+
+            blocked = (
+                "google." in candidate_host
+                or "gstatic." in candidate_host
+                or "googleusercontent." in candidate_host
+            )
+
+            if not blocked:
+                _RESOLVED_URL_CACHE[url] = candidate
+                return candidate
+
+    except Exception:
+        pass
+
+    # Fallback: mantém o link original se não for possível resolver.
+    _RESOLVED_URL_CACHE[url] = url
+    return url
 
 
 def _copy(text: str) -> None:
-    QApplication.clipboard().setText(text)
+    QApplication.clipboard().setText(_resolve_vehicle_url(text))
 
 
 def _whatsapp(title: str, url: str) -> None:

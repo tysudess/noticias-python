@@ -11,6 +11,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QProgressBar,
     QPushButton,
+    QScrollArea,
     QVBoxLayout,
     QWidget,
 )
@@ -34,9 +35,24 @@ class HomePage(QWidget):
         super().__init__()
         self.controller = controller
 
-        self.root = QVBoxLayout(self)
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(0)
+
+        self.scroll = QScrollArea()
+        self.scroll.setWidgetResizable(True)
+        self.scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.scroll.setObjectName("homeScroll")
+
+        content = QWidget()
+        content.setObjectName("homeScrollContent")
+
+        self.root = QVBoxLayout(content)
         self.root.setContentsMargins(12, 8, 12, 10)
         self.root.setSpacing(11)
+
+        self.scroll.setWidget(content)
+        outer.addWidget(self.scroll)
 
         self.metric_values: dict[str, QLabel] = {}
         self.metric_subtitles: dict[str, QLabel] = {}
@@ -51,6 +67,28 @@ class HomePage(QWidget):
 
     def _stylesheet(self) -> str:
         return """
+        QScrollArea#homeScroll {
+            border:0;
+            background:transparent;
+        }
+        QScrollArea#homeScroll QWidget#qt_scrollarea_viewport {
+            background:transparent;
+        }
+        QScrollBar:vertical {
+            background:#EDF4FB;
+            width:10px;
+            border-radius:5px;
+        }
+        QScrollBar::handle:vertical {
+            background:#9FC3EA;
+            min-height:42px;
+            border-radius:5px;
+        }
+        QScrollBar::add-line:vertical,
+        QScrollBar::sub-line:vertical {
+            height:0;
+        }
+
         QFrame#metricCard {
             background:#FFFFFF;
             border:1px solid #D3E4F5;
