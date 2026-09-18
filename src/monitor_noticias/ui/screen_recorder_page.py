@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import ctypes
+import locale
 import os
 import re
 import shutil
@@ -13,6 +15,7 @@ from PySide6.QtCore import QPoint, QRect, Qt, QTimer, Signal, QUrl
 from PySide6.QtGui import (
     QColor,
     QDesktopServices,
+    QFont,
     QKeyEvent,
     QMouseEvent,
     QPainter,
@@ -168,6 +171,131 @@ class RegionSelectionOverlay(QWidget):
         )
 
 
+class CaptureAreaOverlay(QWidget):
+    """Borda vermelha persistente da área que será capturada.
+
+    No Windows tentamos excluir esta janela da própria gravação usando
+    WDA_EXCLUDEFROMCAPTURE. Assim a borda fica visível para o operador,
+    mas não deve aparecer no vídeo final em versões compatíveis do Windows.
+    """
+
+    BORDER = 4
+
+    def __init__(self) -> None:
+        super().__init__(None)
+
+        self.setWindowFlags(
+            Qt.WindowType.FramelessWindowHint
+            | Qt.WindowType.Tool
+            | Qt.WindowType.WindowStaysOnTopHint
+            | Qt.WindowType.WindowTransparentForInput
+        )
+        self.setAttribute(
+            Qt.WidgetAttribute.WA_TranslucentBackground,
+            True,
+        )
+        self.setAttribute(
+            Qt.WidgetAttribute.WA_TransparentForMouseEvents,
+            True,
+        )
+        self.setFocusPolicy(
+            Qt.FocusPolicy.NoFocus
+        )
+
+    def showEvent(self, event) -> None:
+        super().showEvent(event)
+        self._exclude_from_capture()
+        self.raise_()
+
+    def _exclude_from_capture(self) -> None:
+        if not sys.platform.startswith("win"):
+            return
+
+        try:
+            hwnd = int(self.winId())
+            # WDA_EXCLUDEFROMCAPTURE = 0x00000011
+            ctypes.windll.user32.SetWindowDisplayAffinity(
+                hwnd,
+                0x00000011,
+            )
+        except Exception:
+            # Em Windows antigos, a chamada pode não existir ou falhar.
+            pass
+
+    def set_capture_rect(
+        self,
+        rect: QRect | None,
+    ) -> None:
+        if rect is None or rect.isEmpty():
+            self.hide()
+            return
+
+        self.setGeometry(
+            rect.adjusted(
+                -self.BORDER,
+                -self.BORDER,
+                self.BORDER,
+                self.BORDER,
+            )
+        )
+
+        if not self.isVisible():
+            self.show()
+
+        self.raise_()
+        self.update()
+
+    def paintEvent(self, _event) -> None:
+        painter = QPainter(self)
+        painter.setRenderHint(
+            QPainter.RenderHint.Antialiasing,
+            True,
+        )
+
+        pen = QPen(
+            QColor("#FF274B"),
+            self.BORDER,
+        )
+        painter.setPen(pen)
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+
+        frame = self.rect().adjusted(
+            self.BORDER // 2,
+            self.BORDER // 2,
+            -(self.BORDER // 2) - 1,
+            -(self.BORDER // 2) - 1,
+        )
+        painter.drawRect(frame)
+
+        badge = QRect(
+            10,
+            10,
+            116,
+            30,
+        )
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(
+            QColor("#E71D43")
+        )
+        painter.drawRoundedRect(
+            badge,
+            7,
+            7,
+        )
+
+        painter.setPen(
+            QColor("#FFFFFF")
+        )
+        painter.setFont(
+            QFont("Segoe UI", 10, QFont.Weight.Bold)
+        )
+        painter.drawText(
+            badge,
+            Qt.AlignmentFlag.AlignCenter,
+            "● ÁREA REC",
+        )
+
+
 class ScreenRecorderPage(QWidget):
     state_changed = Signal(str)
     recording_finished = Signal(str)
@@ -178,6 +306,7 @@ class ScreenRecorderPage(QWidget):
     PAUSED = "paused"
     FINALIZING = "finalizing"
     ERROR = "error"
+    OFF = "off"
 
     def __init__(
         self,
@@ -220,8 +349,10 @@ class ScreenRecorderPage(QWidget):
         self._elapsed_before_segment = 0.0
         self._region: QRect | None = None
         self._overlay: RegionSelectionOverlay | None = None
+        self._capture_overlay = CaptureAreaOverlay()
         self._hidden_by_recorder = False
         self._audio_loaded = False
+        self._module_enabled = True
         self._closing = False
 
         self._preview_timer = QTimer(self)
@@ -241,6 +372,8 @@ class ScreenRecorderPage(QWidget):
         self._refresh_screens()
         self._refresh_recordings()
         self._apply_state(self.IDLE)
+        self._update_capture_labels()
+        self._update_capture_overlay()
 
     # ------------------------------------------------------------------
     # UI
@@ -293,6 +426,16 @@ class ScreenRecorderPage(QWidget):
         hero_text.addWidget(title)
         hero_text.addWidget(subtitle)
         hero_l.addLayout(hero_text, 1)
+
+        self.power_button = QPushButton("⏻  LIGADO")
+        self.power_button.setObjectName("recPower")
+        self.power_button.setCheckable(True)
+        self.power_button.setChecked(True)
+        self.power_button.setMinimumWidth(126)
+        self.power_button.toggled.connect(
+            self._toggle_module
+        )
+        hero_l.addWidget(self.power_button)
 
         self.state_chip = QLabel("PRONTO")
         self.state_chip.setObjectName("recStateChip")
@@ -423,6 +566,18 @@ class ScreenRecorderPage(QWidget):
         )
         mode_row.addWidget(self.select_region)
 
+        self.quick_rec = QPushButton(
+            "●  REC"
+        )
+        self.quick_rec.setObjectName(
+            "recQuickRec"
+        )
+        self.quick_rec.setFixedWidth(92)
+        self.quick_rec.clicked.connect(
+            self._quick_record
+        )
+        mode_row.addWidget(self.quick_rec)
+
         mode_wrap = QWidget()
         mode_wrap.setLayout(mode_row)
         config_l.addWidget(
@@ -489,6 +644,21 @@ class ScreenRecorderPage(QWidget):
                 "Áudio",
                 audio_wrap,
             )
+        )
+
+        self.audio_status = QLabel(
+            "Procurando dispositivos de áudio do Windows…"
+        )
+        self.audio_status.setObjectName(
+            "recAudioStatus"
+        )
+        self.audio_status.setWordWrap(True)
+        config_l.addWidget(
+            self.audio_status
+        )
+
+        self.audio_combo.currentIndexChanged.connect(
+            self._audio_selection_changed
         )
 
         self.countdown_combo = QComboBox()
@@ -761,6 +931,22 @@ class ScreenRecorderPage(QWidget):
             font-weight:900;
         }
 
+        QPushButton#recPower {
+            background:#EAF9F2;
+            color:#078B5F;
+            border:1px solid #BFE8D5;
+            border-radius:9px;
+            padding:8px 14px;
+            font-size:10px;
+            font-weight:900;
+        }
+
+        QPushButton#recPower:!checked {
+            background:#F1F4F8;
+            color:#75859A;
+            border-color:#D9E1EB;
+        }
+
         QLabel#recStatIcon {
             background:#EDF6FF;
             color:#087AF7;
@@ -847,6 +1033,29 @@ class ScreenRecorderPage(QWidget):
             color:#244B7B;
             font-size:11px;
             font-weight:700;
+        }
+
+        QPushButton#recQuickRec {
+            background:#E71D43;
+            color:#FFFFFF;
+            border:0;
+            border-radius:8px;
+            padding:8px 10px;
+            font-size:10px;
+            font-weight:900;
+        }
+
+        QPushButton#recQuickRec:hover {
+            background:#C91436;
+        }
+
+        QLabel#recAudioStatus {
+            background:#F8FBFF;
+            color:#5E7599;
+            border:1px solid #DCE8F5;
+            border-radius:7px;
+            padding:6px 8px;
+            font-size:9px;
         }
 
         QPushButton#recStart {
@@ -950,17 +1159,26 @@ class ScreenRecorderPage(QWidget):
             self._preview_timer.start()
 
         self._update_preview()
+        self._update_capture_overlay()
         self._refresh_recordings()
 
     def showEvent(self, event) -> None:
         super().showEvent(event)
 
-        if not self._preview_timer.isActive():
+        if (
+            self._module_enabled
+            and not self._preview_timer.isActive()
+        ):
             self._preview_timer.start()
+
+        self._update_capture_overlay()
 
     def hideEvent(self, event) -> None:
         super().hideEvent(event)
         self._preview_timer.stop()
+        # A borda vermelha continua visível enquanto o módulo estiver ligado,
+        # mesmo se o usuário navegar para outra aba.
+        self._update_capture_overlay()
 
     def refresh(self, _state=None) -> None:
         # Compatível com o restante das páginas do Central.
@@ -1008,6 +1226,7 @@ class ScreenRecorderPage(QWidget):
     def _screen_changed(self, _index: int) -> None:
         self._region = None
         self._update_capture_labels()
+        self._update_capture_overlay()
         self._update_preview()
 
     def _mode_changed(self, text: str) -> None:
@@ -1015,6 +1234,7 @@ class ScreenRecorderPage(QWidget):
             self._region = None
 
         self._update_capture_labels()
+        self._update_capture_overlay()
         self._update_preview()
 
     def _update_capture_labels(self) -> None:
@@ -1027,11 +1247,66 @@ class ScreenRecorderPage(QWidget):
                 f"{self._region.width()}×"
                 f"{self._region.height()}"
             )
-            self.region_badge.setText(text)
-            self.source_value.setText("Área personalizada")
+            self.region_badge.setText(
+                f"● REC  {text}"
+            )
+            self.source_value.setText(
+                "Área personalizada"
+            )
         else:
-            self.region_badge.setText("Tela inteira")
-            self.source_value.setText("Tela inteira")
+            self.region_badge.setText(
+                "● REC  Tela inteira"
+            )
+            self.source_value.setText(
+                "Tela inteira"
+            )
+
+        self.region_badge.setStyleSheet(
+            "background:#FFE7EC;"
+            "color:#D8173C;"
+            "border:1px solid #F3AABC;"
+            "border-radius:7px;"
+            "padding:5px 9px;"
+            "font-size:9px;"
+            "font-weight:900;"
+        )
+
+    def _current_capture_rect(self) -> QRect | None:
+        if not self._module_enabled:
+            return None
+
+        if (
+            self.mode_combo.currentText()
+            == "Área personalizada"
+            and self._region is not None
+        ):
+            return QRect(
+                self._region
+            )
+
+        screen = self._selected_screen()
+
+        if screen is None:
+            return None
+
+        return QRect(
+            screen.geometry()
+        )
+
+    def _update_capture_overlay(self) -> None:
+        if not self._module_enabled:
+            self._capture_overlay.hide()
+            return
+
+        rect = self._current_capture_rect()
+
+        if rect is None:
+            self._capture_overlay.hide()
+            return
+
+        self._capture_overlay.set_capture_rect(
+            rect
+        )
 
     def _update_preview(self) -> None:
         if not self.isVisible():
@@ -1111,21 +1386,47 @@ class ScreenRecorderPage(QWidget):
         self._region = rect.normalized()
         self._overlay = None
         self._update_capture_labels()
+        self._update_capture_overlay()
         self._update_preview()
 
     def _region_cancelled(self) -> None:
         self._overlay = None
+        self._update_capture_overlay()
 
     # ------------------------------------------------------------------
     # AUDIO
     # ------------------------------------------------------------------
 
     def _load_audio_devices(self) -> None:
+        """Lê dispositivos de áudio do DirectShow de forma tolerante.
+
+        A V17.1 deixava "Sem áudio" como padrão e dependia de uma regex
+        específica. Agora:
+        - usamos a codificação nativa do Windows;
+        - reconhecemos a seção "DirectShow audio devices";
+        - aceitamos também o formato "(audio)";
+        - selecionamos automaticamente Stereo Mix/Mixagem estéreo quando existe;
+        - se não houver loopback, selecionamos o primeiro microfone disponível.
+        """
+        previous = self.audio_combo.currentData()
+
+        self.audio_combo.blockSignals(True)
         self.audio_combo.clear()
-        self.audio_combo.addItem("Sem áudio")
+        self.audio_combo.addItem(
+            "Sem áudio",
+            None,
+        )
+        self.audio_combo.blockSignals(False)
+
         self._audio_loaded = True
 
         if not self.ffmpeg.is_file():
+            self.audio_status.setText(
+                "FFmpeg não encontrado; não foi possível detectar áudio."
+            )
+            self.audio_value.setText(
+                "Sem áudio"
+            )
             return
 
         try:
@@ -1143,42 +1444,280 @@ class ScreenRecorderPage(QWidget):
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 text=True,
-                encoding="utf-8",
-                errors="ignore",
-                timeout=12,
+                encoding=(
+                    "mbcs"
+                    if sys.platform.startswith("win")
+                    else locale.getpreferredencoding(False)
+                ),
+                errors="replace",
+                timeout=15,
                 creationflags=CREATE_NO_WINDOW,
             )
-            text = (
+            output = (
                 result.stdout
                 + "\n"
                 + result.stderr
             )
-        except Exception:
+        except Exception as exc:
+            self.audio_status.setText(
+                f"Falha ao consultar áudio do Windows: {exc}"
+            )
+            self._write_audio_diagnostic(
+                f"ERRO: {exc}"
+            )
             return
 
-        devices: list[str] = []
+        self._write_audio_diagnostic(
+            output
+        )
 
-        for line in text.splitlines():
+        devices: list[str] = []
+        in_audio_section = False
+
+        for raw_line in output.splitlines():
+            line = raw_line.strip()
+            lower = line.casefold()
+
+            if (
+                "directshow audio devices" in lower
+                or "audio devices" in lower
+            ):
+                in_audio_section = True
+                continue
+
+            if (
+                "directshow video devices" in lower
+                or "video devices" in lower
+            ):
+                in_audio_section = False
+                continue
+
+            if "alternative name" in lower:
+                continue
+
             match = re.search(
                 r'"([^"]+)"\s+\(audio\)',
                 line,
                 flags=re.IGNORECASE,
             )
-            if match:
-                name = match.group(1).strip()
-                if name and name not in devices:
-                    devices.append(name)
+
+            if match is None and in_audio_section:
+                match = re.search(
+                    r'"([^"]+)"',
+                    line,
+                )
+
+            if match is None:
+                continue
+
+            name = match.group(1).strip()
+
+            if (
+                name
+                and name not in devices
+                and not name.startswith("@device_")
+            ):
+                devices.append(name)
+
+        preferred_index = -1
+        first_device_index = -1
 
         for name in devices:
+            folded = name.casefold()
+            system_audio = any(
+                token in folded
+                for token in (
+                    "stereo mix",
+                    "mixagem estéreo",
+                    "mixagem estereo",
+                    "what u hear",
+                    "wave out",
+                    "loopback",
+                )
+            )
+
             label = name
 
-            if "stereo mix" in name.casefold():
-                label += "  •  áudio do sistema"
+            if system_audio:
+                label += "  •  ÁUDIO DO SISTEMA"
 
             self.audio_combo.addItem(
                 label,
                 name,
             )
+
+            combo_index = (
+                self.audio_combo.count() - 1
+            )
+
+            if first_device_index < 0:
+                first_device_index = combo_index
+
+            if system_audio and preferred_index < 0:
+                preferred_index = combo_index
+
+        if previous:
+            old_index = self.audio_combo.findData(
+                previous
+            )
+        else:
+            old_index = -1
+
+        if old_index >= 1:
+            selected_index = old_index
+        elif preferred_index >= 1:
+            selected_index = preferred_index
+        elif first_device_index >= 1:
+            selected_index = first_device_index
+        else:
+            selected_index = 0
+
+        self.audio_combo.setCurrentIndex(
+            selected_index
+        )
+
+        if not devices:
+            self.audio_status.setText(
+                "Nenhum dispositivo DirectShow foi encontrado. "
+                "A gravação continuará sem áudio. "
+                "Veja logs/screen_recorder_audio_devices.log."
+            )
+        elif preferred_index >= 1:
+            self.audio_status.setText(
+                "Áudio do sistema detectado e selecionado automaticamente."
+            )
+        else:
+            self.audio_status.setText(
+                "Dispositivo de áudio detectado. "
+                "O Windows não expôs Stereo Mix/Mixagem estéreo; "
+                "o dispositivo selecionado pode ser somente o microfone."
+            )
+
+        self._audio_selection_changed(
+            self.audio_combo.currentIndex()
+        )
+
+    def _write_audio_diagnostic(
+        self,
+        content: str,
+    ) -> None:
+        try:
+            path = (
+                self.logs_dir
+                / "screen_recorder_audio_devices.log"
+            )
+            path.write_text(
+                content,
+                encoding="utf-8",
+                errors="ignore",
+            )
+        except Exception:
+            pass
+
+    def _audio_selection_changed(
+        self,
+        _index: int,
+    ) -> None:
+        if self.audio_combo.currentIndex() <= 0:
+            self.audio_value.setText(
+                "Sem áudio"
+            )
+            return
+
+        text = self.audio_combo.currentText()
+        self.audio_value.setText(
+            text.replace(
+                "  •  ÁUDIO DO SISTEMA",
+                "",
+            )
+        )
+
+
+    # ------------------------------------------------------------------
+    # POWER / QUICK REC
+    # ------------------------------------------------------------------
+
+    def _quick_record(self) -> None:
+        if not self._module_enabled:
+            return
+
+        if self._state in {
+            self.RECORDING,
+            self.PAUSED,
+            self.STARTING,
+        }:
+            self.stop_recording()
+            return
+
+        self.start_recording()
+
+    def _toggle_module(
+        self,
+        enabled: bool,
+    ) -> None:
+        if enabled == self._module_enabled:
+            return
+
+        if not enabled and self.is_active:
+            answer = QMessageBox.question(
+                self,
+                "Desligar Gravador de Tela",
+                "Existe uma gravação em andamento. "
+                "Deseja finalizar a gravação e desligar o módulo?",
+                QMessageBox.StandardButton.Yes
+                | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No,
+            )
+
+            if answer != QMessageBox.StandardButton.Yes:
+                self.power_button.blockSignals(True)
+                self.power_button.setChecked(True)
+                self.power_button.blockSignals(False)
+                return
+
+        self._module_enabled = enabled
+
+        if not enabled:
+            if self._state in {
+                self.RECORDING,
+                self.PAUSED,
+                self.STARTING,
+            }:
+                self.stop_recording()
+
+            self._preview_timer.stop()
+            self._capture_overlay.hide()
+            self.preview.clear()
+            self.preview.setText(
+                "Gravador de Tela desligado."
+            )
+            self.power_button.setText(
+                "⏻  DESLIGADO"
+            )
+            self._apply_state(
+                self.OFF,
+                "Gravador de Tela desligado.",
+            )
+            return
+
+        self.power_button.setText(
+            "⏻  LIGADO"
+        )
+        self._refresh_screens()
+
+        if not self._audio_loaded:
+            self._load_audio_devices()
+
+        if not self._preview_timer.isActive():
+            self._preview_timer.start()
+
+        self._apply_state(
+            self.IDLE,
+            "Gravador de Tela ligado e pronto.",
+        )
+        self._update_capture_labels()
+        self._update_capture_overlay()
+        self._update_preview()
 
     # ------------------------------------------------------------------
     # OUTPUT
@@ -1277,6 +1816,14 @@ class ScreenRecorderPage(QWidget):
     # ------------------------------------------------------------------
 
     def start_recording(self) -> None:
+        if not self._module_enabled:
+            QMessageBox.information(
+                self,
+                "Gravador desligado",
+                "Ligue o Gravador de Tela antes de iniciar uma gravação.",
+            )
+            return
+
         if self._state not in {
             self.IDLE,
             self.ERROR,
@@ -1947,10 +2494,13 @@ class ScreenRecorderPage(QWidget):
     ) -> None:
         self._state = state
 
-        is_idle = state in {
-            self.IDLE,
-            self.ERROR,
-        }
+        is_idle = (
+            self._module_enabled
+            and state in {
+                self.IDLE,
+                self.ERROR,
+            }
+        )
         recording = state == self.RECORDING
         paused = state == self.PAUSED
         starting = state == self.STARTING
@@ -1963,9 +2513,26 @@ class ScreenRecorderPage(QWidget):
             recording or paused
         )
         self.stop_button.setEnabled(
-            recording
-            or paused
-            or starting
+            self._module_enabled
+            and (
+                recording
+                or paused
+                or starting
+            )
+        )
+
+        self.quick_rec.setEnabled(
+            self._module_enabled
+            and not finalizing
+        )
+        self.quick_rec.setText(
+            "■  STOP"
+            if state in {
+                self.RECORDING,
+                self.PAUSED,
+                self.STARTING,
+            }
+            else "●  REC"
         )
 
         self.pause_button.setText(
@@ -1987,10 +2554,20 @@ class ScreenRecorderPage(QWidget):
             self.hide_central,
         ):
             widget.setEnabled(
-                is_idle
+                self._module_enabled
+                and is_idle
             )
 
-        if state == self.IDLE:
+        if state == self.OFF:
+            self.state_chip.setText("DESLIGADO")
+            self.state_chip.setStyleSheet(
+                "background:#F1F4F8;color:#75859A;"
+                "border:1px solid #D9E1EB;"
+                "border-radius:9px;padding:8px 14px;"
+                "font-weight:900;"
+            )
+
+        elif state == self.IDLE:
             self.state_chip.setText("PRONTO")
             self.state_chip.setStyleSheet(
                 "background:#EAF9F2;color:#078B5F;"
@@ -2083,6 +2660,7 @@ class ScreenRecorderPage(QWidget):
         finally:
             self._preview_timer.stop()
             self._status_timer.stop()
+            self._capture_overlay.hide()
             self._close_log()
 
         return True
