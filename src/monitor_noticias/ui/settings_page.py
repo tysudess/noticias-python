@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QSignalBlocker, Qt
 from PySide6.QtWidgets import (
     QCheckBox, QComboBox, QFrame, QHBoxLayout, QLabel, QLineEdit, QPushButton,
     QSpinBox, QVBoxLayout,
@@ -11,11 +11,16 @@ from monitor_noticias.ui.pages import BasePage, ProxyTestThread
 
 
 class SettingsPage(BasePage):
+    """Configurações que não perdem alterações durante o refresh periódico."""
+
     def __init__(self, controller: MainUiController) -> None:
         super().__init__(controller)
         self.root.setContentsMargins(0, 0, 0, 0)
         self.root.setSpacing(12)
+
         self._proxy_thread = None
+        self._loaded = False
+        self._dirty = False
 
         hero = QFrame()
         hero.setObjectName("settingsHero")
@@ -123,19 +128,11 @@ class SettingsPage(BasePage):
 
         buttons = QHBoxLayout()
 
-        self.save_proxy = QPushButton(
-            "✓  Salvar e aplicar"
-        )
-        self.save_proxy.setObjectName(
-            "settingsPrimary"
-        )
+        self.save_proxy = QPushButton("✓  Salvar e aplicar")
+        self.save_proxy.setObjectName("settingsPrimary")
 
-        self.test_proxy = QPushButton(
-            "↪  Testar conexão"
-        )
-        self.test_proxy.setObjectName(
-            "settingsSecondary"
-        )
+        self.test_proxy = QPushButton("↪  Testar conexão")
+        self.test_proxy.setObjectName("settingsSecondary")
 
         buttons.addWidget(self.save_proxy)
         buttons.addWidget(self.test_proxy)
@@ -144,9 +141,7 @@ class SettingsPage(BasePage):
         pl.addLayout(buttons)
 
         self.proxy_message = QLabel()
-        self.proxy_message.setObjectName(
-            "settingsSuccess"
-        )
+        self.proxy_message.setObjectName("settingsSuccess")
         self.proxy_message.setWordWrap(True)
 
         pl.addWidget(self.proxy_message)
@@ -202,7 +197,6 @@ class SettingsPage(BasePage):
         )
 
         al.addStretch()
-
         top.addWidget(automation, 2)
 
         self.root.addLayout(top)
@@ -271,9 +265,7 @@ class SettingsPage(BasePage):
 
         text = QVBoxLayout()
 
-        label = QLabel(
-            "Horários automáticos dos vídeos"
-        )
+        label = QLabel("Horários automáticos dos vídeos")
         label.setObjectName("settingsStrong")
 
         hint = QLabel(
@@ -293,36 +285,39 @@ class SettingsPage(BasePage):
         )
         sl.addWidget(self.video_times, 1)
 
-        self.apply_auto = QPushButton(
-            "✓  Aplicar automação"
-        )
-        self.apply_auto.setObjectName(
-            "settingsPrimary"
-        )
+        self.apply_auto = QPushButton("✓  Aplicar automação")
+        self.apply_auto.setObjectName("settingsPrimary")
         sl.addWidget(self.apply_auto)
 
         self.root.addWidget(schedule)
         self.root.addStretch()
 
-        self.save_proxy.clicked.connect(
-            self._save_proxy
-        )
-        self.test_proxy.clicked.connect(
-            self._test_proxy
-        )
-        self.apply_auto.clicked.connect(
-            self._apply_auto
-        )
-        self.startup.toggled.connect(
-            self._startup
-        )
+        self.save_proxy.clicked.connect(self._save_proxy)
+        self.test_proxy.clicked.connect(self._test_proxy)
+        self.apply_auto.clicked.connect(self._apply_auto)
+        self.startup.toggled.connect(self._startup)
+
+        # Qualquer edição impede que refresh() sobrescreva o formulário.
+        for widget, signal_name in (
+            (self.general, "toggled"),
+            (self.news_auto, "toggled"),
+            (self.dem_auto, "toggled"),
+            (self.video_auto, "toggled"),
+            (self.news_interval, "currentTextChanged"),
+            (self.dem_interval, "currentTextChanged"),
+            (self.video_times, "textEdited"),
+        ):
+            getattr(widget, signal_name).connect(self._mark_dirty)
 
         self.setStyleSheet(self._stylesheet())
 
+    def _mark_dirty(self, *_args) -> None:
+        if self._loaded:
+            self._dirty = True
+
     def _stylesheet(self) -> str:
         return """
-        QFrame#settingsHero,
-        QFrame#settingsCard {
+        QFrame#settingsHero, QFrame#settingsCard {
             background:white;
             border:1px solid #D6E6F7;
             border-radius:12px;
@@ -518,13 +513,9 @@ class SettingsPage(BasePage):
 
     def _test_proxy(self):
         self.test_proxy.setEnabled(False)
-        self.proxy_message.setText(
-            "Testando conexão..."
-        )
+        self.proxy_message.setText("Testando conexão...")
 
-        self._proxy_thread = ProxyTestThread(
-            self.controller
-        )
+        self._proxy_thread = ProxyTestThread(self.controller)
         self._proxy_thread.completed.connect(
             self._proxy_done
         )
@@ -538,6 +529,9 @@ class SettingsPage(BasePage):
         self._proxy_thread = None
 
     def _startup(self, checked):
+        if not self._loaded:
+            return
+
         ok = self.controller.set_start_with_windows(
             checked
         )
@@ -551,42 +545,84 @@ class SettingsPage(BasePage):
     def _apply_auto(self):
         settings = self.controller.automation_settings
 
-        settings.automatic_monitoring = (
-            self.general.isChecked()
-        )
-        settings.news_automatic = (
-            self.news_auto.isChecked()
-        )
-        settings.demand_automatic = (
-            self.dem_auto.isChecked()
-        )
-        settings.video_automatic = (
-            self.video_auto.isChecked()
-        )
+        settings.automatic_monitoring = self.general.isChecked()
+        settings.news_automatic = self.news_auto.isChecked()
+        settings.demand_automatic = self.dem_auto.isChecked()
+        settings.video_automatic = self.video_auto.isChecked()
+
         settings.news_interval_minutes = int(
             self.news_interval.currentText()
         )
         settings.demand_interval_minutes = int(
             self.dem_interval.currentText()
         )
+
         settings.video_schedule_times = {
             value.strip()
             for value in self.video_times.text().split(",")
             if value.strip()
         }
 
+        self._dirty = False
+        self.proxy_message.setText(
+            "✓  Automação salva e aplicada."
+        )
         self.controller.refresh()
 
+    @staticmethod
+    def _set_checked(widget, value):
+        blocker = QSignalBlocker(widget)
+        widget.setChecked(bool(value))
+        del blocker
+
+    @staticmethod
+    def _set_combo(widget, value):
+        blocker = QSignalBlocker(widget)
+        widget.setCurrentText(str(value))
+        del blocker
+
+    @staticmethod
+    def _set_text(widget, value):
+        blocker = QSignalBlocker(widget)
+        widget.setText(str(value))
+        del blocker
+
     def refresh(self, _state: UiState) -> None:
+        # O MainWindow chama refresh a cada 500 ms.
+        # Depois que o formulário foi carregado, não sobrescreve a edição
+        # do usuário enquanto ele ainda não clicou em "Aplicar automação".
         cfg = self.controller.proxy_config
 
-        self.proxy_enabled.blockSignals(True)
-        self.proxy_enabled.setChecked(cfg.enabled)
-        self.proxy_enabled.blockSignals(False)
+        self.saved.setText(
+            "✓  Proxy salvo"
+            if cfg.host
+            else "Proxy não configurado"
+        )
 
-        self.host.setText(cfg.host)
+        if self._loaded and self._dirty:
+            return
+
+        settings = self.controller.automation_settings
+
+        self._loaded = False
+
+        self._set_checked(
+            self.proxy_enabled,
+            cfg.enabled,
+        )
+        self._set_text(
+            self.host,
+            cfg.host,
+        )
+
+        blocker = QSignalBlocker(self.port)
         self.port.setValue(cfg.port)
-        self.user.setText(cfg.username)
+        del blocker
+
+        self._set_text(
+            self.user,
+            cfg.username,
+        )
 
         self.proxy_hint.setText(
             f"Servidor fixo {cfg.host}:{cfg.port}. "
@@ -595,36 +631,42 @@ class SettingsPage(BasePage):
             else "Informe os dados do servidor proxy."
         )
 
-        settings = self.controller.automation_settings
-
-        self.general.setChecked(
-            settings.automatic_monitoring
+        self._set_checked(
+            self.general,
+            settings.automatic_monitoring,
         )
-        self.news_auto.setChecked(
-            settings.news_automatic
+        self._set_checked(
+            self.news_auto,
+            settings.news_automatic,
         )
-        self.dem_auto.setChecked(
-            settings.demand_automatic
+        self._set_checked(
+            self.dem_auto,
+            settings.demand_automatic,
         )
-        self.video_auto.setChecked(
-            settings.video_automatic
-        )
-
-        self.news_interval.setCurrentText(
-            str(settings.news_interval_minutes)
-        )
-        self.dem_interval.setCurrentText(
-            str(settings.demand_interval_minutes)
+        self._set_checked(
+            self.video_auto,
+            settings.video_automatic,
         )
 
-        self.video_times.setText(
+        self._set_combo(
+            self.news_interval,
+            settings.news_interval_minutes,
+        )
+        self._set_combo(
+            self.dem_interval,
+            settings.demand_interval_minutes,
+        )
+
+        self._set_text(
+            self.video_times,
             ", ".join(
                 sorted(settings.video_schedule_times)
-            )
+            ),
         )
 
-        self.startup.blockSignals(True)
-        self.startup.setChecked(
-            self.controller.start_with_windows
+        self._set_checked(
+            self.startup,
+            self.controller.start_with_windows,
         )
-        self.startup.blockSignals(False)
+
+        self._loaded = True
