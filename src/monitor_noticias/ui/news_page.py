@@ -18,7 +18,7 @@ from PySide6.QtCore import (
     QUrl,
     Signal,
 )
-from PySide6.QtGui import QColor, QDesktopServices, QFont, QFontMetrics, QPainter, QPen
+from PySide6.QtGui import QColor, QFont, QFontMetrics, QPainter, QPen
 from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
@@ -282,12 +282,12 @@ class NewsDelegate(QStyledItemDelegate):
         for idx, rect in enumerate(buttons):
             if rect.contains(point):
                 if idx == 0:
-                    _open_url(news.link)
+                    open_article_url(news.link)
                 elif idx == 1:
-                    _whatsapp(news.title, news.link)
+                    open_whatsapp(news.title, news.link)
                 elif idx == 2:
                     # Copia exatamente o link da matéria no veículo.
-                    _copy(news.link)
+                    copy_article_url(news.link)
                 elif idx == 3:
                     self.extract_requested.emit(news.link)
                 return True
