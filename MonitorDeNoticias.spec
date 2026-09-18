@@ -3,7 +3,9 @@ from PyInstaller.utils.hooks import collect_all, collect_data_files
 
 pdfium_datas, pdfium_bins, pdfium_hidden = collect_all("pypdfium2")
 
-# Assets do programa Principais Capas integrado.
+# PyMuPDF/fitz é usado pelo programa Principais Capas para PDF.
+pymupdf_datas, pymupdf_bins, pymupdf_hidden = collect_all("pymupdf")
+
 capas_datas = collect_data_files(
     "monitor_noticias.capas_tool",
     includes=["assets/*"],
@@ -14,9 +16,13 @@ block_cipher = None
 a = Analysis(
     ["run.py"],
     pathex=["src"],
-    binaries=pdfium_bins,
-    datas=pdfium_datas + capas_datas,
-    hiddenimports=pdfium_hidden,
+    binaries=pdfium_bins + pymupdf_bins,
+    datas=pdfium_datas + pymupdf_datas + capas_datas,
+    hiddenimports=(
+        pdfium_hidden
+        + pymupdf_hidden
+        + ["pymupdf", "fitz"]
+    ),
     hookspath=[],
     hooksconfig={},
     runtime_hooks=["scripts/pyi_runtime_portable_validation.py"],
