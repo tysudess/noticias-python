@@ -19,6 +19,7 @@ from PySide6.QtGui import (
     QMouseEvent,
     QPainter,
     QPen,
+    QRegion,
     QScreen,
 )
 from PySide6.QtWidgets import (
@@ -54,33 +55,53 @@ CREATE_NO_WINDOW = 0x08000000 if sys.platform.startswith("win") else 0
 
 
 class CaptureAreaOutline(QWidget):
-    """Moldura vermelha persistente que não bloqueia o mouse."""
+    """Moldura vermelha SEMPRE móvel e redimensionável.
+
+    O interior da área continua clicável no programa que estiver por baixo.
+    Somente a borda, as alças e a etiqueta "MOVER" recebem o mouse.
+
+    Assim não é necessário clicar em "ÁREA" ou "Ajustar área" para mover a
+    seleção: a própria moldura permanente já é o controle de ajuste.
+    """
+
+    rect_committed = Signal(QRect)
 
     BORDER = 4
+    MARGIN = 16
+    HIT = 14
+    HANDLE = 12
+    MIN_W = 160
+    MIN_H = 100
 
     def __init__(self) -> None:
         super().__init__(None)
 
         self._capture_rect = QRect()
+        self._bounds = QRect()
+        self._interactive = False
+
+        self._drag_mode = ""
+        self._drag_start_global = QPoint()
+        self._drag_start_rect = QRect()
 
         self.setWindowFlags(
             Qt.WindowType.FramelessWindowHint
             | Qt.WindowType.Tool
             | Qt.WindowType.WindowStaysOnTopHint
-            | Qt.WindowType.WindowTransparentForInput
         )
         self.setAttribute(
             Qt.WidgetAttribute.WA_TranslucentBackground,
             True,
         )
-        self.setAttribute(
-            Qt.WidgetAttribute.WA_TransparentForMouseEvents,
-            True,
+        self.setMouseTracking(True)
+        self.setFocusPolicy(
+            Qt.FocusPolicy.NoFocus
         )
 
     def showEvent(self, event) -> None:
         super().showEvent(event)
         self._exclude_from_capture()
+        self._apply_mask()
         self.raise_()
 
     def _exclude_from_capture(self) -> None:
@@ -98,6 +119,9 @@ class CaptureAreaOutline(QWidget):
     def set_capture_rect(
         self,
         rect: QRect | None,
+        *,
+        bounds: QRect | None = None,
+        interactive: bool = False,
     ) -> None:
         if rect is None or rect.isEmpty():
             self._capture_rect = QRect()
@@ -107,21 +131,388 @@ class CaptureAreaOutline(QWidget):
         self._capture_rect = QRect(
             rect.normalized()
         )
+        self._interactive = bool(interactive)
+
+        if bounds is not None and not bounds.isEmpty():
+            self._bounds = QRect(bounds)
+
+        self._apply_geometry()
+
+    def _inner_rect(self) -> QRect:
+        return QRect(
+            self.MARGIN,
+            self.MARGIN,
+            max(1, self._capture_rect.width()),
+            max(1, self._capture_rect.height()),
+        )
+
+    def _badge_rect(self) -> QRect:
+        inner = self._inner_rect()
+
+        return QRect(
+            inner.left() + 10,
+            inner.top() + 8,
+            min(
+                178,
+                max(
+                    118,
+                    inner.width() - 20,
+                ),
+            ),
+            32,
+        )
+
+    def _move_strip_rect(self) -> QRect:
+        """Faixa superior extra para facilitar mover a moldura."""
+        inner = self._inner_rect()
+        left = min(
+            inner.right(),
+            self._badge_rect().right() + 8,
+        )
+        width = max(
+            0,
+            inner.right() - left - 12,
+        )
+
+        return QRect(
+            left,
+            inner.top() - self.HIT,
+            width,
+            self.HIT * 2,
+        )
+
+    def _apply_geometry(self) -> None:
+        if self._capture_rect.isEmpty():
+            self.hide()
+            return
 
         self.setGeometry(
             self._capture_rect.adjusted(
-                -self.BORDER,
-                -self.BORDER,
-                self.BORDER,
-                self.BORDER,
+                -self.MARGIN,
+                -self.MARGIN,
+                self.MARGIN,
+                self.MARGIN,
             )
         )
+
+        self._apply_mask()
 
         if not self.isVisible():
             self.show()
 
         self.raise_()
         self.update()
+
+    def _apply_mask(self) -> None:
+        if self._capture_rect.isEmpty():
+            return
+
+        inner = self._inner_rect()
+        hit = self.HIT
+
+        # Só estas áreas da janela recebem o mouse.
+        region = QRegion()
+
+        # Topo.
+        region += QRegion(
+            QRect(
+                inner.left() - hit,
+                inner.top() - hit,
+                inner.width() + hit * 2,
+                hit * 2,
+            )
+        )
+
+        # Base.
+        region += QRegion(
+            QRect(
+                inner.left() - hit,
+                inner.bottom() - hit,
+                inner.width() + hit * 2,
+                hit * 2,
+            )
+        )
+
+        # Esquerda.
+        region += QRegion(
+            QRect(
+                inner.left() - hit,
+                inner.top() - hit,
+                hit * 2,
+                inner.height() + hit * 2,
+            )
+        )
+
+        # Direita.
+        region += QRegion(
+            QRect(
+                inner.right() - hit,
+                inner.top() - hit,
+                hit * 2,
+                inner.height() + hit * 2,
+            )
+        )
+
+        # Etiqueta "MOVER".
+        region += QRegion(
+            self._badge_rect().adjusted(
+                -4,
+                -4,
+                4,
+                4,
+            )
+        )
+
+        # Faixa superior central também move.
+        move_strip = self._move_strip_rect()
+
+        if not move_strip.isEmpty():
+            region += QRegion(move_strip)
+
+        self.setMask(region)
+
+    def _hit_test(
+        self,
+        point: QPoint,
+    ) -> str:
+        if not self._interactive:
+            return ""
+
+        inner = self._inner_rect()
+
+        if self._badge_rect().contains(point):
+            return "move"
+
+        if self._move_strip_rect().contains(point):
+            return "move"
+
+        near_left = abs(
+            point.x() - inner.left()
+        ) <= self.HIT
+
+        near_right = abs(
+            point.x() - inner.right()
+        ) <= self.HIT
+
+        near_top = abs(
+            point.y() - inner.top()
+        ) <= self.HIT
+
+        near_bottom = abs(
+            point.y() - inner.bottom()
+        ) <= self.HIT
+
+        # Cantos continuam redimensionando.
+        if near_left and near_top:
+            return "left-top"
+        if near_right and near_top:
+            return "right-top"
+        if near_left and near_bottom:
+            return "left-bottom"
+        if near_right and near_bottom:
+            return "right-bottom"
+
+        if near_left:
+            return "left"
+        if near_right:
+            return "right"
+        if near_bottom:
+            return "bottom"
+
+        # Na parte superior perto das extremidades ainda é possível ajustar
+        # a altura. O centro superior é reservado para mover.
+        if near_top:
+            return "top"
+
+        return ""
+
+    def _update_cursor(
+        self,
+        point: QPoint,
+    ) -> None:
+        mapping = {
+            "left": Qt.CursorShape.SizeHorCursor,
+            "right": Qt.CursorShape.SizeHorCursor,
+            "top": Qt.CursorShape.SizeVerCursor,
+            "bottom": Qt.CursorShape.SizeVerCursor,
+            "left-top": Qt.CursorShape.SizeFDiagCursor,
+            "right-bottom": Qt.CursorShape.SizeFDiagCursor,
+            "right-top": Qt.CursorShape.SizeBDiagCursor,
+            "left-bottom": Qt.CursorShape.SizeBDiagCursor,
+            "move": Qt.CursorShape.SizeAllCursor,
+        }
+
+        self.setCursor(
+            mapping.get(
+                self._hit_test(point),
+                Qt.CursorShape.ArrowCursor,
+            )
+        )
+
+    def mousePressEvent(
+        self,
+        event: QMouseEvent,
+    ) -> None:
+        if (
+            not self._interactive
+            or event.button()
+            != Qt.MouseButton.LeftButton
+        ):
+            return
+
+        mode = self._hit_test(
+            event.position().toPoint()
+        )
+
+        if not mode:
+            return
+
+        self._drag_mode = mode
+        self._drag_start_global = (
+            event.globalPosition().toPoint()
+        )
+        self._drag_start_rect = QRect(
+            self._capture_rect
+        )
+
+        event.accept()
+
+    def mouseMoveEvent(
+        self,
+        event: QMouseEvent,
+    ) -> None:
+        point = event.position().toPoint()
+
+        if (
+            self._interactive
+            and self._drag_mode
+            and (
+                event.buttons()
+                & Qt.MouseButton.LeftButton
+            )
+        ):
+            current = (
+                event.globalPosition().toPoint()
+            )
+            delta = (
+                current
+                - self._drag_start_global
+            )
+
+            rect = QRect(
+                self._drag_start_rect
+            )
+            mode = self._drag_mode
+
+            if mode == "move":
+                rect.translate(
+                    delta.x(),
+                    delta.y(),
+                )
+            else:
+                if "left" in mode:
+                    rect.setLeft(
+                        self._drag_start_rect.left()
+                        + delta.x()
+                    )
+
+                if "right" in mode:
+                    rect.setRight(
+                        self._drag_start_rect.right()
+                        + delta.x()
+                    )
+
+                if "top" in mode:
+                    rect.setTop(
+                        self._drag_start_rect.top()
+                        + delta.y()
+                    )
+
+                if "bottom" in mode:
+                    rect.setBottom(
+                        self._drag_start_rect.bottom()
+                        + delta.y()
+                    )
+
+            rect = self._minimum(
+                rect.normalized()
+            )
+            rect = self._clamp(rect)
+
+            self._capture_rect = rect
+            self._apply_geometry()
+
+            event.accept()
+            return
+
+        self._update_cursor(point)
+
+    def mouseReleaseEvent(
+        self,
+        event: QMouseEvent,
+    ) -> None:
+        if (
+            event.button()
+            != Qt.MouseButton.LeftButton
+            or not self._drag_mode
+        ):
+            return
+
+        self._drag_mode = ""
+        self._update_cursor(
+            event.position().toPoint()
+        )
+
+        # Soltar o mouse aplica a nova área imediatamente.
+        self.rect_committed.emit(
+            QRect(self._capture_rect)
+        )
+
+        event.accept()
+
+    def _minimum(
+        self,
+        rect: QRect,
+    ) -> QRect:
+        rect = QRect(rect)
+
+        if rect.width() < self.MIN_W:
+            rect.setWidth(self.MIN_W)
+
+        if rect.height() < self.MIN_H:
+            rect.setHeight(self.MIN_H)
+
+        return rect
+
+    def _clamp(
+        self,
+        rect: QRect,
+    ) -> QRect:
+        if self._bounds.isEmpty():
+            return rect
+
+        bounds = QRect(self._bounds)
+        rect = QRect(rect)
+
+        if rect.width() > bounds.width():
+            rect.setWidth(bounds.width())
+
+        if rect.height() > bounds.height():
+            rect.setHeight(bounds.height())
+
+        if rect.left() < bounds.left():
+            rect.moveLeft(bounds.left())
+
+        if rect.top() < bounds.top():
+            rect.moveTop(bounds.top())
+
+        if rect.right() > bounds.right():
+            rect.moveRight(bounds.right())
+
+        if rect.bottom() > bounds.bottom():
+            rect.moveBottom(bounds.bottom())
+
+        return rect
 
     def paintEvent(self, _event) -> None:
         painter = QPainter(self)
@@ -130,12 +521,7 @@ class CaptureAreaOutline(QWidget):
             True,
         )
 
-        frame = self.rect().adjusted(
-            self.BORDER // 2,
-            self.BORDER // 2,
-            -(self.BORDER // 2) - 1,
-            -(self.BORDER // 2) - 1,
-        )
+        inner = self._inner_rect()
 
         painter.setPen(
             QPen(
@@ -146,14 +532,10 @@ class CaptureAreaOutline(QWidget):
         painter.setBrush(
             Qt.BrushStyle.NoBrush
         )
-        painter.drawRect(frame)
+        painter.drawRect(inner)
 
-        badge = QRect(
-            10,
-            10,
-            122,
-            30,
-        )
+        badge = self._badge_rect()
+
         painter.setPen(
             Qt.PenStyle.NoPen
         )
@@ -165,21 +547,69 @@ class CaptureAreaOutline(QWidget):
             7,
             7,
         )
+
         painter.setPen(
             QColor("#FFFFFF")
         )
         painter.setFont(
             QFont(
                 "Segoe UI",
-                10,
+                9,
                 QFont.Weight.Bold,
             )
         )
         painter.drawText(
             badge,
             Qt.AlignmentFlag.AlignCenter,
-            "● ÁREA REC",
+            "↔ MOVER • ÁREA REC",
         )
+
+        if not self._interactive:
+            return
+
+        # Oito alças deixam claro que a área pode ser ajustada SEMPRE.
+        painter.setBrush(
+            QColor("#FF274B")
+        )
+        painter.setPen(
+            QPen(
+                QColor("#FFFFFF"),
+                2,
+            )
+        )
+
+        points = [
+            inner.topLeft(),
+            inner.topRight(),
+            inner.bottomLeft(),
+            inner.bottomRight(),
+            QPoint(
+                inner.center().x(),
+                inner.top(),
+            ),
+            QPoint(
+                inner.center().x(),
+                inner.bottom(),
+            ),
+            QPoint(
+                inner.left(),
+                inner.center().y(),
+            ),
+            QPoint(
+                inner.right(),
+                inner.center().y(),
+            ),
+        ]
+
+        for point in points:
+            painter.drawRect(
+                QRect(
+                    point.x() - self.HANDLE // 2,
+                    point.y() - self.HANDLE // 2,
+                    self.HANDLE,
+                    self.HANDLE,
+                )
+            )
 
 
 class RegionEditorOverlay(QWidget):
@@ -768,6 +1198,9 @@ class ScreenRecorderPage(QWidget):
         self._region: QRect | None = None
         self._region_editor: RegionEditorOverlay | None = None
         self._capture_overlay = CaptureAreaOutline()
+        self._capture_overlay.rect_committed.connect(
+            self._persistent_area_committed
+        )
 
         self._audio_loaded = False
         self._audio_devices: dict[str, AudioDevice] = {}
@@ -963,7 +1396,7 @@ class ScreenRecorderPage(QWidget):
         )
 
         self.adjust_region = QPushButton(
-            "↔  Ajustar área"
+            "↔  Mostrar moldura"
         )
         self.adjust_region.setObjectName(
             "recSecondary"
@@ -1006,10 +1439,10 @@ class ScreenRecorderPage(QWidget):
         )
 
         capture_help = QLabel(
-            "Você pode recriar a área quantas vezes quiser. "
-            "No Ajustar área, arraste e solte quantas vezes quiser: "
-            "a mudança entra em vigor sem Enter, inclusive durante a gravação. "
-            "Clique ÁREA novamente no controle flutuante para concluir."
+            "A moldura vermelha fica SEMPRE móvel e redimensionável. "
+            "Arraste a etiqueta MOVER para deslocar a área ou arraste "
+            "bordas/cantos para mudar o tamanho, inclusive durante a gravação. "
+            "Não precisa clicar em ÁREA nem apertar Enter."
         )
         capture_help.setObjectName(
             "recAudioStatus"
@@ -1757,14 +2190,36 @@ class ScreenRecorderPage(QWidget):
         self.floating.raise_()
 
     def _adjust_region(self) -> None:
-        """Modo de ajuste CONTÍNUO.
+        """A área personalizada já é sempre ajustável.
 
-        Continua aberto após cada movimento. Durante a gravação, cada vez que
-        o usuário solta o mouse a nova área entra em vigor automaticamente.
+        Este botão apenas traz a moldura para frente e explica os controles.
         """
         if (
             not self._module_enabled
             or self._region is None
+        ):
+            return
+
+        self._update_capture_overlay()
+        self._capture_overlay.raise_()
+
+        self.status_text.setText(
+            "A área está sempre móvel: arraste a etiqueta MOVER para deslocar "
+            "e arraste bordas/cantos para redimensionar."
+        )
+
+    def _floating_area_action(self) -> None:
+        # A moldura atual já é permanentemente móvel/redimensionável.
+        # Este botão recria a seleção do zero.
+        self._choose_region()
+
+    def _persistent_area_committed(
+        self,
+        rect: QRect,
+    ) -> None:
+        if (
+            not self._module_enabled
+            or rect.isEmpty()
             or self._state
             in {
                 self.STARTING,
@@ -1773,54 +2228,13 @@ class ScreenRecorderPage(QWidget):
         ):
             return
 
-        self._close_region_editor()
-
-        screen = self._selected_screen()
-
-        if screen is None:
-            return
-
-        self._capture_overlay.hide()
-
-        editor = RegionEditorOverlay(
-            screen,
-            self._region,
-            continuous=True,
+        self._commit_capture_change(
+            QRect(rect.normalized()),
+            custom=True,
+            message=(
+                "Área movida/redimensionada diretamente pela moldura."
+            ),
         )
-        editor.applied.connect(
-            self._region_live_applied
-        )
-        editor.finished.connect(
-            self._region_adjust_finished
-        )
-        editor.cancelled.connect(
-            self._region_editor_cancelled
-        )
-        editor.cleared.connect(
-            self._clear_region
-        )
-
-        self._region_editor = editor
-        self.floating.set_area_editing(True)
-        editor.show()
-        self.floating.raise_()
-
-        self.status_text.setText(
-            "Ajuste ativo: arraste a área durante a gravação. "
-            "Solte o mouse para aplicar. Clique ÁREA novamente para concluir."
-        )
-
-    def _floating_area_action(self) -> None:
-        editor = self._region_editor
-
-        if editor is not None:
-            editor.finish_current()
-            return
-
-        if self._region is None:
-            self._choose_region()
-        else:
-            self._adjust_region()
 
     def _region_new_finished(
         self,
@@ -2030,10 +2444,18 @@ class ScreenRecorderPage(QWidget):
                 f"{rect.width()}×{rect.height()} "
                 f"• X {rect.x()} • Y {rect.y()}"
             )
+            capture_pixels = (
+                self._logical_rect_to_capture_pixels(
+                    self._region
+                )
+            )
+
             self.capture_details.setText(
-                "Área personalizada ativa. "
-                "Use Nova área para refazer do zero, Ajustar área para mover/redimensionar "
-                "ou Remover área para voltar à tela inteira."
+                "A moldura está sempre móvel. "
+                "Gravação real: "
+                f"{capture_pixels.width()}×{capture_pixels.height()} px "
+                f"em X {capture_pixels.x()} • Y {capture_pixels.y()}. "
+                "Arraste MOVER ou as bordas/cantos."
             )
         else:
             screen = self._selected_screen()
@@ -2113,8 +2535,32 @@ class ScreenRecorderPage(QWidget):
             self._capture_overlay.hide()
             return
 
+        rect = self._current_capture_rect()
+        screen = self._selected_screen()
+
+        bounds = (
+            QRect(screen.geometry())
+            if screen is not None
+            else QRect()
+        )
+
+        custom = (
+            self.mode_combo.currentText()
+            == "Área personalizada"
+            and self._region is not None
+        )
+
         self._capture_overlay.set_capture_rect(
-            self._current_capture_rect()
+            rect,
+            bounds=bounds,
+            interactive=(
+                custom
+                and self._state
+                not in {
+                    self.STARTING,
+                    self.FINALIZING,
+                }
+            ),
         )
 
     # ------------------------------------------------------------------
@@ -2193,20 +2639,25 @@ class ScreenRecorderPage(QWidget):
         self.audio_combo.blockSignals(False)
         self._audio_loaded = True
 
+        # "Sem áudio" existe antes da primeira detecção e não deve ser
+        # tratado como preferência do usuário. O padrão real é SEMPRE
+        # Áudio do sistema quando o WASAPI loopback estiver disponível.
         old_index = (
             self.audio_combo.findData(
                 previous
             )
-            if previous
+            if (
+                previous
+                and previous != "none"
+            )
             else -1
         )
 
-        if old_index >= 0:
+        if old_index >= 1:
             selected = old_index
-        elif system_index >= 0:
-            # Áudio do sistema é o padrão quando o módulo está ligado.
+        elif system_index >= 1:
             selected = system_index
-        elif first_mic_index >= 0:
+        elif first_mic_index >= 1:
             selected = first_mic_index
         else:
             selected = 0
@@ -2628,31 +3079,107 @@ class ScreenRecorderPage(QWidget):
                 self._hidden_by_recorder = True
                 window.hide()
 
+    def _logical_rect_to_capture_pixels(
+        self,
+        rect: QRect,
+    ) -> QRect:
+        """Converte a moldura Qt (pixels lógicos) para pixels do gdigrab.
+
+        Este era o motivo principal de a gravação sair deslocada ou com tamanho
+        diferente da moldura em Windows com escala 125%, 150% etc.
+        """
+        screen = self._selected_screen()
+
+        if screen is None:
+            return QRect(rect)
+
+        screen_geo = QRect(
+            screen.geometry()
+        )
+
+        try:
+            dpr = float(
+                screen.devicePixelRatio()
+            )
+        except Exception:
+            dpr = 1.0
+
+        if dpr <= 0:
+            dpr = 1.0
+
+        # Coordenadas relativas ao monitor em pixels lógicos.
+        local_x = (
+            rect.x()
+            - screen_geo.x()
+        )
+        local_y = (
+            rect.y()
+            - screen_geo.y()
+        )
+
+        # O deslocamento do monitor também é convertido para o espaço físico.
+        # Para o monitor primário isso normalmente é 0,0.
+        physical_screen_x = round(
+            screen_geo.x()
+            * dpr
+        )
+        physical_screen_y = round(
+            screen_geo.y()
+            * dpr
+        )
+
+        x = physical_screen_x + round(
+            local_x * dpr
+        )
+        y = physical_screen_y + round(
+            local_y * dpr
+        )
+        width = max(
+            2,
+            round(
+                rect.width()
+                * dpr
+            ),
+        )
+        height = max(
+            2,
+            round(
+                rect.height()
+                * dpr
+            ),
+        )
+
+        # libx264/yuv420p: dimensões pares.
+        if width % 2:
+            width -= 1
+
+        if height % 2:
+            height -= 1
+
+        return QRect(
+            x,
+            y,
+            width,
+            height,
+        )
+
     def _capture_rect(self) -> QRect:
         if (
             self.mode_combo.currentText()
             == "Área personalizada"
             and self._region is not None
         ):
-            rect = QRect(self._region)
+            logical = QRect(
+                self._region
+            )
         else:
             screen = self._selected_screen()
-            rect = QRect(screen.geometry())
+            logical = QRect(
+                screen.geometry()
+            )
 
-        width = max(2, rect.width())
-        height = max(2, rect.height())
-
-        # H.264 / yuv420p trabalha melhor com dimensões pares.
-        if width % 2:
-            width -= 1
-        if height % 2:
-            height -= 1
-
-        return QRect(
-            rect.x(),
-            rect.y(),
-            width,
-            height,
+        return self._logical_rect_to_capture_pixels(
+            logical
         )
 
     def _fps(self) -> int:
