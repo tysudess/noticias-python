@@ -1,11 +1,13 @@
 # -*- mode: python ; coding: utf-8 -*-
-from PyInstaller.utils.hooks import collect_all
+from PyInstaller.utils.hooks import collect_all, collect_data_files
 
-# PySide6 is intentionally NOT collected wholesale here. PyInstaller's Qt hooks
-# follow the application's real imports and collect the Qt modules/plugins they
-# require. This avoids redistributing unrelated Qt modules while preserving the
-# functional dependency graph proved by the portable smoke suite.
 pdfium_datas, pdfium_bins, pdfium_hidden = collect_all("pypdfium2")
+
+# Assets do programa Principais Capas integrado.
+capas_datas = collect_data_files(
+    "monitor_noticias.capas_tool",
+    includes=["assets/*"],
+)
 
 block_cipher = None
 
@@ -13,7 +15,7 @@ a = Analysis(
     ["run.py"],
     pathex=["src"],
     binaries=pdfium_bins,
-    datas=pdfium_datas,
+    datas=pdfium_datas + capas_datas,
     hiddenimports=pdfium_hidden,
     hookspath=[],
     hooksconfig={},
@@ -22,6 +24,7 @@ a = Analysis(
     noarchive=False,
     optimize=0,
 )
+
 pyz = PYZ(a.pure)
 
 exe = EXE(
