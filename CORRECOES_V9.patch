@@ -1,0 +1,288 @@
+diff --git a/src/monitor_noticias/app/application.py b/src/monitor_noticias/app/application.py
+--- a/src/monitor_noticias/app/application.py
++++ b/src/monitor_noticias/app/application.py
+@@
+ from __future__ import annotations
+
+ import logging
++import os
+ import sys
+
+ from .exceptions import install_global_exception_hooks
+ from .logging_setup import configure_logging
+ from .paths import AppPaths
+@@
+     def run(self) -> int:
+         self.paths.ensure_runtime_dirs(); configure_logging(self.paths); install_global_exception_hooks()
+         log=logging.getLogger("monitor_noticias.application"); log.info("Inicializando Monitor de Notícias PySide6")
++
++        # Windows / Qt Multimedia:
++        # força o backend FFmpeg e desativa aceleração de vídeo por hardware.
++        # Isso evita a prévia preta em alguns MP4/HEVC/AV1 e em alguns drivers
++        # quando o áudio/tempo continua funcionando normalmente.
++        if sys.platform.startswith("win"):
++            os.environ.setdefault("QT_MEDIA_BACKEND", "ffmpeg")
++            os.environ.setdefault("QT_FFMPEG_DECODING_HW_DEVICE_TYPES", ",")
++            os.environ.setdefault("QT_DISABLE_HW_TEXTURES_CONVERSION", "1")
++
+         from PySide6.QtWidgets import QApplication
+         from monitor_noticias.app.composition import AppContainer
+         from monitor_noticias.ui.main_window import MainWindow
+         qt_app=QApplication.instance() or QApplication(sys.argv); qt_app.setApplicationName("Monitor de Notícias")
+         container=AppContainer.build(self.paths)
+
+diff --git a/src/monitor_noticias/ui/video_editor_reference_page.py b/src/monitor_noticias/ui/video_editor_reference_page.py
+--- a/src/monitor_noticias/ui/video_editor_reference_page.py
++++ b/src/monitor_noticias/ui/video_editor_reference_page.py
+@@
+ from pathlib import Path
+
+ from PySide6.QtCore import QUrl, Qt, Signal
+-from PySide6.QtGui import QColor, QPalette
++from PySide6.QtGui import QColor, QPalette, QPixmap
++from PySide6.QtMultimedia import QVideoSink
+ from PySide6.QtWidgets import (
+     QComboBox,
++    QLabel,
+     QLineEdit,
+     QPushButton,
+     QScrollArea,
+     QVBoxLayout,
+     QWidget,
+@@
+         super().__init__(
+             videos_dir,
+             ffmpeg_exe,
+             ffprobe_exe,
+             parent,
+         )
+
++        # QVideoWidget pode ficar totalmente preto em alguns MP4 no Windows,
++        # apesar de o QMediaPlayer continuar avançando o tempo e o FFmpeg
++        # conseguir gerar as miniaturas. Para a prévia, usamos QVideoSink e
++        # pintamos os frames em um QLabel. Isso evita a superfície nativa/GPU
++        # que estava causando a tela preta dentro do Monitor.
++        self._install_frame_preview()
++
+         # A função Ctrl+Z continua existindo; apenas o botão adicional é ocultado
+         # para manter fidelidade com o layout aprovado.
+         try:
+             self.btn_undo.hide()
+         except Exception:
+@@
+
+         self._apply_reference_style()
+
++    def _install_frame_preview(self) -> None:
++        old_video = self.video
++        parent = old_video.parentWidget()
++        layout = parent.layout() if parent is not None else None
++
++        replacement = QLabel(parent)
++        replacement.setAlignment(Qt.AlignmentFlag.AlignCenter)
++        replacement.setMinimumHeight(300)
++        replacement.setMaximumHeight(430)
++        replacement.setText("Pré-visualização do vídeo")
++        replacement.setStyleSheet(
++            "background:#000000;"
++            "border:0;"
++            "color:#6F86A8;"
++        )
++
++        if layout is not None:
++            layout.replaceWidget(old_video, replacement)
++
++        old_video.hide()
++        old_video.setParent(None)
++        old_video.deleteLater()
++
++        self.video = replacement
++        self._last_video_pixmap = QPixmap()
++
++        self._video_sink = QVideoSink(self)
++        self._video_sink.videoFrameChanged.connect(
++            self._video_frame_changed
++        )
++        self.player.setVideoSink(self._video_sink)
++
++    def _video_frame_changed(self, frame) -> None:
++        try:
++            if not frame.isValid():
++                return
++
++            image = frame.toImage()
++            if image.isNull():
++                return
++
++            self._last_video_pixmap = QPixmap.fromImage(image)
++            self._refresh_video_pixmap()
++        except Exception as exc:
++            try:
++                self.status.setText(
++                    f"Prévia do vídeo: {exc}"
++                )
++            except Exception:
++                pass
++
++    def _refresh_video_pixmap(self) -> None:
++        pixmap = getattr(
++            self,
++            "_last_video_pixmap",
++            QPixmap(),
++        )
++
++        if pixmap.isNull():
++            return
++
++        size = self.video.size()
++        if size.width() <= 1 or size.height() <= 1:
++            return
++
++        self.video.setPixmap(
++            pixmap.scaled(
++                size,
++                Qt.AspectRatioMode.KeepAspectRatio,
++                Qt.TransformationMode.SmoothTransformation,
++            )
++        )
++
++    def resizeEvent(self, event) -> None:
++        super().resizeEvent(event)
++        self._refresh_video_pixmap()
++
+     def _apply_reference_style(self) -> None:
+         card_css = (
+             "background:#FFFFFF;"
+             "border:1px solid #D4E4F5;"
+             "border-radius:12px;"
+
+diff --git a/src/monitor_noticias/ui/pdf_editor_reference_page.py b/src/monitor_noticias/ui/pdf_editor_reference_page.py
+--- a/src/monitor_noticias/ui/pdf_editor_reference_page.py
++++ b/src/monitor_noticias/ui/pdf_editor_reference_page.py
+@@
+ from PySide6.QtWidgets import (
+     QCheckBox,
+     QFrame,
+     QHBoxLayout,
+     QLabel,
++    QMessageBox,
+     QPushButton,
+     QVBoxLayout,
+ )
+@@
+         except Exception:
+             pass
+
+         super().__init__(app_root)
+
++    def _start_crop(self) -> None:
++        """Inicia o corte sem disputar o token do worker da prévia.
++
++        A versão anterior podia invalidar o próprio token do recorte quando
++        ainda existia uma renderização da prévia em andamento. O resultado era
++        clicar em "Cortar" e aparentemente não acontecer nada.
++        """
++        index = self.model.selected_index
++
++        if index not in range(len(self.model.pages)):
++            QMessageBox.critical(
++                self,
++                "Editor de PDF",
++                "Selecione uma página para recortar.",
++            )
++            return
++
++        page = self.model.pages[index]
++
++        try:
++            image = _pil_to_qimage(
++                self.model.render_transformed_source(
++                    page,
++                    120,
++                )
++            )
++        except Exception as exc:
++            QMessageBox.critical(
++                self,
++                "Editor de PDF",
++                f"Não foi possível preparar o recorte: {exc}",
++            )
++            return
++
++        self.preview.begin_crop(
++            image,
++            self.model.zoom,
++            page.crop,
++        )
++        self.preview.setFocus()
++        self.status.setText(
++            "Cortar: clique e arraste sobre a área que deseja manter."
++        )
++
++    def _crop_done(self, crop) -> None:
++        if self.model.apply_crop(crop):
++            self.status.setText(
++                "Recorte aplicado. Use Ctrl+Z para desfazer."
++            )
++            self._refresh_all()
++
+     def _tool_button(
+         self,
+         text: str,
+         slot,
+         tone: str,
+
+diff --git a/src/monitor_noticias/capas_tool/app/ui.py b/src/monitor_noticias/capas_tool/app/ui.py
+--- a/src/monitor_noticias/capas_tool/app/ui.py
++++ b/src/monitor_noticias/capas_tool/app/ui.py
+@@
+ from .pdf_export import export_pdf, build_filename
+ from .workers import Worker
+ from .web_resolver import Resolver, CentralClippingBatchResolver, ParallelCentralClippingResolver, AppsScriptFeedResolver, ANDROID_FRONT_UA
++from .web_resolver_patch import RobustFrontPageResolver
+ from .valor_email_pdf import load_valor_candidates
+@@
+     def _start_single_web_resolver(self,e,generation,one_done,pressreader_only=False):
+-        resolver=Resolver(self); resolver.progress.connect(self.set_status); self.web_resolvers.append(resolver)
++        resolver=RobustFrontPageResolver(self); resolver.progress.connect(self.set_status); self.web_resolvers.append(resolver)
+         cb=lambda url,err,en=e,r=resolver,g=generation:self._web_resolved(en,r,url,err,g,one_done)
+         if pressreader_only: resolver.resolve_pressreader_only(cb)
+         else: resolver.resolve_frontpages(e.name,cb)
+
+diff --git a/src/monitor_noticias/capas_tool/app/web_resolver.py b/src/monitor_noticias/capas_tool/app/web_resolver.py
+--- a/src/monitor_noticias/capas_tool/app/web_resolver.py
++++ b/src/monitor_noticias/capas_tool/app/web_resolver.py
+@@
+ class FrontPageResolver(QObject):
+     """Port do FrontPageBrowserResolver.java do Android v0.7.5.9."""
+
+     progress = Signal(str)
++    SOURCE_TIMEOUT_MS = 45000
+@@
+         self.page = self.browser.new_page(lambda _u, _g=g: None)
+         self.page.loadFinished.connect(lambda ok, gen=g: self._after_load(ok, gen))
+         self.page.load(QUrl(source))
+-        QTimer.singleShot(18000, lambda gen=g: self._source_failed("timeout do navegador interno", gen))
++
++        # FrontPages pode manter o loadFinished pendente enquanto ainda carrega
++        # publicidade/lazy-load. Fazemos uma inspeção intermediária e deixamos
++        # uma janela maior antes de declarar timeout.
++        QTimer.singleShot(
++            10000,
++            lambda gen=g: self._scan(gen)
++            if self._active(gen)
++            else None,
++        )
++        QTimer.singleShot(
++            self.SOURCE_TIMEOUT_MS,
++            lambda gen=g: self._source_failed(
++                "timeout do navegador interno",
++                gen,
++            ),
++        )
+@@
+-        if self._scan_count < 4:
++        if self._scan_count < 10:
+             QTimer.singleShot(900, lambda gen=generation: self._scan(gen))
+             return
+         self._scan_standard(generation)
