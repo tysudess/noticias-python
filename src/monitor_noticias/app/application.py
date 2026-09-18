@@ -42,6 +42,9 @@ class Application:
         from PySide6.QtWidgets import QApplication
         from monitor_noticias.app.composition import AppContainer
         from monitor_noticias.ui.main_window import MainWindow
+        from monitor_noticias.ui.screen_recorder_integration import (
+            install_screen_recorder,
+        )
 
         qt_app = QApplication.instance() or QApplication(sys.argv)
         qt_app.setApplicationName("Central Inteligente de Mídia")
@@ -53,6 +56,11 @@ class Application:
             controller=container.controller,
             paths=self.paths,
         )
+
+        # Nova aba nativa: Gravador de Tela.
+        # É instalada depois que o MainWindow monta sidebar, stack e tray.
+        install_screen_recorder(window)
+
         window.show()
 
         try:
