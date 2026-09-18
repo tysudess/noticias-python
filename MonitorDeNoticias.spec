@@ -15,6 +15,19 @@ capas_datas = [
     (str(CAPAS_ASSETS / "app_icon.ico"), "monitor_noticias/capas_tool/assets"),
 ]
 
+# O módulo nativo do PyAudioWPatch é importado dinamicamente pelo pacote.
+# Mantê-lo explicitamente evita builds que abrem normalmente mas mostram
+# "PyAudioWPatch não está disponível" somente no portable.
+audio_hidden = list(
+    dict.fromkeys(
+        pawp_hidden
+        + [
+            "pyaudiowpatch",
+            "_portaudiowpatch",
+        ]
+    )
+)
+
 block_cipher = None
 
 a = Analysis(
@@ -22,7 +35,7 @@ a = Analysis(
     pathex=["src"],
     binaries=pdfium_bins + pawp_bins,
     datas=pdfium_datas + pawp_datas + capas_datas,
-    hiddenimports=pdfium_hidden + pawp_hidden,
+    hiddenimports=pdfium_hidden + audio_hidden,
     hookspath=[],
     hooksconfig={},
     runtime_hooks=["scripts/pyi_runtime_portable_validation.py"],

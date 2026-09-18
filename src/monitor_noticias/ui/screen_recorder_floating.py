@@ -19,6 +19,7 @@ class FloatingRecorderWidget(QWidget):
     record_requested = Signal()
     pause_requested = Signal()
     stop_requested = Signal()
+    area_requested = Signal()
     central_requested = Signal()
 
     def __init__(self) -> None:
@@ -89,6 +90,18 @@ class FloatingRecorderWidget(QWidget):
         )
         layout.addWidget(self.stop)
 
+        self.area = QPushButton("ÁREA")
+        self.area.setObjectName(
+            "floatingArea"
+        )
+        self.area.clicked.connect(
+            self.area_requested.emit
+        )
+        self.area.setToolTip(
+            "Mover ou redimensionar a área mesmo durante a gravação"
+        )
+        layout.addWidget(self.area)
+
         self.central = QPushButton("CENTRAL")
         self.central.setObjectName(
             "floatingCentral"
@@ -109,17 +122,20 @@ class FloatingRecorderWidget(QWidget):
                 border:1px solid #29496D;
                 border-radius:12px;
             }
+
             QLabel#floatingDot {
                 color:#6F8198;
                 font-size:18px;
                 font-weight:900;
             }
+
             QLabel#floatingTimer {
                 color:#FFFFFF;
                 font-size:12px;
                 font-weight:900;
                 min-width:68px;
             }
+
             QPushButton {
                 border-radius:8px;
                 min-height:30px;
@@ -127,26 +143,37 @@ class FloatingRecorderWidget(QWidget):
                 font-size:9px;
                 font-weight:900;
             }
+
             QPushButton#floatingRec {
                 background:#E71D43;
                 color:white;
                 border:0;
             }
+
             QPushButton#floatingPause {
                 background:#FFF1C8;
                 color:#8B6100;
                 border:1px solid #EBCB74;
             }
+
             QPushButton#floatingStop {
                 background:#FFE5EA;
                 color:#C72444;
                 border:1px solid #F0A9B7;
             }
+
+            QPushButton#floatingArea {
+                background:#FFF0F3;
+                color:#D8173C;
+                border:1px solid #F0A9B7;
+            }
+
             QPushButton#floatingCentral {
                 background:#E7F2FF;
                 color:#086DCE;
                 border:1px solid #A9CDF2;
             }
+
             QPushButton:disabled {
                 background:#233346;
                 color:#718096;
@@ -211,16 +238,22 @@ class FloatingRecorderWidget(QWidget):
         recording = state == "recording"
         paused = state == "paused"
         starting = state == "starting"
+        finalizing = state == "finalizing"
         busy = recording or paused or starting
 
         self.record.setEnabled(
-            not busy
+            not busy and not finalizing
         )
         self.pause.setEnabled(
             recording or paused
         )
         self.stop.setEnabled(
             busy
+        )
+
+        # A área pode ser reajustada durante gravação e pausa.
+        self.area.setEnabled(
+            not starting and not finalizing
         )
 
         self.pause.setText(
@@ -236,6 +269,10 @@ class FloatingRecorderWidget(QWidget):
         elif paused:
             self.state_dot.setStyleSheet(
                 "color:#F4B000;"
+            )
+        elif finalizing:
+            self.state_dot.setStyleSheet(
+                "color:#2F90FF;"
             )
         else:
             self.state_dot.setStyleSheet(

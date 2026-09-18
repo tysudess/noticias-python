@@ -42,6 +42,7 @@ from monitor_noticias.ui.screen_recorder_audio import (
     AudioDevice,
     WasapiSegmentRecorder,
     backend_available,
+    backend_error,
     list_wasapi_devices,
 )
 from monitor_noticias.ui.screen_recorder_floating import (
@@ -249,9 +250,22 @@ class RegionEditorOverlay(QWidget):
 
     def showEvent(self, event) -> None:
         super().showEvent(event)
+        self._exclude_from_capture()
         self.raise_()
         self.activateWindow()
         self.setFocus()
+
+    def _exclude_from_capture(self) -> None:
+        if not sys.platform.startswith("win"):
+            return
+
+        try:
+            ctypes.windll.user32.SetWindowDisplayAffinity(
+                int(self.winId()),
+                0x00000011,
+            )
+        except Exception:
+            pass
 
     def keyPressEvent(
         self,
@@ -425,6 +439,9 @@ class RegionEditorOverlay(QWidget):
         if event.button() != Qt.MouseButton.LeftButton:
             return
 
+        was_creating = self._creating
+        had_drag = bool(self._drag_mode)
+
         if self._creating:
             self._creating = False
 
@@ -441,6 +458,15 @@ class RegionEditorOverlay(QWidget):
             event.position().toPoint()
         )
         self.update()
+
+        # V18.1: soltar o mouse já confirma. Não é mais necessário apertar Enter.
+        if (
+            (was_creating or had_drag)
+            and not self._selection.isEmpty()
+            and self._selection.width() >= self.MIN_W
+            and self._selection.height() >= self.MIN_H
+        ):
+            self._confirm()
 
     def mouseDoubleClickEvent(
         self,
@@ -634,7 +660,7 @@ class RegionEditorOverlay(QWidget):
                 self.rect(),
                 Qt.AlignmentFlag.AlignCenter,
                 "ARRASTE PARA CRIAR UMA NOVA ÁREA\n"
-                "Enter confirma • Esc cancela",
+                "Solte o mouse para aplicar • Esc cancela",
             )
             return
 
@@ -792,6 +818,7 @@ class ScreenRecorderPage(QWidget):
         self._audio_engine: WasapiSegmentRecorder | None = None
         self._audio_segments: list[Path | None] = []
         self._session_audio_device: AudioDevice | None = None
+        self._session_output_size: tuple[int, int] | None = None
 
         self._hidden_by_recorder = False
         self._module_enabled = False
@@ -818,6 +845,9 @@ class ScreenRecorderPage(QWidget):
         )
         self.floating.stop_requested.connect(
             self.stop_recording
+        )
+        self.floating.area_requested.connect(
+            self._floating_area_action
         )
         self.floating.central_requested.connect(
             self._show_central
@@ -1020,7 +1050,8 @@ class ScreenRecorderPage(QWidget):
 
         capture_help = QLabel(
             "Você pode recriar a área quantas vezes quiser. "
-            "Ao ajustar, arraste o centro para mover e as bordas/cantos para redimensionar."
+            "Arraste e solte: a mudança é aplicada automaticamente, sem Enter. "
+            "Durante a gravação use Ajustar área ou o botão ÁREA do controle flutuante."
         )
         capture_help.setObjectName(
             "recAudioStatus"
@@ -1722,8 +1753,15 @@ class ScreenRecorderPage(QWidget):
     # ------------------------------------------------------------------
 
     def _choose_region(self) -> None:
-        """Cria uma NOVA área, mesmo que já exista outra."""
-        if self.is_active or not self._module_enabled:
+        """Cria uma nova área inclusive durante gravação/pausa."""
+        if (
+            not self._module_enabled
+            or self._state
+            in {
+                self.STARTING,
+                self.FINALIZING,
+            }
+        ):
             return
 
         self._close_region_editor()
@@ -1733,11 +1771,12 @@ class ScreenRecorderPage(QWidget):
         if screen is None:
             return
 
+        self.mode_combo.blockSignals(True)
         self.mode_combo.setCurrentText(
             "Área personalizada"
         )
+        self.mode_combo.blockSignals(False)
 
-        # Esconde a moldura antiga enquanto o usuário cria a nova.
         self._capture_overlay.hide()
 
         editor = RegionEditorOverlay(
@@ -1759,9 +1798,13 @@ class ScreenRecorderPage(QWidget):
 
     def _adjust_region(self) -> None:
         if (
-            self.is_active
-            or not self._module_enabled
+            not self._module_enabled
             or self._region is None
+            or self._state
+            in {
+                self.STARTING,
+                self.FINALIZING,
+            }
         ):
             return
 
@@ -1791,28 +1834,28 @@ class ScreenRecorderPage(QWidget):
         self._region_editor = editor
         editor.show()
 
+    def _floating_area_action(self) -> None:
+        """Botão ÁREA do widget flutuante.
+
+        Se já há área personalizada, abre Ajustar.
+        Caso contrário, abre Nova área.
+        """
+        if self._region is None:
+            self._choose_region()
+        else:
+            self._adjust_region()
+
     def _region_accepted(
         self,
         rect: QRect,
     ) -> None:
         self._region_editor = None
-        self._region = QRect(
-            rect.normalized()
-        )
-        self.mode_combo.blockSignals(True)
-        self.mode_combo.setCurrentText(
-            "Área personalizada"
-        )
-        self.mode_combo.blockSignals(False)
-
-        self._update_capture_labels()
-        self._update_capture_overlay()
-
-        self.status_text.setText(
-            "Área definida: "
-            f"X {self._region.x()} • "
-            f"Y {self._region.y()} • "
-            f"{self._region.width()}×{self._region.height()}"
+        self._commit_capture_change(
+            QRect(rect.normalized()),
+            custom=True,
+            message=(
+                "Área aplicada automaticamente ao soltar o mouse."
+            ),
         )
 
     def _region_editor_cancelled(self) -> None:
@@ -1833,38 +1876,103 @@ class ScreenRecorderPage(QWidget):
                 pass
 
     def _clear_region(self) -> None:
-        if self.is_active:
+        if (
+            self._state
+            in {
+                self.STARTING,
+                self.FINALIZING,
+            }
+        ):
             return
 
         self._close_region_editor()
-        self._region = None
+        self._commit_capture_change(
+            None,
+            custom=False,
+            message=(
+                "Área personalizada removida. "
+                "A captura voltou para a tela inteira."
+            ),
+        )
+
+    def _commit_capture_change(
+        self,
+        rect: QRect | None,
+        *,
+        custom: bool,
+        message: str,
+    ) -> None:
+        """Aplica mudança de área sem interromper a sessão do usuário.
+
+        FFmpeg/gdigrab não muda offset/tamanho de uma captura já aberta.
+        Portanto, durante gravação, fechamos o segmento atual e abrimos outro
+        automaticamente com a nova área. Na finalização, os segmentos são
+        unidos em um único MP4.
+        """
+        was_recording = (
+            self._state == self.RECORDING
+        )
+
+        if was_recording:
+            self.status_text.setText(
+                "Aplicando nova área à gravação…"
+            )
+            QApplication.processEvents()
+            self._finish_current_segment()
+
+        self._region = (
+            QRect(rect)
+            if rect is not None
+            else None
+        )
 
         self.mode_combo.blockSignals(True)
         self.mode_combo.setCurrentText(
-            "Tela inteira"
+            (
+                "Área personalizada"
+                if custom
+                else "Tela inteira"
+            )
         )
         self.mode_combo.blockSignals(False)
 
         self._update_capture_labels()
         self._update_capture_overlay()
 
-        self.status_text.setText(
-            "Área personalizada removida. "
-            "A captura voltou para a tela inteira."
-        )
+        if was_recording:
+            if self._start_segment():
+                self._apply_state(
+                    self.RECORDING,
+                    message
+                    + " A gravação continuou automaticamente.",
+                )
+            else:
+                self._apply_state(
+                    self.ERROR,
+                    "A área foi alterada, mas não foi possível "
+                    "reiniciar a captura.",
+                )
+        else:
+            self.status_text.setText(
+                message
+            )
 
     def _mode_changed(
         self,
-        text: str,
+        value: str,
     ) -> None:
-        if text == "Tela inteira":
+        if self.is_active:
+            # Durante gravação use Nova área / Ajustar área / Remover área
+            # ou o botão ÁREA do widget flutuante.
+            return
+
+        if value == "Tela inteira":
             self._region = None
 
         elif (
-            text == "Área personalizada"
+            value == "Área personalizada"
             and self._region is None
             and self._module_enabled
-            and not self.is_active
         ):
             QTimer.singleShot(
                 0,
@@ -1944,20 +2052,24 @@ class ScreenRecorderPage(QWidget):
             "font-weight:900;"
         )
 
-        idle = (
+        can_adjust = (
             self._module_enabled
-            and not self.is_active
+            and self._state
+            not in {
+                self.STARTING,
+                self.FINALIZING,
+            }
         )
 
         self.new_region_button.setEnabled(
-            idle
+            can_adjust
         )
         self.adjust_region.setEnabled(
-            idle
+            can_adjust
             and custom
         )
         self.clear_region.setEnabled(
-            idle
+            can_adjust
             and custom
         )
 
@@ -2093,9 +2205,16 @@ class ScreenRecorderPage(QWidget):
         )
 
         if not backend_available():
+            detail = backend_error()
             self.audio_status.setText(
-                "PyAudioWPatch não está disponível. "
-                "O portable precisa ser recompilado com a V18."
+                "Backend WASAPI não carregou no portable"
+                + (
+                    f": {detail}"
+                    if detail
+                    else "."
+                )
+                + " Use os arquivos V18.1, incluindo requirements, "
+                "spec e workflow."
             )
         elif system_index >= 0:
             self.audio_status.setText(
@@ -2470,6 +2589,13 @@ class ScreenRecorderPage(QWidget):
         self._session_audio_device = (
             self._selected_audio_device()
         )
+
+        initial_rect = self._capture_rect()
+        self._session_output_size = (
+            initial_rect.width(),
+            initial_rect.height(),
+        )
+
         self._elapsed_before_segment = 0.0
 
         if not self._start_segment():
@@ -2622,6 +2748,40 @@ class ScreenRecorderPage(QWidget):
             "veryfast",
             "-crf",
             str(crf),
+        ]
+
+        target_size = (
+            self._session_output_size
+            or (
+                rect.width(),
+                rect.height(),
+            )
+        )
+        target_w = max(
+            2,
+            int(target_size[0]),
+        )
+        target_h = max(
+            2,
+            int(target_size[1]),
+        )
+
+        if target_w % 2:
+            target_w -= 1
+        if target_h % 2:
+            target_h -= 1
+
+        # Mantém todos os segmentos na mesma resolução, mesmo que a área
+        # seja redimensionada durante a gravação. Isso permite concatenar
+        # tudo em um único MP4 no final.
+        command += [
+            "-vf",
+            (
+                f"scale={target_w}:{target_h}:"
+                "force_original_aspect_ratio=decrease,"
+                f"pad={target_w}:{target_h}:"
+                "(ow-iw)/2:(oh-ih)/2:black"
+            ),
             "-pix_fmt",
             "yuv420p",
             "-r",
@@ -3145,6 +3305,7 @@ class ScreenRecorderPage(QWidget):
         self._segments = []
         self._audio_segments = []
         self._session_audio_device = None
+        self._session_output_size = None
 
         if (
             self._session_dir is not None

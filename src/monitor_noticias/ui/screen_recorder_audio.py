@@ -5,10 +5,15 @@ import wave
 from dataclasses import dataclass
 from pathlib import Path
 
+_BACKEND_IMPORT_ERROR = ""
+
 try:
     import pyaudiowpatch as pyaudio
-except Exception:
+except Exception as exc:
     pyaudio = None
+    _BACKEND_IMPORT_ERROR = (
+        f"{exc.__class__.__name__}: {exc}"
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -25,17 +30,70 @@ def backend_available() -> bool:
     return pyaudio is not None
 
 
-def list_wasapi_devices() -> tuple[list[AudioDevice], str]:
-    """Lista loopback do sistema + entradas WASAPI reais.
+def backend_error() -> str:
+    return _BACKEND_IMPORT_ERROR
 
-    O primeiro dispositivo, quando disponível, é o loopback dos alto-falantes
-    padrão. Isso permite capturar o áudio que está saindo no Windows mesmo
-    quando o PC não possui "Stereo Mix".
+
+def _clean_channels(value: object) -> int:
+    try:
+        channels = int(value or 0)
+    except Exception:
+        channels = 0
+
+    # 1 ou 2 canais tornam a gravação mais previsível na junção com MP4.
+    return max(1, min(2, channels or 2))
+
+
+def _clean_rate(value: object) -> int:
+    try:
+        return max(8000, int(float(value or 48000)))
+    except Exception:
+        return 48000
+
+
+def _device_from_info(
+    info: dict,
+    *,
+    kind: str,
+) -> AudioDevice:
+    index = int(info["index"])
+    return AudioDevice(
+        key=f"{kind}:{index}",
+        name=str(
+            info.get("name")
+            or (
+                "Áudio do sistema"
+                if kind == "system"
+                else f"Microfone {index}"
+            )
+        ),
+        index=index,
+        channels=_clean_channels(
+            info.get("maxInputChannels")
+        ),
+        rate=_clean_rate(
+            info.get("defaultSampleRate")
+        ),
+        kind=kind,
+    )
+
+
+def list_wasapi_devices() -> tuple[list[AudioDevice], str]:
+    """Lista áudio do sistema por WASAPI loopback e microfones.
+
+    O áudio do sistema NÃO depende de Stereo Mix. PyAudioWPatch cria
+    dispositivos de loopback WASAPI para as saídas do Windows.
     """
     if pyaudio is None:
+        detail = (
+            f" ({_BACKEND_IMPORT_ERROR})"
+            if _BACKEND_IMPORT_ERROR
+            else ""
+        )
         return [], (
-            "PyAudioWPatch não está instalado. "
-            "Adicione PyAudioWPatch==0.2.12.8 ao requirements.txt."
+            "PyAudioWPatch não pôde ser carregado"
+            f"{detail}. "
+            "O portable deve conter pyaudiowpatch e _portaudiowpatch.pyd."
         )
 
     devices: list[AudioDevice] = []
@@ -44,120 +102,195 @@ def list_wasapi_devices() -> tuple[list[AudioDevice], str]:
     try:
         manager = pyaudio.PyAudio()
     except Exception as exc:
-        return [], f"Falha ao iniciar WASAPI: {exc}"
+        return [], (
+            "Falha ao iniciar o backend WASAPI: "
+            f"{exc.__class__.__name__}: {exc}"
+        )
 
     try:
-        # Áudio do sistema: loopback do dispositivo de saída padrão.
+        loopback_info = None
+
+        # Caminho preferencial suportado pelo PyAudioWPatch.
         try:
-            loopback = manager.get_default_wasapi_loopback()
-            channels = max(
-                1,
-                min(
-                    2,
-                    int(loopback.get("maxInputChannels") or 2),
-                ),
-            )
-            rate = int(
-                float(
-                    loopback.get("defaultSampleRate")
-                    or 48000
-                )
-            )
-            devices.append(
-                AudioDevice(
-                    key=f"system:{int(loopback['index'])}",
-                    name=str(loopback.get("name") or "Áudio do sistema"),
-                    index=int(loopback["index"]),
-                    channels=channels,
-                    rate=rate,
-                    kind="system",
-                )
+            loopback_info = (
+                manager.get_default_wasapi_loopback()
             )
             diagnostic.append(
-                "SYSTEM LOOPBACK: "
-                f"{loopback.get('index')} | "
-                f"{loopback.get('name')} | "
-                f"{channels}ch | {rate}Hz"
+                "DEFAULT WASAPI LOOPBACK localizado."
             )
         except Exception as exc:
             diagnostic.append(
-                f"SYSTEM LOOPBACK indisponível: {exc}"
+                "get_default_wasapi_loopback falhou: "
+                f"{exc.__class__.__name__}: {exc}"
             )
 
-        # Microfones / entradas WASAPI.
-        try:
-            wasapi = manager.get_host_api_info_by_type(
-                pyaudio.paWASAPI
+        # Fallback documentado: localizar o loopback análogo ao
+        # dispositivo de saída WASAPI padrão.
+        if loopback_info is None:
+            try:
+                wasapi = (
+                    manager.get_host_api_info_by_type(
+                        pyaudio.paWASAPI
+                    )
+                )
+                default_output = (
+                    manager.get_device_info_by_index(
+                        int(
+                            wasapi[
+                                "defaultOutputDevice"
+                            ]
+                        )
+                    )
+                )
+
+                if bool(
+                    default_output.get(
+                        "isLoopbackDevice"
+                    )
+                ):
+                    loopback_info = default_output
+                else:
+                    output_name = str(
+                        default_output.get(
+                            "name"
+                        )
+                        or ""
+                    )
+
+                    for candidate in (
+                        manager.get_loopback_device_info_generator()
+                    ):
+                        candidate_name = str(
+                            candidate.get("name")
+                            or ""
+                        )
+
+                        if (
+                            output_name
+                            and output_name
+                            in candidate_name
+                        ):
+                            loopback_info = candidate
+                            break
+            except Exception as exc:
+                diagnostic.append(
+                    "Fallback WASAPI padrão falhou: "
+                    f"{exc.__class__.__name__}: {exc}"
+                )
+
+        # Último fallback: primeiro loopback disponível.
+        if loopback_info is None:
+            try:
+                loopbacks = list(
+                    manager.get_loopback_device_info_generator()
+                )
+
+                if loopbacks:
+                    loopback_info = loopbacks[0]
+            except Exception as exc:
+                diagnostic.append(
+                    "Enumeração de loopbacks falhou: "
+                    f"{exc.__class__.__name__}: {exc}"
+                )
+
+        seen: set[int] = set()
+
+        if loopback_info is not None:
+            system = _device_from_info(
+                loopback_info,
+                kind="system",
             )
-            wasapi_index = int(wasapi["index"])
+            devices.append(system)
+            seen.add(system.index)
+
+            diagnostic.append(
+                "SYSTEM: "
+                f"{system.index} | "
+                f"{system.name} | "
+                f"{system.channels}ch | "
+                f"{system.rate}Hz"
+            )
+        else:
+            diagnostic.append(
+                "SYSTEM: nenhum loopback WASAPI encontrado."
+            )
+
+        # Entradas reais do WASAPI (microfones/interface).
+        try:
+            wasapi = (
+                manager.get_host_api_info_by_type(
+                    pyaudio.paWASAPI
+                )
+            )
+            wasapi_index = int(
+                wasapi["index"]
+            )
         except Exception:
             wasapi_index = -1
 
-        seen: set[int] = {
-            device.index
-            for device in devices
-        }
-
-        for index in range(manager.get_device_count()):
+        for index in range(
+            manager.get_device_count()
+        ):
             try:
-                info = manager.get_device_info_by_index(index)
+                info = (
+                    manager.get_device_info_by_index(
+                        index
+                    )
+                )
             except Exception:
+                continue
+
+            if index in seen:
                 continue
 
             try:
                 if (
                     wasapi_index >= 0
-                    and int(info.get("hostApi", -1))
+                    and int(
+                        info.get(
+                            "hostApi",
+                            -1,
+                        )
+                    )
                     != wasapi_index
                 ):
                     continue
             except Exception:
-                pass
+                continue
 
-            max_inputs = int(
-                info.get("maxInputChannels") or 0
-            )
-            is_loopback = bool(
-                info.get("isLoopbackDevice")
-            )
-
-            if (
-                max_inputs <= 0
-                or is_loopback
-                or index in seen
+            if bool(
+                info.get(
+                    "isLoopbackDevice"
+                )
             ):
                 continue
 
-            channels = max(
-                1,
-                min(2, max_inputs),
-            )
-            rate = int(
-                float(
-                    info.get("defaultSampleRate")
-                    or 48000
+            try:
+                max_inputs = int(
+                    info.get(
+                        "maxInputChannels"
+                    )
+                    or 0
                 )
-            )
-            name = str(
-                info.get("name")
-                or f"Entrada {index}"
-            )
+            except Exception:
+                max_inputs = 0
 
-            devices.append(
-                AudioDevice(
-                    key=f"mic:{index}",
-                    name=name,
-                    index=index,
-                    channels=channels,
-                    rate=rate,
-                    kind="microphone",
-                )
+            if max_inputs <= 0:
+                continue
+
+            mic = _device_from_info(
+                info,
+                kind="microphone",
             )
-            seen.add(index)
+            devices.append(mic)
+            seen.add(mic.index)
+
             diagnostic.append(
                 "MIC: "
-                f"{index} | {name} | "
-                f"{channels}ch | {rate}Hz"
+                f"{mic.index} | "
+                f"{mic.name} | "
+                f"{mic.channels}ch | "
+                f"{mic.rate}Hz"
             )
 
     finally:
@@ -175,11 +308,7 @@ def list_wasapi_devices() -> tuple[list[AudioDevice], str]:
 
 
 class WasapiSegmentRecorder:
-    """Grava um segmento WAV via WASAPI/PyAudioWPatch.
-
-    PortAudio usa seu próprio callback em tempo real, portanto não precisamos
-    manter uma thread Python bloqueada lendo o dispositivo.
-    """
+    """Grava um WAV via callback PortAudio/WASAPI."""
 
     def __init__(
         self,
@@ -188,7 +317,11 @@ class WasapiSegmentRecorder:
     ) -> None:
         if pyaudio is None:
             raise RuntimeError(
-                "PyAudioWPatch não está disponível."
+                "PyAudioWPatch indisponível: "
+                + (
+                    _BACKEND_IMPORT_ERROR
+                    or "backend não carregado"
+                )
             )
 
         self.device = device
@@ -199,7 +332,6 @@ class WasapiSegmentRecorder:
         self._wave = None
         self._lock = threading.Lock()
         self._error: str | None = None
-        self._started = False
 
     @property
     def error(self) -> str | None:
@@ -248,7 +380,9 @@ class WasapiSegmentRecorder:
                             in_data
                         )
             except Exception as exc:
-                self._error = str(exc)
+                self._error = (
+                    f"{exc.__class__.__name__}: {exc}"
+                )
 
             return (
                 in_data,
@@ -266,7 +400,7 @@ class WasapiSegmentRecorder:
                 stream_callback=callback,
             )
             self._stream.start_stream()
-            self._started = True
+
         except Exception:
             self.stop()
             raise
@@ -281,6 +415,7 @@ class WasapiSegmentRecorder:
                     stream.stop_stream()
             except Exception:
                 pass
+
             try:
                 stream.close()
             except Exception:
@@ -304,5 +439,3 @@ class WasapiSegmentRecorder:
                 manager.terminate()
             except Exception:
                 pass
-
-        self._started = False
