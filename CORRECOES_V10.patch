@@ -1,0 +1,186 @@
+diff --git a/src/monitor_noticias/ui/main_window.py b/src/monitor_noticias/ui/main_window.py
+--- a/src/monitor_noticias/ui/main_window.py
++++ b/src/monitor_noticias/ui/main_window.py
+@@
+         return (
+             Section.HOME,
+             Section.NEWS,
+             Section.VIDEOS,
+             Section.DEMANDS,
+             Section.SOURCES,
+             Section.HISTORY,
+             Section.TERMS,
+             Section.STOP,
+-            Section.SETTINGS,
+             Section.NEWS_EXTRACTOR,
+             Section.COVERS,
+             Section.PDF_EDITOR,
+             Section.EXTRACTOR,
+             Section.VIDEO_EDITOR,
++            Section.SETTINGS,
+         )
+
+diff --git a/src/monitor_noticias/ui/pdf_editor_page.py b/src/monitor_noticias/ui/pdf_editor_page.py
+--- a/src/monitor_noticias/ui/pdf_editor_page.py
++++ b/src/monitor_noticias/ui/pdf_editor_page.py
+@@
+     def _start_crop(self) -> None:
+         index = self.model.selected_index
+         if index not in range(len(self.model.pages)):
+             QMessageBox.critical(self, "Editor de PDF", "Selecione uma página para recortar.")
+             return
++
++        # O corte precisa ter prioridade sobre qualquer preview anterior.
++        # O bug anterior acontecia porque _run_image_worker incrementava o token
++        # novamente quando uma renderização ainda estava ativa. Assim, o worker
++        # do próprio corte nascia com um token que já estava inválido e
++        # preview.begin_crop(...) nunca era executado.
+         self._preview_token += 1
+         token = self._preview_token
+         page = self.model.pages[index]
++
++        self.status.setText(
++            "Preparando recorte... depois clique e arraste sobre a área que deseja manter."
++        )
++
+         self._run_image_worker(
+             token,
+             lambda: self.model.render_transformed_source(page, 120),
+-            lambda image: self.preview.begin_crop(image, self.model.zoom, page.crop),
++            lambda image: self._begin_crop_ready(image, page.crop),
+         )
+
++    def _begin_crop_ready(self, image: QImage, existing_crop: PdfCrop | None) -> None:
++        self.preview.begin_crop(
++            image,
++            self.model.zoom,
++            existing_crop,
++        )
++        self.preview.setFocus(Qt.FocusReason.OtherFocusReason)
++        self.status.setText(
++            "MODO CORTAR ATIVO — clique e arraste sobre a página; ao soltar, o recorte será aplicado."
++        )
++
+     def _crop_done(self, crop: PdfCrop) -> None:
+         if self.model.apply_crop(crop):
++            self.status.setText(
++                "Recorte aplicado. Use Ctrl+Z para desfazer."
++            )
+             self._refresh_all()
+
+     def _run_image_worker(self, token: int, fn, on_done=None) -> None:
+-        if self._preview_thread is not None and self._preview_thread.isRunning():
+-            self._preview_token += 1
++        # NÃO alterar o token aqui.
++        #
++        # O chamador já cria um token novo antes de iniciar o worker.
++        # Incrementar novamente neste ponto invalidava exatamente o worker
++        # recém-criado quando outro preview ainda estava terminando, quebrando
++        # principalmente o botão "Cortar".
+         thread = QThread(self)
+         worker = _ImageWorker(token, fn)
+         worker.moveToThread(thread)
+         thread.started.connect(worker.run)
+@@
+         self._preview_worker = worker
+         thread.start()
+
+diff --git a/src/monitor_noticias/video_editor/integrated_editor/advanced_editor.py b/src/monitor_noticias/video_editor/integrated_editor/advanced_editor.py
+--- a/src/monitor_noticias/video_editor/integrated_editor/advanced_editor.py
++++ b/src/monitor_noticias/video_editor/integrated_editor/advanced_editor.py
+@@
+ class TimelineWidget(QWidget):
+@@
+         self.drag_press_x = 0.0
+         self.drag_press_y = 0.0
+         self.setToolTip('Clique para posicionar o cursor. Clique e arraste qualquer parte do vídeo para mudar sua posição na timeline.')
+         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+-        self.setMinimumHeight(146)
++        # 154 px dão folga real para régua, clipe, playhead e borda inferior.
++        # Antes o widget tinha 146 px e o QScrollArea ainda consumia parte da
++        # altura com a barra horizontal, fazendo a timeline parecer cortada.
++        self.setMinimumHeight(154)
++        self.setMaximumHeight(154)
+         self.setMouseTracking(True)
+         self._update_width()
+
+     def sizeHint(self):
+-        return QSize(self._timeline_width(), 146)
++        return QSize(self._timeline_width(), 154)
+@@
+     def _update_width(self):
+         self.setMinimumWidth(max(320, self._timeline_width()))
+-        self.resize(max(320, self._timeline_width()), 146)
++        self.resize(max(320, self._timeline_width()), 154)
+         self.updateGeometry()
+
+diff --git a/src/monitor_noticias/ui/video_editor_reference_page.py b/src/monitor_noticias/ui/video_editor_reference_page.py
+--- a/src/monitor_noticias/ui/video_editor_reference_page.py
++++ b/src/monitor_noticias/ui/video_editor_reference_page.py
+@@
+         self.video.setStyleSheet(
+             "background:#000000;border:0;"
+         )
+
+-        self.video.setMinimumHeight(260)
+-        self.video.setMaximumHeight(340)
++        # Refino do editor:
++        # reduz um pouco a prévia para que a timeline caiba inteira em telas
++        # 900/960p sem sacrificar a área de vídeo.
++        self.video.setMinimumHeight(235)
++        self.video.setMaximumHeight(305)
+
+-        self.timeline_scroll.setMinimumHeight(128)
+-        self.timeline_scroll.setMaximumHeight(155)
++        # O scroll horizontal ocupa cerca de 9/10 px. Com o limite antigo de
++        # 155 px, o viewport ficava menor que o TimelineWidget e cortava a parte
++        # inferior do clipe/playhead. Agora existe folga suficiente.
++        self.timeline.setMinimumHeight(154)
++        self.timeline.setMaximumHeight(154)
++        self.timeline_scroll.setMinimumHeight(176)
++        self.timeline_scroll.setMaximumHeight(184)
+
+         palette = QPalette()
+@@
+         self.timeline_scroll.setStyleSheet(
+             """
+             QScrollArea {
+                 background:#FBFDFF;
+                 border:1px solid #D4E4F5;
+                 border-radius:8px;
++                padding:0px;
+             }
+             QScrollBar:horizontal {
+                 background:#EDF4FC;
+-                height:9px;
++                height:10px;
++                margin:0px;
++                border:0px;
+             }
+             QScrollBar::handle:horizontal {
+                 background:#8BB9E8;
+                 min-width:45px;
+                 border-radius:4px;
+             }
++            QScrollBar::add-line:horizontal,
++            QScrollBar::sub-line:horizontal {
++                width:0px;
++            }
+             """
+         )
+@@
+         self.editor = ReferenceAdvancedVideoEditorWidget(
+             self.videos_dir,
+             self.ffmpeg,
+             self.ffprobe,
+             self.scroll,
+         )
+
+         self.editor.setMinimumWidth(1000)
+-        self.editor.setMinimumHeight(700)
++        # A página externa já possui scroll vertical. Uma altura mínima um pouco
++        # maior impede que os cards da timeline sejam comprimidos/cortados.
++        self.editor.setMinimumHeight(790)
+
+         self.scroll.setWidget(self.editor)
+         root.addWidget(self.scroll, 1)
