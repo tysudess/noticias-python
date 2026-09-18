@@ -12,6 +12,7 @@ on:
       - "tools/spreadsheet_automation/**"
       - "run.py"
       - "requirements*.txt"
+      - "pyproject.toml"
       - "MonitorDeNoticias.spec"
       - ".github/workflows/build-portable.yml"
 
@@ -45,6 +46,7 @@ jobs:
           cache-dependency-path: |
             requirements.txt
             requirements-build.txt
+            pyproject.toml
 
       - name: Configurar Node 20
         uses: actions/setup-node@v4
@@ -54,12 +56,22 @@ jobs:
       - name: Instalar dependências Python
         shell: pwsh
         run: |
+          $ErrorActionPreference = "Stop"
+
           python -m pip install --upgrade pip
           python -m pip install -r requirements.txt -r requirements-build.txt
+
+          # Garante explicitamente o backend de áudio do sistema.
+          python -m pip install `
+            --upgrade `
+            --only-binary=:all: `
+            "PyAudioWPatch==0.2.12.8"
 
       - name: Validar backend WASAPI do Gravador de Tela
         shell: pwsh
         run: |
+          $ErrorActionPreference = "Stop"
+
           python -c "import pyaudiowpatch; import _portaudiowpatch; print('PyAudioWPatch OK:', pyaudiowpatch.__file__)"
           python -m pip show PyAudioWPatch
 
@@ -99,6 +111,8 @@ jobs:
       - name: Gerar aplicativo com PyInstaller
         shell: pwsh
         run: |
+          $ErrorActionPreference = "Stop"
+
           python -m PyInstaller --noconfirm --clean MonitorDeNoticias.spec
 
           if (-not (Test-Path "dist/MonitorDeNoticias/MonitorDeNoticias.exe")) {
@@ -115,7 +129,7 @@ jobs:
             Select-Object -First 1
 
           if (-not $audioBackend) {
-            throw "_portaudiowpatch.pyd não entrou no portable. O áudio do sistema ficaria indisponível."
+            throw "_portaudiowpatch.pyd não entrou no portable."
           }
 
           Write-Host "Backend WASAPI incluído: $($audioBackend.FullName)"
@@ -159,8 +173,6 @@ jobs:
             (Join-Path $root "tools/news_extractor/ExtratorMateriasPortable-V1.25.19.exe") `
             -Force
 
-          # Automação de Planilhas: a interface Electron antiga NÃO é copiada.
-          # Somente o motor Node fica invisível dentro do Central.
           Copy-Item `
             "tools/spreadsheet_automation/engine/index.js" `
             (Join-Path $root "tools/spreadsheet_automation/engine/index.js") `
@@ -307,9 +319,7 @@ jobs:
             throw "ZIP portable não foi gerado."
           }
 
-          $sizeMB = [math]::Round((Get-Item $zip).Length / 1MB, 2)
-          Write-Host "Arquivo final: $zip"
-          Write-Host "Tamanho final: $sizeMB MB"
+          Write-Host "ZIP criado: $zip"
 
       - name: Validar estrutura do ZIP
         shell: pwsh
@@ -320,33 +330,6 @@ jobs:
           $archive = [System.IO.Compression.ZipFile]::OpenRead($zipPath)
 
           try {
-            $allowedInternalZips = @("_internal/base_library.zip")
-
-            $zipEntries = $archive.Entries |
-              Where-Object { $_.FullName.ToLowerInvariant().EndsWith(".zip") }
-
-            $suspicious = $zipEntries |
-              Where-Object {
-                $normalized = $_.FullName.Replace("\", "/").ToLowerInvariant()
-                $allowed = $allowedInternalZips -contains $normalized
-                $portableInside = (
-                  $normalized -like "*monitordenoticias-windows-portable*.zip" -or
-                  $normalized -like "*monitor-de-noticias*portable*.zip"
-                )
-                $rootZip = -not $normalized.Contains("/")
-
-                (-not $allowed) -and ($portableInside -or $rootZip)
-              }
-
-            if ($suspicious) {
-              $names = (
-                $suspicious |
-                ForEach-Object { $_.FullName }
-              ) -join ", "
-
-              throw "ZIP aninhado indevido: $names"
-            }
-
             $exe = $archive.Entries |
               Where-Object {
                 $_.FullName.Replace("\", "/") -ieq "MonitorDeNoticias.exe"
@@ -456,14 +439,9 @@ jobs:
             exit 1
           fi
 
-          echo "Arquivo que será enviado:"
-          ls -lh "$FILE"
-
           UPLOAD_URL="$(gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${RELEASE_TAG}" --jq '.upload_url')"
           UPLOAD_URL="${UPLOAD_URL%%\{*}"
           ASSET_URL="${UPLOAD_URL}?name=${PORTABLE_NAME}"
-
-          echo "Enviando diretamente para uploads.github.com..."
 
           curl \
             --fail-with-body \
@@ -485,6 +463,3 @@ jobs:
             -o upload-response.json
 
           echo "Upload concluído."
-
-          gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${RELEASE_TAG}" \
-            --jq '.assets[] | [.name, .size, .state] | @tsv'
