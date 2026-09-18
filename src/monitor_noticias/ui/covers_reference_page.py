@@ -498,10 +498,18 @@ class ReferenceCoversPage(QWidget):
             # Mantém o resolver reforçado do ajuste anterior quando disponível.
             try:
                 from monitor_noticias.capas_tool.app import web_resolver
+                from monitor_noticias.capas_tool.app import ui as covers_ui
                 from monitor_noticias.capas_tool.app.web_resolver_patch import (
                     RobustFrontPageResolver,
                 )
+
+                # web_resolver.Resolver é usado por imports novos.
                 web_resolver.Resolver = RobustFrontPageResolver
+
+                # ui.py importou "Resolver" por valor na inicialização.
+                # Portanto também precisamos substituir o símbolo já importado.
+                covers_ui.Resolver = RobustFrontPageResolver
+
             except Exception:
                 pass
 

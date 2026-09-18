@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 
+from PySide6.QtCore import QTimer, QUrl
+
 from .web_resolver import (
     FrontPageResolver,
     CURRENT_WEBP_JS,
@@ -188,7 +190,77 @@ META_COVER_JS = r"""
 
 
 class RobustFrontPageResolver(FrontPageResolver):
-    """Procura capas também em meta tags, lazy-load, srcset e CDN."""
+    """Resolver reforçado para Washington Post e Valor.
+
+    Além do detector ampliado, dá tempo suficiente para FrontPages concluir
+    lazy-load, scripts e anúncios antes de considerar a capa indisponível.
+    """
+
+    SOURCE_TIMEOUT_MS = 45000
+    MAX_SCAN_ATTEMPTS = 10
+
+    def _start_next_source(self):
+        self.browser.destroy_page()
+        self._source_index += 1
+
+        if self._source_index >= len(self._sources):
+            cb = self.done_cb
+            self.done_cb = None
+            self._finished = True
+
+            if cb:
+                cb(
+                    None,
+                    "capa correta não confirmada "
+                    "(timeout/capa não localizada)",
+                )
+            return
+
+        self._generation += 1
+        generation = self._generation
+        self._finished = False
+        self._scan_count = 0
+
+        source = self._sources[
+            self._source_index
+        ]
+
+        self.last_referer = source
+        self.last_cookie_header = ""
+
+        self.progress.emit(
+            "Abrindo FrontPages…"
+            if "frontpages.com" in source
+            else "Tentando PressReader…"
+        )
+
+        self.page = self.browser.new_page(
+            lambda _u, _g=generation: None
+        )
+        self.page.loadFinished.connect(
+            lambda ok, gen=generation:
+            self._after_load(ok, gen)
+        )
+        self.page.load(QUrl(source))
+
+        # FrontPages pode manter a página em loading por publicidade/lazy-load.
+        # Fazemos uma inspeção antecipada sem cancelar a navegação.
+        QTimer.singleShot(
+            10000,
+            lambda gen=generation:
+            self._scan(gen)
+            if self._active(gen)
+            else None,
+        )
+
+        QTimer.singleShot(
+            self.SOURCE_TIMEOUT_MS,
+            lambda gen=generation:
+            self._source_failed(
+                "timeout do navegador interno",
+                gen,
+            ),
+        )
 
     def _scan(self, generation: int):
         if not self._active(generation) or not self.page:
@@ -218,6 +290,42 @@ class RobustFrontPageResolver(FrontPageResolver):
                 r,
                 gen,
             ),
+        )
+
+    def _direct_result(self, result, generation: int) -> None:
+        if not self._active(generation):
+            return
+
+        url = _cleanup(str(result or ""))
+        low = url.lower()
+
+        expected = (
+            url.startswith("https://www.frontpages.com/g/")
+            and f"/{self._slug}-" in low
+            and ".webp" in low
+            and not (
+                self._slug == "the-washington-post"
+                and "sports" in low
+            )
+        )
+
+        if expected:
+            self._success(
+                url,
+                generation,
+            )
+            return
+
+        if self._scan_count < self.MAX_SCAN_ATTEMPTS:
+            QTimer.singleShot(
+                900,
+                lambda gen=generation:
+                self._scan(gen),
+            )
+            return
+
+        self._scan_standard(
+            generation
         )
 
     def _meta_result(self, result, generation: int) -> None:

@@ -16,6 +16,7 @@ from PySide6.QtWidgets import (
     QFrame,
     QHBoxLayout,
     QLabel,
+    QMessageBox,
     QPushButton,
     QVBoxLayout,
 )
@@ -224,6 +225,68 @@ class ReferencePdfEditorPage(PdfEditorPage):
             pass
 
         super().__init__(app_root)
+
+    def _start_crop(self) -> None:
+        """Ativa o recorte de forma direta e confiável.
+
+        O worker assíncrono usado pela tela-base pode invalidar o token do
+        próprio recorte quando uma prévia anterior ainda está terminando.
+        Nesta página de referência o recorte é preparado diretamente, evitando
+        essa corrida e garantindo que o clique/arraste seja habilitado.
+        """
+        index = self.model.selected_index
+
+        if index not in range(len(self.model.pages)):
+            QMessageBox.critical(
+                self,
+                "Editor de PDF",
+                "Selecione uma página para recortar.",
+            )
+            return
+
+        page = self.model.pages[index]
+
+        self.status.setText(
+            "Preparando o modo de corte..."
+        )
+
+        try:
+            rendered = self.model.render_transformed_source(
+                page,
+                120,
+            )
+            image = _pil_to_qimage(rendered)
+        except Exception as exc:
+            QMessageBox.critical(
+                self,
+                "Editor de PDF",
+                f"Não foi possível preparar o recorte:\\n{exc}",
+            )
+            self.status.setText(
+                "Falha ao preparar o recorte."
+            )
+            return
+
+        self.preview.begin_crop(
+            image,
+            self.model.zoom,
+            page.crop,
+        )
+        self.preview.setFocus(
+            Qt.FocusReason.OtherFocusReason
+        )
+
+        self.status.setText(
+            "MODO CORTAR ATIVO — clique e arraste sobre a área "
+            "que deseja manter. Ao soltar, o recorte será aplicado."
+        )
+
+    def _crop_done(self, crop) -> None:
+        if self.model.apply_crop(crop):
+            self.status.setText(
+                "Recorte aplicado. Use Ctrl+Z para desfazer."
+            )
+            self._refresh_all()
 
     def _tool_button(
         self,

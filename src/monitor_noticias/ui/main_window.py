@@ -130,12 +130,12 @@ class MainWindow(QMainWindow):
             Section.HISTORY,
             Section.TERMS,
             Section.STOP,
-            Section.SETTINGS,
             Section.NEWS_EXTRACTOR,
             Section.COVERS,
             Section.PDF_EDITOR,
             Section.EXTRACTOR,
             Section.VIDEO_EDITOR,
+            Section.SETTINGS,
         )
 
     @staticmethod

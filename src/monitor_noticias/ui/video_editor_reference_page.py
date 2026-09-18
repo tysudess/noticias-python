@@ -3,9 +3,11 @@ from __future__ import annotations
 from pathlib import Path
 
 from PySide6.QtCore import QUrl, Qt, Signal
-from PySide6.QtGui import QColor, QPalette
+from PySide6.QtGui import QColor, QPalette, QPixmap
+from PySide6.QtMultimedia import QVideoSink
 from PySide6.QtWidgets import (
     QComboBox,
+    QLabel,
     QLineEdit,
     QPushButton,
     QScrollArea,
@@ -37,6 +39,11 @@ class ReferenceAdvancedVideoEditorWidget(
             parent,
         )
 
+        # Alguns MP4 reproduziam áudio/tempo e geravam miniaturas, mas o
+        # QVideoWidget permanecia preto. A prévia usa um QVideoSink dedicado
+        # e desenha os frames diretamente num QLabel.
+        self._install_frame_preview()
+
         # A função Ctrl+Z continua existindo; apenas o botão adicional é ocultado
         # para manter fidelidade com o layout aprovado.
         try:
@@ -45,6 +52,95 @@ class ReferenceAdvancedVideoEditorWidget(
             pass
 
         self._apply_reference_style()
+
+    def _install_frame_preview(self) -> None:
+        old_video = self.video
+        parent = old_video.parentWidget()
+        layout = parent.layout() if parent is not None else None
+
+        replacement = QLabel(parent)
+        replacement.setAlignment(
+            Qt.AlignmentFlag.AlignCenter
+        )
+        replacement.setMinimumHeight(235)
+        replacement.setMaximumHeight(305)
+        replacement.setText("Pré-visualização do vídeo")
+        replacement.setStyleSheet(
+            "background:#000000;"
+            "border:0;"
+            "color:#6F86A8;"
+        )
+
+        if layout is not None:
+            layout.replaceWidget(
+                old_video,
+                replacement,
+            )
+
+        old_video.hide()
+        old_video.setParent(None)
+        old_video.deleteLater()
+
+        self.video = replacement
+        self._last_video_pixmap = QPixmap()
+
+        self._video_sink = QVideoSink(self)
+        self._video_sink.videoFrameChanged.connect(
+            self._video_frame_changed
+        )
+
+        # QMediaPlayer do Qt 6 possui setVideoSink().
+        self.player.setVideoSink(
+            self._video_sink
+        )
+
+    def _video_frame_changed(self, frame) -> None:
+        try:
+            if not frame.isValid():
+                return
+
+            image = frame.toImage()
+            if image.isNull():
+                return
+
+            self._last_video_pixmap = QPixmap.fromImage(
+                image
+            )
+            self._refresh_video_pixmap()
+
+        except Exception as exc:
+            try:
+                self.status.setText(
+                    f"Prévia do vídeo: {exc}"
+                )
+            except Exception:
+                pass
+
+    def _refresh_video_pixmap(self) -> None:
+        pixmap = getattr(
+            self,
+            "_last_video_pixmap",
+            QPixmap(),
+        )
+
+        if pixmap.isNull():
+            return
+
+        size = self.video.size()
+        if size.width() <= 1 or size.height() <= 1:
+            return
+
+        self.video.setPixmap(
+            pixmap.scaled(
+                size,
+                Qt.AspectRatioMode.KeepAspectRatio,
+                Qt.TransformationMode.SmoothTransformation,
+            )
+        )
+
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        self._refresh_video_pixmap()
 
     def _apply_reference_style(self) -> None:
         card_css = (
@@ -235,11 +331,22 @@ class ReferenceAdvancedVideoEditorWidget(
             "background:#000000;border:0;"
         )
 
-        self.video.setMinimumHeight(260)
-        self.video.setMaximumHeight(340)
+        # Preview um pouco mais compacto para abrir espaço real à timeline.
+        self.video.setMinimumHeight(235)
+        self.video.setMaximumHeight(305)
 
-        self.timeline_scroll.setMinimumHeight(128)
-        self.timeline_scroll.setMaximumHeight(155)
+        # O TimelineWidget original mede 146 px e a barra horizontal consumia
+        # parte do viewport, dando a impressão de que os clipes estavam cortados.
+        # A altura fixa abaixo preserva régua + thumbnails + borda + scrollbar.
+        self.timeline.setMinimumHeight(154)
+        self.timeline.setMaximumHeight(154)
+        self.timeline.resize(
+            self.timeline.width(),
+            154,
+        )
+
+        self.timeline_scroll.setMinimumHeight(176)
+        self.timeline_scroll.setMaximumHeight(184)
 
         palette = QPalette()
         palette.setColor(
@@ -288,12 +395,18 @@ class ReferenceAdvancedVideoEditorWidget(
             }
             QScrollBar:horizontal {
                 background:#EDF4FC;
-                height:9px;
+                height:10px;
+                margin:0px;
+                border:0px;
             }
             QScrollBar::handle:horizontal {
                 background:#8BB9E8;
                 min-width:45px;
                 border-radius:4px;
+            }
+            QScrollBar::add-line:horizontal,
+            QScrollBar::sub-line:horizontal {
+                width:0px;
             }
             """
         )
@@ -405,7 +518,7 @@ class ReferenceVideoEditorPage(QWidget):
         )
 
         self.editor.setMinimumWidth(1000)
-        self.editor.setMinimumHeight(700)
+        self.editor.setMinimumHeight(790)
 
         self.scroll.setWidget(self.editor)
         root.addWidget(self.scroll, 1)
