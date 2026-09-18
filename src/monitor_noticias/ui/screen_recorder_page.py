@@ -848,7 +848,7 @@ class ScreenRecorderPage(QWidget):
         )
         self._hidden_by_recorder = False
         self._audio_loaded = False
-        self._module_enabled = True
+        self._module_enabled = False
         self._closing = False
 
         self._preview_timer = QTimer(self)
@@ -867,7 +867,14 @@ class ScreenRecorderPage(QWidget):
         self._build_ui()
         self._refresh_screens()
         self._refresh_recordings()
-        self._apply_state(self.IDLE)
+        self.preview.clear()
+        self.preview.setText(
+            "Gravador de Tela desligado. Clique em LIGAR para ativar."
+        )
+        self._apply_state(
+            self.OFF,
+            "Gravador de Tela desligado por padrão.",
+        )
         self._update_capture_labels()
         self._update_capture_overlay()
 
@@ -923,10 +930,10 @@ class ScreenRecorderPage(QWidget):
         hero_text.addWidget(subtitle)
         hero_l.addLayout(hero_text, 1)
 
-        self.power_button = QPushButton("⏻  LIGADO")
+        self.power_button = QPushButton("⏻  LIGAR")
         self.power_button.setObjectName("recPower")
         self.power_button.setCheckable(True)
-        self.power_button.setChecked(True)
+        self.power_button.setChecked(False)
         self.power_button.setMinimumWidth(126)
         self.power_button.toggled.connect(
             self._toggle_module
@@ -1673,6 +1680,21 @@ class ScreenRecorderPage(QWidget):
 
     def on_activated(self) -> None:
         self._refresh_screens()
+        self._refresh_recordings()
+
+        # Abrir a aba não liga o módulo. O usuário precisa clicar em LIGAR.
+        if not self._module_enabled:
+            self._preview_timer.stop()
+            self._capture_overlay.hide()
+            self.preview.clear()
+            self.preview.setText(
+                "Gravador de Tela desligado. Clique em LIGAR para ativar."
+            )
+            self._apply_state(
+                self.OFF,
+                "Gravador de Tela desligado por padrão.",
+            )
+            return
 
         if not self._audio_loaded:
             self._load_audio_devices()
@@ -1682,7 +1704,6 @@ class ScreenRecorderPage(QWidget):
 
         self._update_preview()
         self._update_capture_overlay()
-        self._refresh_recordings()
 
     def showEvent(self, event) -> None:
         super().showEvent(event)
@@ -2329,7 +2350,7 @@ class ScreenRecorderPage(QWidget):
                 "Gravador de Tela desligado."
             )
             self.power_button.setText(
-                "⏻  DESLIGADO"
+                "⏻  LIGAR"
             )
             self._apply_state(
                 self.OFF,
@@ -2338,7 +2359,7 @@ class ScreenRecorderPage(QWidget):
             return
 
         self.power_button.setText(
-            "⏻  LIGADO"
+            "⏻  DESLIGAR"
         )
         self._refresh_screens()
 
