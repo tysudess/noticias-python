@@ -19,6 +19,7 @@ ROUTES = {
     "nacional-cnn": ("https://www.cnnbrasil.com.br/ultimas-noticias/", {"cnnbrasil.com.br"}),
     "nacional-metropoles": ("https://www.metropoles.com/ultimas-noticias", {"metropoles.com"}),
     "nacional-folha": ("https://www1.folha.uol.com.br/ultimas-noticias/", {"folha.uol.com.br"}),
+    "nacional-uol": ("https://noticias.uol.com.br/ultimas/", {"noticias.uol.com.br"}),
     "nacional-r7": ("https://noticias.r7.com/", {"r7.com"}),
     "nacional-jovem-pan": ("https://jovempan.com.br/noticias/", {"jovempan.com.br"}),
     "nacional-o-globo": ("https://oglobo.globo.com/ultimas-noticias/", {"oglobo.globo.com"}),
@@ -53,9 +54,39 @@ def _looks_article(value: str) -> bool:
         path = (urlsplit(value).path or "").lower()
     except Exception:
         return False
-    if not path or path == "/" or any(x in path for x in ("/ultimas-noticias", "/busca", "/login", "/assine")):
+
+    if not path or path == "/":
         return False
-    return path.count("/") >= 2 or path.endswith((".html", ".shtml", ".ghtml"))
+
+    clean_path = path.rstrip("/")
+
+    # Bloqueia apenas páginas de índice/navegação.
+    # Artigos do UOL podem conter "/ultimas-noticias/" no caminho.
+    blocked_exact = {
+        "/ultimas",
+        "/ultimas-noticias",
+        "/busca",
+        "/login",
+        "/assine",
+    }
+
+    if clean_path in blocked_exact:
+        return False
+
+    if any(
+        clean_path.startswith(prefix)
+        for prefix in (
+            "/busca/",
+            "/login/",
+            "/assine/",
+        )
+    ):
+        return False
+
+    return (
+        path.count("/") >= 2
+        or path.endswith((".html", ".shtml", ".ghtml"))
+    )
 
 def _vehicle_matches(source: MediaSource, vehicle: str) -> bool:
     if not vehicle.strip():

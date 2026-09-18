@@ -27,7 +27,20 @@ def _special(id_:str,name:str,*aliases:str)->MediaSource:
     return MediaSource(id=id_,name=name,region="Nacional",state="BR",stateName="Brasil",group="Mídia especializada",aliases=list(aliases))
 
 NATIONAL = (
-    _national("nacional-o-globo","O Globo","oglobo","Globo"),_national("nacional-correio-brasiliense","Correio Braziliense","Correio Braziliense"),_national("nacional-g1","G1","g1","Globo.com"),_national("nacional-r7","R7","R7.com"),_national("nacional-revista-oeste","Revista Oeste","Oeste"),_national("nacional-folha","Folha de S.Paulo","Folha de São Paulo","Folha"),_national("nacional-estadao","Estadão","O Estado de S. Paulo","Estado de S. Paulo"),_national("nacional-valor","Valor Econômico","Valor"),_national("nacional-antagonista","O Antagonista","Antagonista"),_national("nacional-cnn","CNN Brasil","CNN"),_national("nacional-jovem-pan","Jovem Pan","JP"),_national("nacional-estado-minas","Estado de Minas","EM.com.br"),_national("nacional-metropoles","Metrópoles","Metropoles"),
+    _national("nacional-o-globo","O Globo","oglobo","Globo"),
+    _national("nacional-correio-brasiliense","Correio Braziliense","Correio Braziliense"),
+    _national("nacional-g1","G1","g1","Globo.com"),
+    _national("nacional-uol","UOL","UOL Notícias","UOL Noticias","Universo Online","uol.com.br","noticias.uol.com.br"),
+    _national("nacional-r7","R7","R7.com"),
+    _national("nacional-revista-oeste","Revista Oeste","Oeste"),
+    _national("nacional-folha","Folha de S.Paulo","Folha de São Paulo","Folha"),
+    _national("nacional-estadao","Estadão","O Estado de S. Paulo","Estado de S. Paulo"),
+    _national("nacional-valor","Valor Econômico","Valor"),
+    _national("nacional-antagonista","O Antagonista","Antagonista"),
+    _national("nacional-cnn","CNN Brasil","CNN"),
+    _national("nacional-jovem-pan","Jovem Pan","JP"),
+    _national("nacional-estado-minas","Estado de Minas","EM.com.br"),
+    _national("nacional-metropoles","Metrópoles","Metropoles"),
 )
 
 _STATE_SPECS = (
