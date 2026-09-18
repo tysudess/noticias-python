@@ -1,9 +1,17 @@
 from __future__ import annotations
 
-from PySide6.QtCore import QSize, Qt
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
-    QButtonGroup, QCheckBox, QComboBox, QFrame, QHBoxLayout, QLabel, QLineEdit, QListWidget,
-    QListWidgetItem, QPushButton, QVBoxLayout, QWidget,
+    QButtonGroup,
+    QComboBox,
+    QFrame,
+    QHBoxLayout,
+    QLabel,
+    QLineEdit,
+    QPushButton,
+    QTableWidget,
+    QTableWidgetItem,
+    QVBoxLayout,
 )
 
 from monitor_noticias.ui.catalog import REGIONS, STATES
@@ -12,7 +20,7 @@ from monitor_noticias.ui.pages import BasePage
 
 
 class SourcesPage(BasePage):
-    """Página Fontes refinada, preservando toda a lógica de seleção existente."""
+    """Fontes com tabela nativa para manter o scroll leve."""
 
     def __init__(self, controller: MainUiController) -> None:
         super().__init__(controller)
@@ -23,33 +31,35 @@ class SourcesPage(BasePage):
         filters = QFrame()
         filters.setObjectName("sourcesTop")
         fl = QVBoxLayout(filters)
-        fl.setContentsMargins(14, 12, 14, 12)
-        fl.setSpacing(10)
+        fl.setContentsMargins(14, 11, 14, 11)
+        fl.setSpacing(9)
 
         first = QHBoxLayout()
         first.setSpacing(8)
 
         self.tab_group = QButtonGroup(self)
         self.tab_group.setExclusive(True)
-        self.tab_buttons: list[QPushButton] = []
+        self.tab_buttons = []
 
-        for index, text in enumerate(("Notícias", "Vídeos", "Mídia especializada")):
+        for index, text in enumerate(
+            ("Notícias", "Vídeos", "Mídia especializada")
+        ):
             button = QPushButton(text)
             button.setObjectName("sourceTabButton")
             button.setCheckable(True)
-            button.setProperty("tabIndex", index)
             if index == 0:
                 button.setChecked(True)
             self.tab_group.addButton(button, index)
             self.tab_buttons.append(button)
             first.addWidget(button)
 
-        first.addStretch()
+        first.addSpacing(6)
 
         self.query = QLineEdit()
         self.query.setObjectName("sourceSearch")
-        self.query.setPlaceholderText("⌕  Pesquisar por nome, região, estado ou grupo...")
-        self.query.setMinimumWidth(390)
+        self.query.setPlaceholderText(
+            "⌕  Pesquisar por nome, região, estado ou grupo..."
+        )
         first.addWidget(self.query, 1)
 
         fl.addLayout(first)
@@ -66,11 +76,12 @@ class SourcesPage(BasePage):
         filters_row.addWidget(self._label("Estado"))
         self.state = QComboBox()
         self.state.setMinimumWidth(180)
-        self.state.addItem("Todos")
-        self._reload_states()
         filters_row.addWidget(self.state)
+        self._reload_states()
 
-        hint = QLabel("Use os filtros para reduzir a lista sem alterar sua seleção.")
+        hint = QLabel(
+            "Use os filtros para reduzir a lista sem alterar sua seleção."
+        )
         hint.setObjectName("sourceMuted")
         filters_row.addWidget(hint)
         filters_row.addStretch()
@@ -81,44 +92,47 @@ class SourcesPage(BasePage):
         state_card = QFrame()
         state_card.setObjectName("sourceStateCard")
         sl = QHBoxLayout(state_card)
-        sl.setContentsMargins(16, 12, 16, 12)
+        sl.setContentsMargins(16, 11, 16, 11)
 
         dot = QLabel("●")
         dot.setObjectName("sourceStateDot")
         sl.addWidget(dot)
 
         state_text = QVBoxLayout()
+        state_text.setSpacing(1)
+
         self.state_title = QLabel("Fontes de notícias")
         self.state_title.setObjectName("sourceStateTitle")
-        self.state_subtitle = QLabel("Selecione quais fontes participam da varredura.")
+        self.state_subtitle = QLabel(
+            "Escolha quais veículos participam da varredura."
+        )
         self.state_subtitle.setObjectName("sourceStateSubtitle")
+
         state_text.addWidget(self.state_title)
         state_text.addWidget(self.state_subtitle)
         sl.addLayout(state_text, 1)
 
-        self.all_news_label = QLabel("")
-        self.all_news_label.setObjectName("sourceStateValue")
-        sl.addWidget(self.all_news_label)
+        self.mode_label = QLabel("Seleção manual")
+        self.mode_label.setObjectName("sourceStateValue")
+        sl.addWidget(self.mode_label)
 
-        self.all_news = QCheckBox()
-        self.all_news.setObjectName("sourceSwitch")
-        self.all_news.setToolTip(
-            "Ligado: aceita qualquer veículo encontrado, inclusive fora do catálogo padrão."
-        )
+        self.all_news = QPushButton("●")
+        self.all_news.setObjectName("sourceModeButton")
+        self.all_news.setCheckable(True)
+        self.all_news.setFixedSize(42, 28)
         sl.addWidget(self.all_news)
 
         self.root.addWidget(state_card)
 
-        control = QFrame()
-        control.setObjectName("sourcesControl")
-        cl = QHBoxLayout(control)
-        cl.setContentsMargins(14, 9, 14, 9)
+        controls = QFrame()
+        controls.setObjectName("sourcesControl")
+        cl = QHBoxLayout(controls)
+        cl.setContentsMargins(14, 8, 14, 8)
         cl.setSpacing(8)
 
         self.info = QLabel()
         self.info.setObjectName("sourceCount")
         cl.addWidget(self.info)
-
         cl.addStretch()
 
         self.select_visible = QPushButton("✓  Selecionar visíveis")
@@ -138,40 +152,54 @@ class SourcesPage(BasePage):
         ):
             cl.addWidget(button)
 
-        self.root.addWidget(control)
+        self.root.addWidget(controls)
 
-        self.news_list = QListWidget()
-        self.video_list = QListWidget()
-        self.special_list = QListWidget()
+        self.table = QTableWidget(0, 4)
+        self.table.setObjectName("sourceTable")
+        self.table.horizontalHeader().hide()
+        self.table.verticalHeader().hide()
+        self.table.setShowGrid(False)
+        self.table.setSelectionMode(QTableWidget.SelectionMode.NoSelection)
+        self.table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        self.table.setVerticalScrollMode(QTableWidget.ScrollMode.ScrollPerPixel)
+        self.table.setHorizontalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+        )
+        self.table.setColumnWidth(0, 44)
+        self.table.setColumnWidth(1, 74)
+        self.table.setColumnWidth(3, 135)
+        self.table.horizontalHeader().setSectionResizeMode(
+            2,
+            self.table.horizontalHeader().ResizeMode.Stretch,
+        )
 
-        # O QTabWidget é mantido apenas para a barra de tabs.
-        self.list_container = QFrame()
-        self.list_container.setObjectName("sourceListContainer")
-        ll = QVBoxLayout(self.list_container)
-        ll.setContentsMargins(0, 0, 0, 0)
-        ll.setSpacing(0)
+        self.root.addWidget(self.table, 1)
 
-        for listw in (self.news_list, self.video_list, self.special_list):
-            listw.setObjectName("sourceList")
-            listw.setSpacing(5)
-            listw.setVerticalScrollMode(QListWidget.ScrollMode.ScrollPerPixel)
-            listw.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-            ll.addWidget(listw)
-            listw.hide()
-
-        self.news_list.show()
-        self.root.addWidget(self.list_container, 1)
-
-        self.query.textChanged.connect(lambda _: self.refresh(controller.state))
+        self.query.textChanged.connect(
+            lambda _: self.refresh(self.controller.state)
+        )
         self.region.currentTextChanged.connect(self._region_changed)
-        self.state.currentTextChanged.connect(lambda _: self.refresh(controller.state))
-        self.tab_group.idClicked.connect(self._tab_changed)
+        self.state.currentTextChanged.connect(
+            lambda _: self.refresh(self.controller.state)
+        )
+        self.tab_group.idClicked.connect(
+            lambda _index: self.refresh(self.controller.state)
+        )
         self.all_news.toggled.connect(self._all_news_changed)
+        self.table.itemChanged.connect(self._item_changed)
 
-        self.select_visible.clicked.connect(lambda: self._set_visible(True))
-        self.clear_visible.clicked.connect(lambda: self._set_visible(False))
-        self.select_all.clicked.connect(lambda: self._set_all(True))
-        self.clear_all.clicked.connect(lambda: self._set_all(False))
+        self.select_visible.clicked.connect(
+            lambda: self._set_visible(True)
+        )
+        self.clear_visible.clicked.connect(
+            lambda: self._set_visible(False)
+        )
+        self.select_all.clicked.connect(
+            lambda: self._set_all(True)
+        )
+        self.clear_all.clicked.connect(
+            lambda: self._set_all(False)
+        )
 
         self.setStyleSheet(self._stylesheet())
 
@@ -183,7 +211,8 @@ class SourcesPage(BasePage):
 
     def _stylesheet(self) -> str:
         return """
-        QFrame#sourcesTop, QFrame#sourcesControl, QFrame#sourceListContainer {
+        QFrame#sourcesTop,
+        QFrame#sourcesControl {
             background:#FFFFFF;
             border:1px solid #D5E5F5;
             border-radius:12px;
@@ -195,6 +224,7 @@ class SourcesPage(BasePage):
             border-radius:8px;
             padding:10px 18px;
             min-width:115px;
+            min-height:28px;
             font-weight:800;
         }
         QPushButton#sourceTabButton:checked {
@@ -203,7 +233,7 @@ class SourcesPage(BasePage):
             border-color:#0A7DF8;
         }
         QLineEdit#sourceSearch {
-            min-height:34px;
+            min-height:35px;
             padding:0 11px;
             font-size:11px;
         }
@@ -223,7 +253,7 @@ class SourcesPage(BasePage):
         }
         QLabel#sourceStateDot {
             color:#08A66B;
-            font-size:20px;
+            font-size:18px;
         }
         QLabel#sourceStateTitle {
             color:#08795A;
@@ -235,16 +265,21 @@ class SourcesPage(BasePage):
             font-size:10px;
         }
         QLabel#sourceStateValue {
-            color:#08A66B;
+            color:#078B5F;
             font-size:11px;
             font-weight:900;
         }
-        QCheckBox#sourceSwitch::indicator {
-            width:38px;
-            height:22px;
+        QPushButton#sourceModeButton {
+            background:#F6FBF9;
+            color:#0C6570;
+            border:1px solid #8EBDBD;
+            border-radius:8px;
+            font-size:12px;
         }
-        QFrame#sourcesControl {
-            min-height:52px;
+        QPushButton#sourceModeButton:checked {
+            background:#0B6872;
+            color:white;
+            border-color:#0B6872;
         }
         QLabel#sourceCount {
             color:#08245F;
@@ -267,11 +302,16 @@ class SourcesPage(BasePage):
             padding:8px 14px;
             font-weight:700;
         }
-        QListWidget#sourceList {
-            background:transparent;
-            border:0;
+        QTableWidget#sourceTable {
+            background:#FFFFFF;
+            border:1px solid #D5E5F5;
+            border-radius:12px;
             outline:0;
-            padding:4px;
+        }
+        QTableWidget#sourceTable::item {
+            border-bottom:1px solid #E3EDF7;
+            padding:7px 8px;
+            color:#173E75;
         }
         QScrollBar:vertical {
             background:#EDF4FB;
@@ -279,29 +319,30 @@ class SourcesPage(BasePage):
             border-radius:5px;
         }
         QScrollBar::handle:vertical {
-            background:#9FC3EA;
-            min-height:42px;
+            background:#82B5E8;
+            min-height:48px;
             border-radius:5px;
         }
-        QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height:0; }
+        QScrollBar::handle:vertical:hover {
+            background:#5F9EDB;
+        }
+        QScrollBar::add-line:vertical,
+        QScrollBar::sub-line:vertical {
+            height:0;
+        }
         """
 
     def _tab_index(self) -> int:
-        checked = self.tab_group.checkedId()
-        return 0 if checked < 0 else checked
-
-    def _tab_changed(self, index: int) -> None:
-        for i, listw in enumerate((self.news_list, self.video_list, self.special_list)):
-            listw.setVisible(i == index)
-        self.refresh(self.controller.state)
+        value = self.tab_group.checkedId()
+        return 0 if value < 0 else value
 
     def _region_changed(self, _text: str) -> None:
         self._reload_states()
         self.refresh(self.controller.state)
 
     def _reload_states(self) -> None:
-        current = self.state.currentText() if hasattr(self, "state") else "Todos"
-        region = self.region.currentText() if hasattr(self, "region") else "Todas"
+        current = self.state.currentText()
+        region = self.region.currentText()
 
         self.state.blockSignals(True)
         self.state.clear()
@@ -311,30 +352,31 @@ class SourcesPage(BasePage):
             if region in {"Todas", "Nacional"} or reg == region:
                 self.state.addItem(code)
 
-        idx = self.state.findText(current)
-        self.state.setCurrentIndex(max(0, idx))
+        index = self.state.findText(current)
+        self.state.setCurrentIndex(max(0, index))
         self.state.blockSignals(False)
 
     def _all_news_changed(self, value: bool) -> None:
+        if self._guard:
+            return
         self.controller.news_all_sources = value
         self.refresh(self.controller.state)
 
-    def _selected_sources(self):
+    def _sources(self):
         tab = self._tab_index()
+        if tab == 0:
+            return self.controller.news_sources
+        if tab == 1:
+            return self.controller.video_sources
+        return self.controller.specialized_sources
+
+    def _visible_sources(self):
         region = self.region.currentText()
         state = self.state.currentText()
         query = self.query.text().strip().lower()
-
-        base = (
-            self.controller.news_sources
-            if tab == 0
-            else self.controller.video_sources
-            if tab == 1
-            else self.controller.specialized_sources
-        )
-
         result = []
-        for source in base:
+
+        for source in self._sources():
             src_region = getattr(source, "region", "Nacional") or "Nacional"
             src_state = getattr(source, "state", "") or "BR"
 
@@ -344,8 +386,9 @@ class SourcesPage(BasePage):
                 continue
 
             haystack = (
-                f"{source.name} {src_region} {src_state} "
-                f"{source.group} {' '.join(source.aliases)}"
+                f"{source.name} {source.group} "
+                f"{src_region} {src_state} "
+                f"{' '.join(getattr(source, 'aliases', ()) or ())}"
             ).lower()
 
             if query and query not in haystack:
@@ -355,149 +398,118 @@ class SourcesPage(BasePage):
 
         return result
 
-    def _make_row(self, listw: QListWidget, source, checked: bool, enabled: bool) -> None:
-        item = QListWidgetItem()
-        item.setData(Qt.ItemDataRole.UserRole, source.id)
-        item.setSizeHint(QSize(0, 58))
+    def _selected(self, source_id: str) -> bool:
+        if self._tab_index() == 1:
+            return source_id in self.controller.selected_video_source_ids
 
-        row = QFrame()
-        row.setStyleSheet(
-            "QFrame{background:white;border:1px solid #DCE9F6;border-radius:9px;}"
-            "QLabel{border:0;background:transparent;}"
-        )
-        lay = QHBoxLayout(row)
-        lay.setContentsMargins(10, 7, 10, 7)
-        lay.setSpacing(10)
+        if self.controller.news_all_sources:
+            return True
 
-        check = QCheckBox()
-        check.setChecked(checked)
-        check.setEnabled(enabled)
-        lay.addWidget(check)
+        return source_id in self.controller.selected_news_source_ids
 
-        badge = QLabel((source.name or "F")[:2].upper())
-        badge.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        badge.setFixedSize(52, 34)
-        badge.setStyleSheet(
-            "background:#EAF4FF;color:#087AF7;border-radius:8px;"
-            "font-size:11px;font-weight:900;"
-        )
-        lay.addWidget(badge)
+    def _item_changed(self, item: QTableWidgetItem) -> None:
+        if self._guard or item.column() != 0:
+            return
 
-        texts = QVBoxLayout()
-        texts.setSpacing(1)
-        title = QLabel(source.name)
-        title.setStyleSheet("color:#08245F;font-size:12px;font-weight:900;")
-        meta = QLabel(
-            f"{source.group}  •  {getattr(source,'region','Nacional')}  •  "
-            f"{getattr(source,'state','') or 'BR'}"
-        )
-        meta.setStyleSheet("color:#6079A5;font-size:10px;")
-        texts.addWidget(title)
-        texts.addWidget(meta)
-        lay.addLayout(texts, 1)
+        source_id = item.data(Qt.ItemDataRole.UserRole)
+        if not source_id:
+            return
 
-        status = QLabel("Disponível")
-        status.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        status.setFixedWidth(112)
-        status.setStyleSheet(
-            "background:#EAF9F2;color:#078B5F;border:1px solid #C3EBD9;"
-            "border-radius:7px;padding:7px;font-size:10px;font-weight:800;"
-        )
-        lay.addWidget(status)
+        checked = item.checkState() == Qt.CheckState.Checked
 
-        listw.addItem(item)
-        listw.setItemWidget(item, row)
+        if self._tab_index() == 1:
+            self.controller.set_video_source(source_id, checked)
+        else:
+            self.controller.set_news_source(source_id, checked)
 
-        def changed(value: bool, source_id=source.id):
-            if self._guard:
-                return
-            if self._tab_index() == 1:
-                self.controller.set_video_source(source_id, value)
-            else:
-                self.controller.set_news_source(source_id, value)
-
-        check.toggled.connect(changed)
-
-    def _fill(self, listw: QListWidget, sources, selected, enabled=True) -> None:
-        listw.clear()
-        for source in sources:
-            checked = (not enabled) or source.id in selected
-            self._make_row(listw, source, checked, enabled)
-
-    def refresh(self, state: UiState) -> None:
+    def refresh(self, _state: UiState) -> None:
         self._guard = True
+        tab = self._tab_index()
+        visible = self._visible_sources()
 
         self.all_news.blockSignals(True)
         self.all_news.setChecked(self.controller.news_all_sources)
         self.all_news.blockSignals(False)
 
-        tab = self._tab_index()
-        visible = self._selected_sources()
-
         if tab == 0:
             self.state_title.setText("Fontes de notícias")
-            self.state_subtitle.setText("Escolha quais veículos participam da varredura.")
+            self.state_subtitle.setText(
+                "Escolha quais veículos participam da varredura."
+            )
+            self.mode_label.setText(
+                "TODOS"
+                if self.controller.news_all_sources
+                else "Seleção manual"
+            )
             self.all_news.show()
-            self.all_news_label.setText(
-                "TODOS" if self.controller.news_all_sources else "Seleção manual"
-            )
-            self._fill(
-                self.news_list,
-                visible,
-                self.controller.selected_news_source_ids,
-                not self.controller.news_all_sources,
-            )
         elif tab == 1:
             self.state_title.setText("Fontes de vídeo")
             self.state_subtitle.setText(
-                "Vídeos usam seleção própria; escolha abaixo quais fontes participam da varredura."
+                "Escolha quais fontes participam da busca de vídeos."
             )
+            self.mode_label.setText("Seleção própria")
             self.all_news.hide()
-            self.all_news_label.setText("N/A")
-            self._fill(
-                self.video_list,
-                visible,
-                self.controller.selected_video_source_ids,
-                True,
-            )
         else:
             self.state_title.setText("Mídia especializada")
             self.state_subtitle.setText(
-                "Veículos especializados em Defesa, Forças Armadas e assuntos navais."
+                "Veículos especializados em Defesa e Forças Armadas."
+            )
+            self.mode_label.setText(
+                "TODOS"
+                if self.controller.news_all_sources
+                else "Seleção manual"
             )
             self.all_news.show()
-            self.all_news_label.setText(
-                "TODOS" if self.controller.news_all_sources else "Seleção manual"
-            )
-            self._fill(
-                self.special_list,
-                visible,
-                self.controller.selected_news_source_ids,
-                not self.controller.news_all_sources,
-            )
 
-        selected_count = sum(
-            1
-            for source in visible
-            if (
-                source.id in self.controller.selected_video_source_ids
-                if tab == 1
-                else self.controller.news_all_sources
-                or source.id in self.controller.selected_news_source_ids
+        self.table.setRowCount(len(visible))
+        selected_count = 0
+
+        for row, source in enumerate(visible):
+            self.table.setRowHeight(row, 58)
+
+            checked = self._selected(source.id)
+            selected_count += int(checked)
+
+            check_item = QTableWidgetItem()
+            check_item.setFlags(
+                Qt.ItemFlag.ItemIsEnabled
+                | Qt.ItemFlag.ItemIsUserCheckable
             )
-        )
+            check_item.setCheckState(
+                Qt.CheckState.Checked
+                if checked
+                else Qt.CheckState.Unchecked
+            )
+            check_item.setData(Qt.ItemDataRole.UserRole, source.id)
+            check_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+            self.table.setItem(row, 0, check_item)
+
+            badge = QTableWidgetItem(
+                (source.name or "F")[:2].upper()
+            )
+            badge.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+            self.table.setItem(row, 1, badge)
+
+            region = getattr(source, "region", "Nacional") or "Nacional"
+            state = getattr(source, "state", "") or "BR"
+            vehicle = QTableWidgetItem(
+                f"{source.name}\n{source.group}  •  {region}  •  {state}"
+            )
+            self.table.setItem(row, 2, vehicle)
+
+            status = QTableWidgetItem("Disponível")
+            status.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+            self.table.setItem(row, 3, status)
 
         self.info.setText(
             f"▦   {len(visible)} fonte(s) visível(is)   "
             f"{selected_count} selecionada(s) neste filtro"
         )
-
         self._guard = False
 
     def _set_visible(self, checked: bool) -> None:
-        tab = self._tab_index()
-        for source in self._selected_sources():
-            if tab == 1:
+        for source in self._visible_sources():
+            if self._tab_index() == 1:
                 self.controller.set_video_source(source.id, checked)
             else:
                 self.controller.set_news_source(source.id, checked)
@@ -505,28 +517,25 @@ class SourcesPage(BasePage):
 
     def _set_all(self, checked: bool) -> None:
         tab = self._tab_index()
-        base = (
-            self.controller.video_sources
-            if tab == 1
-            else self.controller.specialized_sources
-            if tab == 2
-            else self.controller.news_sources
-        )
+        base = self._sources()
 
         if tab == 1:
             self.controller.selected_video_source_ids = (
-                {source.id for source in base} if checked else set()
+                {source.id for source in base}
+                if checked
+                else set()
             )
+        elif tab == 0:
+            self.controller.news_all_sources = checked
+            if not checked:
+                self.controller.selected_news_source_ids = set()
         else:
-            if tab == 0:
-                self.controller.news_all_sources = checked
-                if not checked:
-                    self.controller.selected_news_source_ids = set()
-            else:
-                ids = self.controller.selected_news_source_ids
-                spec = {source.id for source in base}
-                self.controller.selected_news_source_ids = (
-                    ids | spec if checked else ids - spec
-                )
+            ids = self.controller.selected_news_source_ids
+            specialized = {source.id for source in base}
+            self.controller.selected_news_source_ids = (
+                ids | specialized
+                if checked
+                else ids - specialized
+            )
 
         self.refresh(self.controller.state)
