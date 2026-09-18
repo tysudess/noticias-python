@@ -57,6 +57,12 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install -r requirements.txt -r requirements-build.txt
 
+      - name: Validar backend WASAPI do Gravador de Tela
+        shell: pwsh
+        run: |
+          python -c "import pyaudiowpatch; import _portaudiowpatch; print('PyAudioWPatch OK:', pyaudiowpatch.__file__)"
+          python -m pip show PyAudioWPatch
+
       - name: Preparar motor da Automação de Planilhas
         shell: pwsh
         env:
@@ -94,9 +100,25 @@ jobs:
         shell: pwsh
         run: |
           python -m PyInstaller --noconfirm --clean MonitorDeNoticias.spec
+
           if (-not (Test-Path "dist/MonitorDeNoticias/MonitorDeNoticias.exe")) {
             throw "MonitorDeNoticias.exe não foi gerado."
           }
+
+          $audioBackend = Get-ChildItem `
+            "dist/MonitorDeNoticias" `
+            -Recurse `
+            -File |
+            Where-Object {
+              $_.Name.ToLowerInvariant() -like "_portaudiowpatch*.pyd"
+            } |
+            Select-Object -First 1
+
+          if (-not $audioBackend) {
+            throw "_portaudiowpatch.pyd não entrou no portable. O áudio do sistema ficaria indisponível."
+          }
+
+          Write-Host "Backend WASAPI incluído: $($audioBackend.FullName)"
 
       - name: Preparar estrutura portable
         shell: pwsh
@@ -163,6 +185,7 @@ jobs:
           if (-not (Test-Path $node)) {
             throw "node.exe do runner não foi encontrado."
           }
+
           Copy-Item `
             $node `
             (Join-Path $root "tools/spreadsheet_automation/node.exe") `
@@ -332,6 +355,16 @@ jobs:
 
             if (-not $exe) {
               throw "MonitorDeNoticias.exe não está na raiz do ZIP."
+            }
+
+            $audioBackend = $archive.Entries |
+              Where-Object {
+                $_.Name.ToLowerInvariant() -like "_portaudiowpatch*.pyd"
+              } |
+              Select-Object -First 1
+
+            if (-not $audioBackend) {
+              throw "Backend WASAPI (_portaudiowpatch.pyd) não está no ZIP final."
             }
 
             $newsExtractor = $archive.Entries |
