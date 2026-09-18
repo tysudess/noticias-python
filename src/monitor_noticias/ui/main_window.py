@@ -13,17 +13,17 @@ from monitor_noticias.collectors.video.catalog import VIDEO_SOURCES
 from monitor_noticias.ui.catalog import NEWS_SOURCES, SPECIALIZED
 from monitor_noticias.ui.controller import MainUiController
 from monitor_noticias.ui.demands_page import DemandsPage
-from monitor_noticias.ui.extractor_page import ExtractorPage
+from monitor_noticias.ui.extractor_reference_page import ReferenceExtractorPage as ExtractorPage
 from monitor_noticias.ui.layout_refresh import apply_reference_layout
-from monitor_noticias.ui.pdf_editor_page import PdfEditorPage
-from monitor_noticias.ui.video_editor_page import VideoEditorPage
+from monitor_noticias.ui.pdf_editor_reference_page import ReferencePdfEditorPage as PdfEditorPage
+from monitor_noticias.ui.video_editor_reference_page import ReferenceVideoEditorPage as VideoEditorPage
 from monitor_noticias.ui.home_page import HomePage
 from monitor_noticias.ui.news_page import NewsPage
 from monitor_noticias.ui.news_extractor_page import NewsExtractorPage
-from monitor_noticias.ui.covers_page import CoversPage
+from monitor_noticias.ui.covers_reference_page import ReferenceCoversPage as CoversPage
 from monitor_noticias.ui.pages import StopPage
 from monitor_noticias.ui.history_page import HistoryPage
-from monitor_noticias.ui.settings_page import SettingsPage
+from monitor_noticias.ui.settings_reference_page import ReferenceSettingsPage as SettingsPage
 from monitor_noticias.ui.terms_page import TermsPage
 from monitor_noticias.ui.source_page import SourcesPage
 from monitor_noticias.ui.videos_page import VideosPage
@@ -397,8 +397,21 @@ class MainWindow(QMainWindow):
         self.sidebar.setProperty("dark", True)
         repolish(self.sidebar)
 
+        # Ferramentas e Configurações já possuem cabeçalho próprio.
+        # Esconder o título duplicado deixa o layout igual às imagens de referência
+        # e evita a sensação de "programa dentro de outro programa".
+        hide_identity = {
+            Section.NEWS,
+            Section.SETTINGS,
+            Section.NEWS_EXTRACTOR,
+            Section.COVERS,
+            Section.PDF_EDITOR,
+            Section.EXTRACTOR,
+            Section.VIDEO_EDITOR,
+        }
+
         self.header_identity.setVisible(
-            section != Section.NEWS
+            section not in hide_identity
         )
 
         self.pages[section].refresh(

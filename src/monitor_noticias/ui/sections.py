@@ -12,15 +12,46 @@ class SectionSpec:
 
 
 class Section(Enum):
-    HOME = SectionSpec("Início", "Acompanhe notícias, vídeos, demandas e fontes em tempo real.", "⌂")
-    NEWS = SectionSpec("Notícias", "Busca e acompanhamento de matérias com atualização contínua", "▤")
-    VIDEOS = SectionSpec("Vídeos", "Busca e acompanhamento de vídeos relevantes", "▶")
-    DEMANDS = SectionSpec("Demandas", "Assuntos prioritários acompanhados por veículo", "☑")
-    SOURCES = SectionSpec("Fontes", "Fontes nacionais, regionais e mídias especializadas", "▣")
-    HISTORY = SectionSpec("Histórico", "Histórico local das buscas e resultados", "↺")
-    TERMS = SectionSpec("Termos", "Termos independentes para notícias e vídeos", "⌕")
-    STOP = SectionSpec("Parar buscas", "Interrompa buscas manuais em andamento", "■")
-    SETTINGS = SectionSpec("Configurações", "Automação, proxy, inicialização e operação do aplicativo", "⚙")
+    HOME = SectionSpec(
+        "Início",
+        "Acompanhe notícias, vídeos, demandas e fontes em tempo real.",
+        "⌂",
+    )
+    NEWS = SectionSpec(
+        "Notícias",
+        "Busca e acompanhamento de matérias com atualização contínua",
+        "▤",
+    )
+    VIDEOS = SectionSpec(
+        "Vídeos",
+        "Busca e acompanhamento de vídeos relevantes",
+        "▶",
+    )
+    DEMANDS = SectionSpec(
+        "Demandas",
+        "Assuntos prioritários acompanhados por veículo",
+        "☑",
+    )
+    SOURCES = SectionSpec(
+        "Fontes",
+        "Fontes nacionais, regionais e mídias especializadas",
+        "▣",
+    )
+    HISTORY = SectionSpec(
+        "Histórico",
+        "Histórico local das buscas e resultados",
+        "↺",
+    )
+    TERMS = SectionSpec(
+        "Termos",
+        "Termos independentes para notícias e vídeos",
+        "⌕",
+    )
+    STOP = SectionSpec(
+        "Parar buscas",
+        "Interrompa buscas manuais em andamento",
+        "■",
+    )
 
     NEWS_EXTRACTOR = SectionSpec(
         "Extrator de Notícias",
@@ -48,8 +79,30 @@ class Section(Enum):
         "▰",
     )
 
+    # Configurações é propositalmente a ÚLTIMA opção do menu.
+    SETTINGS = SectionSpec(
+        "Configurações",
+        "Automação, proxy, inicialização e operação do aplicativo",
+        "⚙",
+    )
 
-SECTION_ORDER = tuple(Section)
+
+SECTION_ORDER = (
+    Section.HOME,
+    Section.NEWS,
+    Section.VIDEOS,
+    Section.DEMANDS,
+    Section.SOURCES,
+    Section.HISTORY,
+    Section.TERMS,
+    Section.STOP,
+    Section.NEWS_EXTRACTOR,
+    Section.COVERS,
+    Section.PDF_EDITOR,
+    Section.EXTRACTOR,
+    Section.VIDEO_EDITOR,
+    Section.SETTINGS,
+)
 
 CORE_SECTIONS = {
     Section.HOME,
