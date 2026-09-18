@@ -295,13 +295,23 @@ function configurarCorretorOrtograficoPtBR(janela) {
 
 function obterUrlInicialDoMonitor() {
   try {
+    const viaEnv = String(process.env.MONITOR_NEWS_URL || '').trim();
+    if (viaEnv) return viaEnv;
+
     const prefixo = '--url=';
-    const arg = process.argv.find((item) => String(item || '').startsWith(prefixo));
+    const arg = process.argv.find((item) =>
+      String(item || '').startsWith(prefixo)
+    );
+
     if (!arg) return '';
     return String(arg).slice(prefixo.length).trim();
   } catch (_) {
     return '';
   }
+}
+
+function estaIncorporadoNoMonitor() {
+  return String(process.env.MONITOR_EMBEDDED || '').trim() === '1';
 }
 
 function criarJanelaPrincipal() {
@@ -326,9 +336,15 @@ function criarJanelaPrincipal() {
   mainWindow.loadFile(path.join(__dirname, 'renderer', 'index.html'));
   mainWindow.webContents.on('did-finish-load', () => {
     const urlInicial = obterUrlInicialDoMonitor();
+    const incorporado = estaIncorporadoNoMonitor();
 
     mainWindow.webContents.executeJavaScript(`
       (() => {
+        const embedded = ${JSON.stringify(incorporado)};
+        if (embedded) {
+          document.body.classList.add('monitor-embedded');
+        }
+
         const resultado = document.getElementById('resultado');
         if (resultado) {
           resultado.contentEditable = 'true';
@@ -336,17 +352,32 @@ function criarJanelaPrincipal() {
           resultado.lang = 'pt-BR';
           resultado.setAttribute('role', 'textbox');
           resultado.setAttribute('aria-multiline', 'true');
-          resultado.setAttribute('aria-label', 'Conteúdo extraído editável com corretor ortográfico PT-BR. Você pode apagar, corrigir ou acrescentar texto antes de copiar.');
-          resultado.title = 'Editor com corretor ortográfico PT-BR. Clique com o botão direito em palavras sublinhadas para ver sugestões.';
+          resultado.setAttribute(
+            'aria-label',
+            'Conteúdo extraído editável com corretor ortográfico PT-BR.'
+          );
         }
 
-        const url = document.getElementById('url');
+        const campoUrl = document.getElementById('url');
         const inicial = ${JSON.stringify(urlInicial)};
-        if (url && inicial) {
-          url.value = inicial;
-          url.dispatchEvent(new Event('input', { bubbles: true }));
-          url.dispatchEvent(new Event('change', { bubbles: true }));
-          url.focus();
+
+        if (campoUrl && inicial) {
+          campoUrl.value = inicial;
+          campoUrl.dispatchEvent(
+            new Event('input', { bubbles: true })
+          );
+          campoUrl.dispatchEvent(
+            new Event('change', { bubbles: true })
+          );
+          campoUrl.scrollIntoView({
+            block: 'center',
+            behavior: 'auto'
+          });
+          campoUrl.focus();
+          campoUrl.setSelectionRange(
+            campoUrl.value.length,
+            campoUrl.value.length
+          );
         }
       })();
     `).catch(() => {});

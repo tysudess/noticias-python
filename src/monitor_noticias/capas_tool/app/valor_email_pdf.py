@@ -7,7 +7,10 @@ from datetime import date
 from pathlib import Path
 from urllib.parse import urlencode
 
-import fitz
+try:
+    import pymupdf as fitz
+except ImportError:
+    import fitz
 from .network import get_text_windows
 
 from .config import ACCESS_KEY, cache_dir, data_dir, downloads_dir

@@ -1,153 +1,179 @@
 from __future__ import annotations
 
 import ctypes
+import os
 import subprocess
 import sys
 from pathlib import Path
 
 from PySide6.QtCore import QTimer, Qt, Signal
-from PySide6.QtWidgets import (
-    QFrame, QHBoxLayout, QLabel, QLineEdit, QPushButton, QVBoxLayout, QWidget,
-)
+from PySide6.QtWidgets import QFrame, QLabel, QVBoxLayout, QWidget
 
 
 class NewsExtractorPage(QWidget):
-    """Hospeda o Extrator de Matérias Electron dentro da aba no Windows."""
+    """Hospeda visualmente o Extrator de Matérias dentro da aba do Monitor.
+
+    O Electron continua sendo o motor original, mas a janela Windows é tornada
+    filha do painel Qt. A página não exibe uma segunda barra de controles:
+    somente a interface real do Extrator ocupa todo o espaço útil.
+    """
 
     back_requested = Signal()
 
     GWL_STYLE = -16
+    GWL_EXSTYLE = -20
+
     WS_CAPTION = 0x00C00000
     WS_THICKFRAME = 0x00040000
     WS_POPUP = 0x80000000
     WS_CHILD = 0x40000000
+
+    WS_EX_APPWINDOW = 0x00040000
+    WS_EX_TOOLWINDOW = 0x00000080
+
     SW_SHOW = 5
+    SWP_NOZORDER = 0x0004
+    SWP_NOACTIVATE = 0x0010
+    SWP_FRAMECHANGED = 0x0020
+    SWP_SHOWWINDOW = 0x0040
 
     def __init__(self, app_root: Path) -> None:
         super().__init__()
         self.app_root = Path(app_root)
+
         self.exe = (
             self.app_root
             / "tools"
             / "news_extractor"
             / "ExtratorMateriasPortable-V1.25.19.exe"
         )
+
         self.process: subprocess.Popen | None = None
         self._hwnd: int | None = None
         self._pending_url = ""
         self._poll_count = 0
 
-        self._poll = QTimer(self)
-        self._poll.setInterval(120)
-        self._poll.timeout.connect(self._try_embed)
-
-        self._build()
-
-    def _build(self) -> None:
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
-        root.setSpacing(8)
-
-        top = QFrame()
-        top.setObjectName("newsExtractorTop")
-        row = QHBoxLayout(top)
-        row.setContentsMargins(12, 9, 12, 9)
-        row.setSpacing(8)
-
-        title = QLabel("Extrator de Notícias")
-        title.setStyleSheet(
-            "color:#08245F;font-size:18px;font-weight:900;"
-        )
-        row.addWidget(title)
-
-        self.url = QLineEdit()
-        self.url.setPlaceholderText("Cole ou receba o link da matéria...")
-        row.addWidget(self.url, 1)
-
-        self.load_button = QPushButton("Abrir / carregar")
-        self.load_button.clicked.connect(self.launch)
-        row.addWidget(self.load_button)
-
-        restart = QPushButton("Reiniciar extrator")
-        restart.clicked.connect(self.restart)
-        row.addWidget(restart)
-
-        root.addWidget(top)
-
-        self.status = QLabel(
-            "O botão “Extrair matéria” da aba Notícias abrirá esta tela com o link preenchido."
-        )
-        self.status.setStyleSheet(
-            "color:#6079A5;padding:2px 6px;font-size:10px;"
-        )
-        root.addWidget(self.status)
+        root.setSpacing(0)
 
         self.host = QFrame()
         self.host.setObjectName("newsExtractorHost")
         self.host.setAttribute(Qt.WidgetAttribute.WA_NativeWindow, True)
         self.host.setStyleSheet(
             "QFrame#newsExtractorHost{"
-            "background:#08111f;border:1px solid #D5E5F5;border-radius:10px;}"
+            "background:#08111f;"
+            "border:0;"
+            "margin:0;"
+            "padding:0;"
+            "}"
         )
         root.addWidget(self.host, 1)
 
+        self.message = QLabel(
+            "Carregando Extrator de Notícias...",
+            self.host,
+        )
+        self.message.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.message.setStyleSheet(
+            "color:#91A2B9;"
+            "background:#08111F;"
+            "font-size:14px;"
+        )
+        self.message.setGeometry(self.host.rect())
+        self.message.show()
+
+        self._poll = QTimer(self)
+        self._poll.setInterval(100)
+        self._poll.timeout.connect(self._try_embed)
+
+        # Reaplica o tamanho em intervalos leves. Isso elimina a faixa vazia
+        # que aparecia à direita ao incorporar o BrowserWindow Electron.
+        self._fit_timer = QTimer(self)
+        self._fit_timer.setInterval(350)
+        self._fit_timer.timeout.connect(self._resize_embedded)
+
     def refresh(self, _state=None) -> None:
-        # Não reinicia nem recarrega a ferramenta a cada tick do Monitor.
-        pass
+        # O MainWindow chama refresh periodicamente. Não reiniciar o Electron.
+        if self.process is None:
+            self.launch()
 
     def open_url(self, url: str) -> None:
-        self.url.setText(url or "")
-        self._pending_url = url or ""
-
-        # Para garantir que o Electron receba a nova URL na inicialização,
-        # reinicia somente quando veio um link novo da aba Notícias.
+        """Abre a aba com a URL diretamente no campo #url do Extrator."""
+        self._pending_url = str(url or "").strip()
         self.restart()
 
     def launch(self) -> None:
-        self._pending_url = self.url.text().strip()
-
-        if self.process is not None and self.process.poll() is None and self._hwnd:
-            self.status.setText(
-                "Extrator já está aberto. Use “Reiniciar extrator” para aplicar outro link."
-            )
+        if self.process is not None and self.process.poll() is None:
+            if self._hwnd:
+                self._resize_embedded()
             return
 
         if not self.exe.is_file():
-            self.status.setText(
-                f"Extrator não encontrado no portable: {self.exe}"
+            self._show_message(
+                "Extrator de Notícias não encontrado no portable:\n"
+                f"{self.exe}"
             )
             return
 
-        args = [str(self.exe)]
+        env = os.environ.copy()
+        env["MONITOR_EMBEDDED"] = "1"
 
         if self._pending_url:
-            args.append(f"--url={self._pending_url}")
+            env["MONITOR_NEWS_URL"] = self._pending_url
+        else:
+            env.pop("MONITOR_NEWS_URL", None)
 
         try:
-            self.process = subprocess.Popen(args)
+            creationflags = 0
+            if sys.platform == "win32":
+                creationflags = getattr(
+                    subprocess,
+                    "CREATE_NO_WINDOW",
+                    0,
+                )
+
+            self.process = subprocess.Popen(
+                [str(self.exe)],
+                env=env,
+                creationflags=creationflags,
+            )
+
             self._hwnd = None
             self._poll_count = 0
-            self.status.setText("Iniciando Extrator de Notícias...")
+            self._show_message("Carregando Extrator de Notícias...")
             self._poll.start()
+
         except Exception as exc:
-            self.status.setText(f"Falha ao iniciar extrator: {exc}")
+            self._show_message(
+                f"Falha ao iniciar Extrator de Notícias:\n{exc}"
+            )
 
     def restart(self) -> None:
         self._stop_process()
-        QTimer.singleShot(180, self.launch)
+        QTimer.singleShot(220, self.launch)
+
+    def _show_message(self, text: str) -> None:
+        self.message.setText(text)
+        self.message.setGeometry(self.host.rect())
+        self.message.raise_()
+        self.message.show()
 
     def _stop_process(self) -> None:
         self._poll.stop()
+        self._fit_timer.stop()
         self._hwnd = None
 
         if self.process is not None:
             try:
                 if self.process.poll() is None:
                     self.process.terminate()
+
                     try:
                         self.process.wait(timeout=3)
                     except Exception:
                         self.process.kill()
+
             except Exception:
                 pass
 
@@ -158,7 +184,7 @@ class NewsExtractorPage(QWidget):
             return None
 
         user32 = ctypes.windll.user32
-        result: list[int] = []
+        matches: list[int] = []
 
         EnumWindowsProc = ctypes.WINFUNCTYPE(
             ctypes.c_bool,
@@ -169,36 +195,45 @@ class NewsExtractorPage(QWidget):
         target_pid = self.process.pid if self.process else 0
 
         def callback(hwnd, _lparam):
-            if not user32.IsWindowVisible(hwnd):
+            if not user32.IsWindow(hwnd):
                 return True
 
             pid = ctypes.c_ulong()
-            user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+            user32.GetWindowThreadProcessId(
+                hwnd,
+                ctypes.byref(pid),
+            )
 
             length = user32.GetWindowTextLengthW(hwnd)
-            if length <= 0:
-                return True
+            title = ""
 
-            buf = ctypes.create_unicode_buffer(length + 1)
-            user32.GetWindowTextW(hwnd, buf, length + 1)
-            title = buf.value.lower()
+            if length > 0:
+                buf = ctypes.create_unicode_buffer(length + 1)
+                user32.GetWindowTextW(
+                    hwnd,
+                    buf,
+                    length + 1,
+                )
+                title = buf.value.lower()
 
-            by_pid = target_pid and pid.value == target_pid
+            # Electron Portable pode criar a BrowserWindow em um processo filho,
+            # portanto não dependemos somente do PID inicial.
+            by_pid = bool(target_pid and pid.value == target_pid)
             by_title = (
-                "extrator de materias" in title
-                or "extrator de matérias" in title
-                or "extrator de noticias" in title
+                "extrator de matérias" in title
+                or "extrator de materias" in title
                 or "extrator de notícias" in title
+                or "extrator de noticias" in title
             )
 
             if by_pid or by_title:
-                result.append(int(hwnd))
+                matches.append(int(hwnd))
                 return False
 
             return True
 
         user32.EnumWindows(EnumWindowsProc(callback), 0)
-        return result[0] if result else None
+        return matches[0] if matches else None
 
     def _try_embed(self) -> None:
         self._poll_count += 1
@@ -206,59 +241,132 @@ class NewsExtractorPage(QWidget):
         hwnd = self._find_window()
 
         if not hwnd:
-            if self._poll_count > 200:
+            if self._poll_count >= 300:
                 self._poll.stop()
-                self.status.setText(
-                    "O extrator iniciou, mas a janela não pôde ser incorporada."
+                self._show_message(
+                    "O Extrator iniciou, mas a janela não pôde ser "
+                    "incorporada ao Monitor."
                 )
             return
-
-        self._poll.stop()
 
         try:
             user32 = ctypes.windll.user32
             host_hwnd = int(self.host.winId())
 
+            # Torna o Electron filho real do painel do Monitor.
             user32.SetParent(hwnd, host_hwnd)
 
-            style = user32.GetWindowLongW(hwnd, self.GWL_STYLE)
+            style = user32.GetWindowLongW(
+                hwnd,
+                self.GWL_STYLE,
+            )
             style &= ~self.WS_CAPTION
             style &= ~self.WS_THICKFRAME
             style &= ~self.WS_POPUP
             style |= self.WS_CHILD
+            user32.SetWindowLongW(
+                hwnd,
+                self.GWL_STYLE,
+                style,
+            )
 
-            user32.SetWindowLongW(hwnd, self.GWL_STYLE, style)
-            user32.ShowWindow(hwnd, self.SW_SHOW)
+            exstyle = user32.GetWindowLongW(
+                hwnd,
+                self.GWL_EXSTYLE,
+            )
+            exstyle &= ~self.WS_EX_APPWINDOW
+            exstyle |= self.WS_EX_TOOLWINDOW
+            user32.SetWindowLongW(
+                hwnd,
+                self.GWL_EXSTYLE,
+                exstyle,
+            )
 
             self._hwnd = hwnd
+
+            user32.ShowWindow(hwnd, self.SW_SHOW)
+
+            self._poll.stop()
+            self.message.hide()
+
             self._resize_embedded()
-            self.status.setText(
-                "Extrator de Notícias incorporado ao Monitor."
-            )
+            self._fit_timer.start()
+
         except Exception as exc:
-            self.status.setText(
-                f"Extrator abriu, mas não foi possível incorporar: {exc}"
+            self._poll.stop()
+            self._show_message(
+                "O Extrator abriu, mas não foi possível "
+                f"incorporá-lo ao Monitor:\n{exc}"
             )
 
     def _resize_embedded(self) -> None:
-        if not self._hwnd or sys.platform != "win32":
+        if (
+            not self._hwnd
+            or sys.platform != "win32"
+        ):
             return
 
         try:
-            ctypes.windll.user32.MoveWindow(
+            user32 = ctypes.windll.user32
+
+            # Usa o client rect nativo do host em vez de width()/height(),
+            # evitando diferença de DPI/escala no Windows.
+            rect = ctypes.wintypes.RECT()
+            host_hwnd = int(self.host.winId())
+
+            if user32.GetClientRect(
+                host_hwnd,
+                ctypes.byref(rect),
+            ):
+                width = max(
+                    1,
+                    int(rect.right - rect.left),
+                )
+                height = max(
+                    1,
+                    int(rect.bottom - rect.top),
+                )
+            else:
+                width = max(1, self.host.width())
+                height = max(1, self.host.height())
+
+            user32.SetWindowPos(
                 self._hwnd,
                 0,
                 0,
-                max(1, self.host.width()),
-                max(1, self.host.height()),
-                True,
+                0,
+                width,
+                height,
+                self.SWP_NOZORDER
+                | self.SWP_NOACTIVATE
+                | self.SWP_FRAMECHANGED
+                | self.SWP_SHOWWINDOW,
             )
+
         except Exception:
             pass
 
     def resizeEvent(self, event) -> None:
         super().resizeEvent(event)
-        self._resize_embedded()
+
+        self.message.setGeometry(self.host.rect())
+
+        if self._hwnd:
+            QTimer.singleShot(
+                0,
+                self._resize_embedded,
+            )
+
+    def showEvent(self, event) -> None:
+        super().showEvent(event)
+
+        if self.process is None:
+            QTimer.singleShot(0, self.launch)
+        elif self._hwnd:
+            QTimer.singleShot(
+                0,
+                self._resize_embedded,
+            )
 
     def shutdown(self) -> bool:
         self._stop_process()
