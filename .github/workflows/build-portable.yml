@@ -8,6 +8,7 @@ on:
       - "src/**"
       - "resources/**"
       - "portable/**"
+      - "tools/news_extractor/**"
       - "run.py"
       - "requirements*.txt"
       - "MonitorDeNoticias.spec"
@@ -29,7 +30,7 @@ jobs:
   build:
     name: Gerar portable
     runs-on: windows-latest
-    timeout-minutes: 45
+    timeout-minutes: 60
 
     steps:
       - name: Checkout
@@ -44,11 +45,35 @@ jobs:
             requirements.txt
             requirements-build.txt
 
-      - name: Instalar dependências
+      - name: Configurar Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Instalar dependências Python
         shell: pwsh
         run: |
           python -m pip install --upgrade pip
           python -m pip install -r requirements.txt -r requirements-build.txt
+
+      - name: Gerar Extrator de Notícias Electron
+        shell: pwsh
+        run: |
+          Push-Location "tools/news_extractor"
+          try {
+            npm install --no-audit --no-fund
+            npm run dist
+
+            $exe = Get-ChildItem "dist" -Filter "ExtratorMateriasPortable-V1.25.19.exe" -Recurse | Select-Object -First 1
+            if (-not $exe) {
+              throw "ExtratorMateriasPortable-V1.25.19.exe não foi gerado."
+            }
+
+            Write-Host "Extrator gerado: $($exe.FullName)"
+          }
+          finally {
+            Pop-Location
+          }
 
       - name: Gerar aplicativo com PyInstaller
         shell: pwsh
@@ -62,15 +87,43 @@ jobs:
         shell: pwsh
         run: |
           $root = Resolve-Path "dist/MonitorDeNoticias"
-          foreach ($dir in @("resources","bin","data","logs","temp","Videos","VideoEditorExports")) {
+
+          foreach ($dir in @(
+            "resources",
+            "bin",
+            "data",
+            "logs",
+            "temp",
+            "Videos",
+            "VideoEditorExports",
+            "tools/news_extractor"
+          )) {
             New-Item -ItemType Directory -Force -Path (Join-Path $root $dir) | Out-Null
           }
+
           if (Test-Path "resources") {
             Copy-Item "resources/*" (Join-Path $root "resources") -Recurse -Force
           }
+
+          $extractor = Get-ChildItem `
+            "tools/news_extractor/dist" `
+            -Filter "ExtratorMateriasPortable-V1.25.19.exe" `
+            -Recurse |
+            Select-Object -First 1
+
+          if (-not $extractor) {
+            throw "Executável do Extrator de Notícias não encontrado."
+          }
+
+          Copy-Item `
+            $extractor.FullName `
+            (Join-Path $root "tools/news_extractor/ExtratorMateriasPortable-V1.25.19.exe") `
+            -Force
+
           if (Test-Path "portable/README_PORTABLE.txt") {
             Copy-Item "portable/README_PORTABLE.txt" $root -Force
           }
+
           if (Test-Path "portable/THIRD_PARTY_NOTICES.txt") {
             Copy-Item "portable/THIRD_PARTY_NOTICES.txt" $root -Force
           }
@@ -88,34 +141,62 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
+
           $tmpZip = Join-Path $env:RUNNER_TEMP "ffmpeg-download.zip"
           $tmpDir = Join-Path $env:RUNNER_TEMP "ffmpeg-extracted"
+
           $urls = @(
             "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-n9.0-latest-win64-gpl-9.0.zip",
             "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl.zip"
           )
+
           $ok = $false
+
           foreach ($url in $urls) {
             for ($attempt = 1; $attempt -le 3; $attempt++) {
               try {
-                if (Test-Path $tmpZip) { Remove-Item $tmpZip -Force }
-                Invoke-WebRequest -Uri $url -OutFile $tmpZip -TimeoutSec 300 -MaximumRedirection 10
+                if (Test-Path $tmpZip) {
+                  Remove-Item $tmpZip -Force
+                }
+
+                Invoke-WebRequest `
+                  -Uri $url `
+                  -OutFile $tmpZip `
+                  -TimeoutSec 300 `
+                  -MaximumRedirection 10
+
                 if ((Get-Item $tmpZip).Length -gt 10000000) {
                   $ok = $true
                   break
                 }
-              } catch {
+              }
+              catch {
                 Write-Warning $_.Exception.Message
-                if ($attempt -lt 3) { Start-Sleep -Seconds (10 * $attempt) }
+
+                if ($attempt -lt 3) {
+                  Start-Sleep -Seconds (10 * $attempt)
+                }
               }
             }
-            if ($ok) { break }
+
+            if ($ok) {
+              break
+            }
           }
-          if (-not $ok) { throw "Não foi possível baixar FFmpeg." }
+
+          if (-not $ok) {
+            throw "Não foi possível baixar FFmpeg."
+          }
+
           Expand-Archive $tmpZip $tmpDir -Force
+
           $ffmpeg = Get-ChildItem $tmpDir -Filter "ffmpeg.exe" -Recurse | Select-Object -First 1
           $ffprobe = Get-ChildItem $tmpDir -Filter "ffprobe.exe" -Recurse | Select-Object -First 1
-          if (-not $ffmpeg -or -not $ffprobe) { throw "FFmpeg/FFprobe não encontrados." }
+
+          if (-not $ffmpeg -or -not $ffprobe) {
+            throw "FFmpeg/FFprobe não encontrados."
+          }
+
           Copy-Item $ffmpeg.FullName "dist/MonitorDeNoticias/bin/ffmpeg.exe" -Force
           Copy-Item $ffprobe.FullName "dist/MonitorDeNoticias/bin/ffprobe.exe" -Force
 
@@ -123,27 +204,38 @@ jobs:
         shell: pwsh
         run: |
           $zip = Join-Path $PWD $env:PORTABLE_NAME
-          if (Test-Path $zip) { Remove-Item $zip -Force }
+
+          if (Test-Path $zip) {
+            Remove-Item $zip -Force
+          }
 
           $sevenZip = "C:\Program Files\7-Zip\7z.exe"
+
           if (Test-Path $sevenZip) {
             Push-Location "dist/MonitorDeNoticias"
+
             try {
-              # Compressão balanceada: muito mais rápida que -mx=9 e adequada para
-              # executáveis/DLLs que já possuem pouca margem de compressão extra.
               & $sevenZip a -tzip $zip ".\*" -mx=3 -mmt=on
-              if ($LASTEXITCODE -ne 0) { throw "7-Zip retornou código $LASTEXITCODE" }
+
+              if ($LASTEXITCODE -ne 0) {
+                throw "7-Zip retornou código $LASTEXITCODE"
+              }
             }
             finally {
               Pop-Location
             }
           }
           else {
-            Write-Warning "7-Zip não encontrado; usando Compress-Archive."
-            Compress-Archive -Path "dist/MonitorDeNoticias/*" -DestinationPath $zip -CompressionLevel Fastest
+            Compress-Archive `
+              -Path "dist/MonitorDeNoticias/*" `
+              -DestinationPath $zip `
+              -CompressionLevel Fastest
           }
 
-          if (-not (Test-Path $zip)) { throw "ZIP portable não foi gerado." }
+          if (-not (Test-Path $zip)) {
+            throw "ZIP portable não foi gerado."
+          }
+
           $sizeMB = [math]::Round((Get-Item $zip).Length / 1MB, 2)
           Write-Host "Arquivo final: $zip"
           Write-Host "Tamanho final: $sizeMB MB"
@@ -152,25 +244,60 @@ jobs:
         shell: pwsh
         run: |
           Add-Type -AssemblyName System.IO.Compression.FileSystem
+
           $zipPath = (Resolve-Path $env:PORTABLE_NAME).Path
           $archive = [System.IO.Compression.ZipFile]::OpenRead($zipPath)
+
           try {
             $allowedInternalZips = @("_internal/base_library.zip")
-            $zipEntries = $archive.Entries | Where-Object { $_.FullName.ToLowerInvariant().EndsWith(".zip") }
-            $suspicious = $zipEntries | Where-Object {
-              $normalized = $_.FullName.Replace("\", "/").ToLowerInvariant()
-              $allowed = $allowedInternalZips -contains $normalized
-              $portableInside = ($normalized -like "*monitordenoticias-windows-portable*.zip" -or $normalized -like "*monitor-de-noticias*portable*.zip")
-              $rootZip = -not $normalized.Contains("/")
-              (-not $allowed) -and ($portableInside -or $rootZip)
-            }
+
+            $zipEntries = $archive.Entries |
+              Where-Object { $_.FullName.ToLowerInvariant().EndsWith(".zip") }
+
+            $suspicious = $zipEntries |
+              Where-Object {
+                $normalized = $_.FullName.Replace("\", "/").ToLowerInvariant()
+                $allowed = $allowedInternalZips -contains $normalized
+                $portableInside = (
+                  $normalized -like "*monitordenoticias-windows-portable*.zip" -or
+                  $normalized -like "*monitor-de-noticias*portable*.zip"
+                )
+                $rootZip = -not $normalized.Contains("/")
+
+                (-not $allowed) -and ($portableInside -or $rootZip)
+              }
+
             if ($suspicious) {
-              $names = ($suspicious | ForEach-Object { $_.FullName }) -join ", "
+              $names = (
+                $suspicious |
+                ForEach-Object { $_.FullName }
+              ) -join ", "
+
               throw "ZIP aninhado indevido: $names"
             }
-            $exe = $archive.Entries | Where-Object { $_.FullName.Replace("\", "/") -ieq "MonitorDeNoticias.exe" } | Select-Object -First 1
-            if (-not $exe) { throw "MonitorDeNoticias.exe não está na raiz do ZIP." }
-          } finally {
+
+            $exe = $archive.Entries |
+              Where-Object {
+                $_.FullName.Replace("\", "/") -ieq "MonitorDeNoticias.exe"
+              } |
+              Select-Object -First 1
+
+            if (-not $exe) {
+              throw "MonitorDeNoticias.exe não está na raiz do ZIP."
+            }
+
+            $newsExtractor = $archive.Entries |
+              Where-Object {
+                $_.FullName.Replace("\", "/") -ieq `
+                  "tools/news_extractor/ExtratorMateriasPortable-V1.25.19.exe"
+              } |
+              Select-Object -First 1
+
+            if (-not $newsExtractor) {
+              throw "Extrator de Notícias não está dentro do portable."
+            }
+          }
+          finally {
             $archive.Dispose()
           }
 
@@ -208,6 +335,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
+
           gh release create "$RELEASE_TAG" \
             --repo "$GITHUB_REPOSITORY" \
             --target "$GITHUB_SHA" \
@@ -223,6 +351,7 @@ jobs:
           set -euo pipefail
 
           FILE="release-files/${PORTABLE_NAME}"
+
           if [ ! -f "$FILE" ]; then
             echo "Arquivo não encontrado: $FILE"
             exit 1
@@ -257,5 +386,6 @@ jobs:
             -o upload-response.json
 
           echo "Upload concluído."
+
           gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${RELEASE_TAG}" \
             --jq '.assets[] | [.name, .size, .state] | @tsv'
