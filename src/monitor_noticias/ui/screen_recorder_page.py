@@ -172,17 +172,42 @@ class RegionSelectionOverlay(QWidget):
 
 
 class CaptureAreaOverlay(QWidget):
-    """Borda vermelha persistente da área que será capturada.
+    """Borda vermelha persistente, móvel e redimensionável.
+
+    Modo normal:
+    - apenas mostra a área;
+    - não bloqueia cliques do usuário.
+
+    Modo AJUSTAR:
+    - arraste pelo centro para mover;
+    - arraste bordas/cantos para redimensionar;
+    - Enter confirma;
+    - Esc cancela e restaura a área anterior.
 
     No Windows tentamos excluir esta janela da própria gravação usando
-    WDA_EXCLUDEFROMCAPTURE. Assim a borda fica visível para o operador,
-    mas não deve aparecer no vídeo final em versões compatíveis do Windows.
+    WDA_EXCLUDEFROMCAPTURE, para a moldura ficar visível ao operador sem
+    aparecer no vídeo final em versões compatíveis do Windows.
     """
 
+    rect_changed = Signal(QRect)
+    edit_finished = Signal(QRect)
+    edit_cancelled = Signal(QRect)
+
     BORDER = 4
+    HIT = 14
+    MIN_WIDTH = 160
+    MIN_HEIGHT = 100
 
     def __init__(self) -> None:
         super().__init__(None)
+
+        self._capture_rect = QRect()
+        self._bounds = QRect()
+        self._editing = False
+        self._edit_original = QRect()
+        self._drag_mode = ""
+        self._drag_start_global = QPoint()
+        self._drag_start_rect = QRect()
 
         self.setWindowFlags(
             Qt.WindowType.FramelessWindowHint
@@ -198,14 +223,27 @@ class CaptureAreaOverlay(QWidget):
             Qt.WidgetAttribute.WA_TransparentForMouseEvents,
             True,
         )
+        self.setMouseTracking(True)
         self.setFocusPolicy(
-            Qt.FocusPolicy.NoFocus
+            Qt.FocusPolicy.StrongFocus
         )
+
+    @property
+    def editing(self) -> bool:
+        return self._editing
+
+    @property
+    def capture_rect(self) -> QRect:
+        return QRect(self._capture_rect)
 
     def showEvent(self, event) -> None:
         super().showEvent(event)
         self._exclude_from_capture()
         self.raise_()
+
+        if self._editing:
+            self.activateWindow()
+            self.setFocus()
 
     def _exclude_from_capture(self) -> None:
         if not sys.platform.startswith("win"):
@@ -213,25 +251,37 @@ class CaptureAreaOverlay(QWidget):
 
         try:
             hwnd = int(self.winId())
-            # WDA_EXCLUDEFROMCAPTURE = 0x00000011
             ctypes.windll.user32.SetWindowDisplayAffinity(
                 hwnd,
-                0x00000011,
+                0x00000011,  # WDA_EXCLUDEFROMCAPTURE
             )
         except Exception:
-            # Em Windows antigos, a chamada pode não existir ou falhar.
             pass
 
     def set_capture_rect(
         self,
         rect: QRect | None,
+        bounds: QRect | None = None,
     ) -> None:
         if rect is None or rect.isEmpty():
+            self._capture_rect = QRect()
+            self.hide()
+            return
+
+        self._capture_rect = QRect(rect.normalized())
+
+        if bounds is not None and not bounds.isEmpty():
+            self._bounds = QRect(bounds)
+
+        self._apply_geometry()
+
+    def _apply_geometry(self) -> None:
+        if self._capture_rect.isEmpty():
             self.hide()
             return
 
         self.setGeometry(
-            rect.adjusted(
+            self._capture_rect.adjusted(
                 -self.BORDER,
                 -self.BORDER,
                 self.BORDER,
@@ -245,6 +295,358 @@ class CaptureAreaOverlay(QWidget):
         self.raise_()
         self.update()
 
+    def set_editing(
+        self,
+        enabled: bool,
+    ) -> None:
+        if enabled == self._editing:
+            return
+
+        if enabled:
+            if self._capture_rect.isEmpty():
+                return
+            self._edit_original = QRect(
+                self._capture_rect
+            )
+
+        self._editing = enabled
+
+        # Em edição a moldura precisa receber mouse/teclado.
+        # Fora da edição ela volta a ser "atravessável".
+        self.setAttribute(
+            Qt.WidgetAttribute.WA_TransparentForMouseEvents,
+            not enabled,
+        )
+        self.setWindowFlag(
+            Qt.WindowType.WindowTransparentForInput,
+            not enabled,
+        )
+
+        # Alterar WindowFlag recria a janela nativa.
+        self.show()
+        self._exclude_from_capture()
+        self.raise_()
+
+        if enabled:
+            self.activateWindow()
+            self.setFocus()
+            self.setCursor(
+                Qt.CursorShape.SizeAllCursor
+            )
+        else:
+            self.unsetCursor()
+
+        self.update()
+
+    def finish_edit(self) -> None:
+        if not self._editing:
+            return
+
+        rect = QRect(self._capture_rect)
+        self.set_editing(False)
+        self.edit_finished.emit(rect)
+
+    def cancel_edit(self) -> None:
+        if not self._editing:
+            return
+
+        original = QRect(self._edit_original)
+
+        if not original.isEmpty():
+            self._capture_rect = original
+            self._apply_geometry()
+
+        self.set_editing(False)
+        self.edit_cancelled.emit(
+            QRect(self._capture_rect)
+        )
+
+    def keyPressEvent(self, event: QKeyEvent) -> None:
+        if not self._editing:
+            super().keyPressEvent(event)
+            return
+
+        if event.key() in (
+            Qt.Key.Key_Return,
+            Qt.Key.Key_Enter,
+        ):
+            self.finish_edit()
+            return
+
+        if event.key() == Qt.Key.Key_Escape:
+            self.cancel_edit()
+            return
+
+        # Ajuste fino pelo teclado.
+        step = 10 if (
+            event.modifiers()
+            & Qt.KeyboardModifier.ShiftModifier
+        ) else 1
+
+        rect = QRect(self._capture_rect)
+
+        if event.key() == Qt.Key.Key_Left:
+            rect.translate(-step, 0)
+        elif event.key() == Qt.Key.Key_Right:
+            rect.translate(step, 0)
+        elif event.key() == Qt.Key.Key_Up:
+            rect.translate(0, -step)
+        elif event.key() == Qt.Key.Key_Down:
+            rect.translate(0, step)
+        else:
+            super().keyPressEvent(event)
+            return
+
+        self._set_rect_from_edit(rect)
+
+    def mousePressEvent(self, event: QMouseEvent) -> None:
+        if (
+            not self._editing
+            or event.button()
+            != Qt.MouseButton.LeftButton
+        ):
+            return
+
+        local = event.position().toPoint()
+        self._drag_mode = self._hit_test(local)
+        self._drag_start_global = (
+            event.globalPosition().toPoint()
+        )
+        self._drag_start_rect = QRect(
+            self._capture_rect
+        )
+
+        event.accept()
+
+    def mouseMoveEvent(self, event: QMouseEvent) -> None:
+        if not self._editing:
+            return
+
+        local = event.position().toPoint()
+
+        if (
+            event.buttons()
+            & Qt.MouseButton.LeftButton
+            and self._drag_mode
+        ):
+            current = (
+                event.globalPosition().toPoint()
+            )
+            delta = (
+                current
+                - self._drag_start_global
+            )
+
+            rect = QRect(
+                self._drag_start_rect
+            )
+            mode = self._drag_mode
+
+            if mode == "move":
+                rect.translate(
+                    delta.x(),
+                    delta.y(),
+                )
+            else:
+                if "left" in mode:
+                    rect.setLeft(
+                        self._drag_start_rect.left()
+                        + delta.x()
+                    )
+                if "right" in mode:
+                    rect.setRight(
+                        self._drag_start_rect.right()
+                        + delta.x()
+                    )
+                if "top" in mode:
+                    rect.setTop(
+                        self._drag_start_rect.top()
+                        + delta.y()
+                    )
+                if "bottom" in mode:
+                    rect.setBottom(
+                        self._drag_start_rect.bottom()
+                        + delta.y()
+                    )
+
+            self._set_rect_from_edit(
+                rect.normalized()
+            )
+            event.accept()
+            return
+
+        self._update_cursor(local)
+
+    def mouseReleaseEvent(self, event: QMouseEvent) -> None:
+        if (
+            self._editing
+            and event.button()
+            == Qt.MouseButton.LeftButton
+        ):
+            self._drag_mode = ""
+            self._update_cursor(
+                event.position().toPoint()
+            )
+            event.accept()
+
+    def mouseDoubleClickEvent(
+        self,
+        event: QMouseEvent,
+    ) -> None:
+        if (
+            self._editing
+            and event.button()
+            == Qt.MouseButton.LeftButton
+        ):
+            self.finish_edit()
+            event.accept()
+
+    def _hit_test(
+        self,
+        pos: QPoint,
+    ) -> str:
+        rect = self.rect().adjusted(
+            self.BORDER,
+            self.BORDER,
+            -self.BORDER,
+            -self.BORDER,
+        )
+
+        left = abs(
+            pos.x() - rect.left()
+        ) <= self.HIT
+        right = abs(
+            pos.x() - rect.right()
+        ) <= self.HIT
+        top = abs(
+            pos.y() - rect.top()
+        ) <= self.HIT
+        bottom = abs(
+            pos.y() - rect.bottom()
+        ) <= self.HIT
+
+        if left and top:
+            return "left-top"
+        if right and top:
+            return "right-top"
+        if left and bottom:
+            return "left-bottom"
+        if right and bottom:
+            return "right-bottom"
+        if left:
+            return "left"
+        if right:
+            return "right"
+        if top:
+            return "top"
+        if bottom:
+            return "bottom"
+
+        return "move"
+
+    def _update_cursor(
+        self,
+        pos: QPoint,
+    ) -> None:
+        mode = self._hit_test(pos)
+
+        mapping = {
+            "left": Qt.CursorShape.SizeHorCursor,
+            "right": Qt.CursorShape.SizeHorCursor,
+            "top": Qt.CursorShape.SizeVerCursor,
+            "bottom": Qt.CursorShape.SizeVerCursor,
+            "left-top": Qt.CursorShape.SizeFDiagCursor,
+            "right-bottom": Qt.CursorShape.SizeFDiagCursor,
+            "right-top": Qt.CursorShape.SizeBDiagCursor,
+            "left-bottom": Qt.CursorShape.SizeBDiagCursor,
+            "move": Qt.CursorShape.SizeAllCursor,
+        }
+
+        self.setCursor(
+            mapping.get(
+                mode,
+                Qt.CursorShape.ArrowCursor,
+            )
+        )
+
+    def _set_rect_from_edit(
+        self,
+        rect: QRect,
+    ) -> None:
+        rect = self._enforce_minimum(
+            rect.normalized()
+        )
+        rect = self._clamp_to_bounds(
+            rect
+        )
+
+        self._capture_rect = rect
+        self._apply_geometry()
+        self.rect_changed.emit(
+            QRect(rect)
+        )
+
+    def _enforce_minimum(
+        self,
+        rect: QRect,
+    ) -> QRect:
+        rect = QRect(rect)
+
+        if rect.width() < self.MIN_WIDTH:
+            rect.setWidth(
+                self.MIN_WIDTH
+            )
+
+        if rect.height() < self.MIN_HEIGHT:
+            rect.setHeight(
+                self.MIN_HEIGHT
+            )
+
+        return rect
+
+    def _clamp_to_bounds(
+        self,
+        rect: QRect,
+    ) -> QRect:
+        if self._bounds.isEmpty():
+            return rect
+
+        bounds = QRect(self._bounds)
+        rect = QRect(rect)
+
+        width = min(
+            rect.width(),
+            bounds.width(),
+        )
+        height = min(
+            rect.height(),
+            bounds.height(),
+        )
+        rect.setSize(
+            rect.size().boundedTo(
+                bounds.size()
+            )
+        )
+
+        if rect.left() < bounds.left():
+            rect.moveLeft(
+                bounds.left()
+            )
+        if rect.top() < bounds.top():
+            rect.moveTop(
+                bounds.top()
+            )
+        if rect.right() > bounds.right():
+            rect.moveRight(
+                bounds.right()
+            )
+        if rect.bottom() > bounds.bottom():
+            rect.moveBottom(
+                bounds.bottom()
+            )
+
+        return rect
+
     def paintEvent(self, _event) -> None:
         painter = QPainter(self)
         painter.setRenderHint(
@@ -252,28 +654,46 @@ class CaptureAreaOverlay(QWidget):
             True,
         )
 
-        pen = QPen(
-            QColor("#FF274B"),
-            self.BORDER,
-        )
-        painter.setPen(pen)
-        painter.setBrush(Qt.BrushStyle.NoBrush)
-
-        frame = self.rect().adjusted(
+        inner = self.rect().adjusted(
             self.BORDER // 2,
             self.BORDER // 2,
             -(self.BORDER // 2) - 1,
             -(self.BORDER // 2) - 1,
         )
-        painter.drawRect(frame)
 
+        if self._editing:
+            # Leve destaque sem esconder a tela que está sendo ajustada.
+            painter.fillRect(
+                inner,
+                QColor(255, 20, 60, 18),
+            )
+
+        painter.setPen(
+            QPen(
+                QColor("#FF274B"),
+                self.BORDER,
+            )
+        )
+        painter.setBrush(
+            Qt.BrushStyle.NoBrush
+        )
+        painter.drawRect(inner)
+
+        badge_width = (
+            258
+            if self._editing
+            else 116
+        )
         badge = QRect(
             10,
             10,
-            116,
+            badge_width,
             30,
         )
-        painter.setPen(Qt.PenStyle.NoPen)
+
+        painter.setPen(
+            Qt.PenStyle.NoPen
+        )
         painter.setBrush(
             QColor("#E71D43")
         )
@@ -287,13 +707,80 @@ class CaptureAreaOverlay(QWidget):
             QColor("#FFFFFF")
         )
         painter.setFont(
-            QFont("Segoe UI", 10, QFont.Weight.Bold)
+            QFont(
+                "Segoe UI",
+                10,
+                QFont.Weight.Bold,
+            )
         )
+
+        badge_text = (
+            "↔ ARRASTE • BORDAS REDIMENSIONAM • ENTER OK"
+            if self._editing
+            else "● ÁREA REC"
+        )
+
         painter.drawText(
             badge,
             Qt.AlignmentFlag.AlignCenter,
-            "● ÁREA REC",
+            badge_text,
         )
+
+        if self._editing:
+            self._draw_handles(
+                painter,
+                inner,
+            )
+
+    def _draw_handles(
+        self,
+        painter: QPainter,
+        rect: QRect,
+    ) -> None:
+        points = [
+            rect.topLeft(),
+            rect.topRight(),
+            rect.bottomLeft(),
+            rect.bottomRight(),
+            QPoint(
+                rect.center().x(),
+                rect.top(),
+            ),
+            QPoint(
+                rect.center().x(),
+                rect.bottom(),
+            ),
+            QPoint(
+                rect.left(),
+                rect.center().y(),
+            ),
+            QPoint(
+                rect.right(),
+                rect.center().y(),
+            ),
+        ]
+
+        painter.setPen(
+            QPen(
+                QColor("#FFFFFF"),
+                2,
+            )
+        )
+        painter.setBrush(
+            QColor("#FF274B")
+        )
+
+        size = 10
+
+        for point in points:
+            painter.drawRect(
+                QRect(
+                    point.x() - size // 2,
+                    point.y() - size // 2,
+                    size,
+                    size,
+                )
+            )
 
 
 class ScreenRecorderPage(QWidget):
@@ -350,6 +837,15 @@ class ScreenRecorderPage(QWidget):
         self._region: QRect | None = None
         self._overlay: RegionSelectionOverlay | None = None
         self._capture_overlay = CaptureAreaOverlay()
+        self._capture_overlay.rect_changed.connect(
+            self._region_live_changed
+        )
+        self._capture_overlay.edit_finished.connect(
+            self._region_edit_finished
+        )
+        self._capture_overlay.edit_cancelled.connect(
+            self._region_edit_cancelled
+        )
         self._hidden_by_recorder = False
         self._audio_loaded = False
         self._module_enabled = True
@@ -566,6 +1062,20 @@ class ScreenRecorderPage(QWidget):
         )
         mode_row.addWidget(self.select_region)
 
+        self.adjust_region = QPushButton(
+            "Ajustar área"
+        )
+        self.adjust_region.setObjectName(
+            "recSecondary"
+        )
+        self.adjust_region.setEnabled(False)
+        self.adjust_region.clicked.connect(
+            self._toggle_region_edit
+        )
+        mode_row.addWidget(
+            self.adjust_region
+        )
+
         self.quick_rec = QPushButton(
             "●  REC"
         )
@@ -585,6 +1095,18 @@ class ScreenRecorderPage(QWidget):
                 "Área de captura",
                 mode_wrap,
             )
+        )
+
+        self.region_help = QLabel(
+            "Área personalizada: use “Selecionar área” uma vez. "
+            "Depois use “Ajustar área” para mover e redimensionar a moldura vermelha."
+        )
+        self.region_help.setObjectName(
+            "recAudioStatus"
+        )
+        self.region_help.setWordWrap(True)
+        config_l.addWidget(
+            self.region_help
         )
 
         self.fps_combo = QComboBox()
@@ -1224,12 +1746,15 @@ class ScreenRecorderPage(QWidget):
         return screens[index]
 
     def _screen_changed(self, _index: int) -> None:
+        self._finish_region_edit()
         self._region = None
         self._update_capture_labels()
         self._update_capture_overlay()
         self._update_preview()
 
     def _mode_changed(self, text: str) -> None:
+        self._finish_region_edit()
+
         if text == "Tela inteira":
             self._region = None
 
@@ -1238,11 +1763,13 @@ class ScreenRecorderPage(QWidget):
         self._update_preview()
 
     def _update_capture_labels(self) -> None:
-        if (
+        personalized = (
             self.mode_combo.currentText()
             == "Área personalizada"
             and self._region is not None
-        ):
+        )
+
+        if personalized:
             text = (
                 f"{self._region.width()}×"
                 f"{self._region.height()}"
@@ -1260,6 +1787,18 @@ class ScreenRecorderPage(QWidget):
             self.source_value.setText(
                 "Tela inteira"
             )
+
+        self.adjust_region.setEnabled(
+            self._module_enabled
+            and personalized
+            and not self.is_active
+        )
+
+        self.adjust_region.setText(
+            "Concluir ajuste"
+            if self._capture_overlay.editing
+            else "Ajustar área"
+        )
 
         self.region_badge.setStyleSheet(
             "background:#FFE7EC;"
@@ -1304,8 +1843,16 @@ class ScreenRecorderPage(QWidget):
             self._capture_overlay.hide()
             return
 
+        screen = self._selected_screen()
+        bounds = (
+            QRect(screen.geometry())
+            if screen is not None
+            else QRect()
+        )
+
         self._capture_overlay.set_capture_rect(
-            rect
+            rect,
+            bounds,
         )
 
     def _update_preview(self) -> None:
@@ -1362,6 +1909,8 @@ class ScreenRecorderPage(QWidget):
         if self.is_active:
             return
 
+        self._finish_region_edit()
+
         screen = self._selected_screen()
 
         if screen is None:
@@ -1382,16 +1931,102 @@ class ScreenRecorderPage(QWidget):
         )
         self._overlay.show()
 
-    def _region_selected(self, rect: QRect) -> None:
+    def _region_selected(
+        self,
+        rect: QRect,
+    ) -> None:
         self._region = rect.normalized()
         self._overlay = None
         self._update_capture_labels()
         self._update_capture_overlay()
         self._update_preview()
 
+        # Depois da primeira seleção já entra no modo de ajuste,
+        # para o usuário poder mover/redimensionar imediatamente.
+        self._start_region_edit()
+
     def _region_cancelled(self) -> None:
         self._overlay = None
         self._update_capture_overlay()
+
+    def _toggle_region_edit(self) -> None:
+        if self._capture_overlay.editing:
+            self._finish_region_edit()
+        else:
+            self._start_region_edit()
+
+    def _start_region_edit(self) -> None:
+        if (
+            self.is_active
+            or not self._module_enabled
+            or self.mode_combo.currentText()
+            != "Área personalizada"
+            or self._region is None
+        ):
+            return
+
+        self._update_capture_overlay()
+        self._capture_overlay.set_editing(
+            True
+        )
+        self.adjust_region.setText(
+            "Concluir ajuste"
+        )
+        self.status_text.setText(
+            "Ajuste ativo: arraste o centro para mover; "
+            "arraste bordas/cantos para redimensionar; "
+            "Enter confirma e Esc cancela."
+        )
+
+    def _finish_region_edit(self) -> None:
+        if self._capture_overlay.editing:
+            self._capture_overlay.finish_edit()
+
+    def _region_live_changed(
+        self,
+        rect: QRect,
+    ) -> None:
+        if rect.isEmpty():
+            return
+
+        self._region = rect.normalized()
+        self._update_capture_labels()
+        self._update_preview()
+
+        self.status_text.setText(
+            "Área: "
+            f"X {self._region.x()} • "
+            f"Y {self._region.y()} • "
+            f"{self._region.width()}×{self._region.height()}"
+        )
+
+    def _region_edit_finished(
+        self,
+        rect: QRect,
+    ) -> None:
+        if not rect.isEmpty():
+            self._region = rect.normalized()
+
+        self._update_capture_labels()
+        self._update_capture_overlay()
+        self._update_preview()
+        self.status_text.setText(
+            "Área de captura ajustada."
+        )
+
+    def _region_edit_cancelled(
+        self,
+        rect: QRect,
+    ) -> None:
+        if not rect.isEmpty():
+            self._region = rect.normalized()
+
+        self._update_capture_labels()
+        self._update_capture_overlay()
+        self._update_preview()
+        self.status_text.setText(
+            "Ajuste cancelado; área anterior restaurada."
+        )
 
     # ------------------------------------------------------------------
     # AUDIO
@@ -1678,6 +2313,8 @@ class ScreenRecorderPage(QWidget):
         self._module_enabled = enabled
 
         if not enabled:
+            self._finish_region_edit()
+
             if self._state in {
                 self.RECORDING,
                 self.PAUSED,
@@ -1816,6 +2453,8 @@ class ScreenRecorderPage(QWidget):
     # ------------------------------------------------------------------
 
     def start_recording(self) -> None:
+        self._finish_region_edit()
+
         if not self._module_enabled:
             QMessageBox.information(
                 self,
@@ -2545,6 +3184,7 @@ class ScreenRecorderPage(QWidget):
             self.screen_combo,
             self.mode_combo,
             self.select_region,
+            self.adjust_region,
             self.fps_combo,
             self.quality_combo,
             self.audio_combo,
@@ -2620,6 +3260,7 @@ class ScreenRecorderPage(QWidget):
                 message
             )
 
+        self._update_capture_labels()
         self.state_changed.emit(state)
 
     def _restore_window_after_recording(self) -> None:
@@ -2641,6 +3282,7 @@ class ScreenRecorderPage(QWidget):
 
     def shutdown(self) -> bool:
         self._closing = True
+        self._finish_region_edit()
 
         try:
             if self._state == self.RECORDING:
