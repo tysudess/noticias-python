@@ -48,6 +48,7 @@ from monitor_noticias.ui.settings_reference_page import (
 from monitor_noticias.ui.terms_page import TermsPage
 from monitor_noticias.ui.source_page import SourcesPage
 from monitor_noticias.ui.videos_page import VideosPage
+from monitor_noticias.ui.spreadsheet_automation_page import SpreadsheetAutomationPage
 from monitor_noticias.ui.sections import SECTION_ORDER, Section
 from monitor_noticias.ui.sidebar_widgets import (
     SIDEBAR_STYLE,
@@ -135,6 +136,7 @@ class MainWindow(QMainWindow):
             Section.PDF_EDITOR,
             Section.EXTRACTOR,
             Section.VIDEO_EDITOR,
+            Section.SPREADSHEETS,
             Section.SETTINGS,
         )
 
@@ -155,6 +157,7 @@ class MainWindow(QMainWindow):
             Section.PDF_EDITOR: ("PDF", "#FF5574"),
             Section.EXTRACTOR: ("☁", "#4DDEDE"),
             Section.VIDEO_EDITOR: ("▰", "#B867F6"),
+            Section.SPREADSHEETS: ("▦", "#29D6A3"),
         }
         return data.get(section, ("•", "#FFFFFF"))
 
@@ -369,6 +372,10 @@ class MainWindow(QMainWindow):
             Section.VIDEO_EDITOR: VideoEditorPage(
                 self.paths.root
             ),
+            Section.SPREADSHEETS: SpreadsheetAutomationPage(
+                self.controller,
+                self.paths.root,
+            ),
         }
 
         # IMPORTANTE:
@@ -542,6 +549,9 @@ class MainWindow(QMainWindow):
 
         elif "fonte" in lowered:
             self.navigate(Section.SOURCES)
+
+        elif "planilha" in lowered or "whatsapp" in lowered:
+            self.navigate(Section.SPREADSHEETS)
 
         else:
             self.navigate(Section.NEWS)
@@ -792,6 +802,15 @@ class MainWindow(QMainWindow):
             )
             self._restore()
             return
+
+        spreadsheets = self.pages.get(
+            Section.SPREADSHEETS
+        )
+        if isinstance(
+            spreadsheets,
+            SpreadsheetAutomationPage,
+        ):
+            spreadsheets.shutdown()
 
         self._allow_close = True
         self._timer.stop()

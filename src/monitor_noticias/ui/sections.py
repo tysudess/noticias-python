@@ -52,7 +52,6 @@ class Section(Enum):
         "Interrompa buscas manuais em andamento",
         "■",
     )
-
     NEWS_EXTRACTOR = SectionSpec(
         "Extrator de Notícias",
         "Extraia e revise matérias a partir do link do veículo",
@@ -78,8 +77,13 @@ class Section(Enum):
         "Editor de vídeo incorporado ao Monitor",
         "▰",
     )
+    SPREADSHEETS = SectionSpec(
+        "Planilhas",
+        "Automação WhatsApp → Google Planilhas integrada ao Central",
+        "▦",
+    )
 
-    # Configurações é propositalmente a ÚLTIMA opção do menu.
+    # Configurações permanece propositalmente a ÚLTIMA opção do menu.
     SETTINGS = SectionSpec(
         "Configurações",
         "Automação, proxy, inicialização e operação do aplicativo",
@@ -101,6 +105,7 @@ SECTION_ORDER = (
     Section.PDF_EDITOR,
     Section.EXTRACTOR,
     Section.VIDEO_EDITOR,
+    Section.SPREADSHEETS,
     Section.SETTINGS,
 )
 
@@ -113,6 +118,7 @@ CORE_SECTIONS = {
     Section.HISTORY,
     Section.TERMS,
     Section.STOP,
+    Section.SPREADSHEETS,
     Section.SETTINGS,
 }
 
