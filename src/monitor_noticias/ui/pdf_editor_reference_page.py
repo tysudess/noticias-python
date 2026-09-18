@@ -43,6 +43,7 @@ class ReferencePdfPreview(PdfPreview):
         )
 
         if self._image is None or self._image.isNull():
+            self._image_rect = QRect()
             cx = self.width() // 2
             cy = self.height() // 2 - 15
 
@@ -469,6 +470,9 @@ class ReferencePdfEditorPage(PdfEditorPage):
         self.preview.crop_selected.connect(
             self._crop_done
         )
+        self.preview.crop_cancelled.connect(
+            self._crop_cancelled
+        )
         content.addWidget(
             self.preview,
             1,
@@ -478,7 +482,13 @@ class ReferencePdfEditorPage(PdfEditorPage):
         self.thumbs.setObjectName(
             "pdfThumbs"
         )
-        self.thumbs.setFixedWidth(110)
+        self.thumbs.setFixedWidth(116)
+        self.thumbs.setVerticalScrollMode(
+            self.thumbs.ScrollMode.ScrollPerPixel
+        )
+        self.thumbs.setHorizontalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+        )
         self.thumbs.currentRowChanged.connect(
             self._select
         )

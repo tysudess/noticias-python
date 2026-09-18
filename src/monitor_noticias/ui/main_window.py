@@ -84,7 +84,7 @@ class MainWindow(QMainWindow):
         self._current = Section.HOME
 
         self.setWindowTitle(
-            "Monitor de Notícias - Windows Portable v4.0.2"
+            "Central Inteligente de Mídia - Windows Portable v4.0.2"
         )
         self.resize(1600, 960)
         self.setMinimumSize(1180, 720)
@@ -185,10 +185,10 @@ class MainWindow(QMainWindow):
         brand_text.setContentsMargins(0, 1, 0, 0)
         brand_text.setSpacing(0)
 
-        brand = QLabel("MONITOR")
+        brand = QLabel("CENTRAL")
         brand.setObjectName("sidebarBrandTitle")
 
-        sub = QLabel("Inteligência de mídia")
+        sub = QLabel("INTELIGENTE DE MÍDIA")
         sub.setObjectName("sidebarBrandSub")
 
         brand_text.addWidget(brand)
@@ -454,7 +454,7 @@ class MainWindow(QMainWindow):
             self,
         )
         self.tray.setToolTip(
-            "Monitor de Notícias"
+            "Central Inteligente de Mídia"
         )
 
         menu = QMenu()
@@ -651,6 +651,20 @@ class MainWindow(QMainWindow):
         ].refresh(
             self.controller.state
         )
+
+        # Branding centralizado. O HomePage ainda usa internamente o nome
+        # histórico em uma linha de atividade; trocamos somente a apresentação.
+        home_page = self.pages.get(Section.HOME)
+        activities = getattr(home_page, "activities_text", None)
+        if activities is not None:
+            current_text = activities.text()
+            if "Monitor de Notícias v4.0.2" in current_text:
+                activities.setText(
+                    current_text.replace(
+                        "Monitor de Notícias v4.0.2",
+                        "Central Inteligente de Mídia v4.0.2",
+                    )
+                )
 
         now = QDateTime.currentDateTime()
 

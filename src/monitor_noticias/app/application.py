@@ -19,7 +19,7 @@ class Application:
         install_global_exception_hooks()
 
         log = logging.getLogger("monitor_noticias.application")
-        log.info("Inicializando Monitor de Notícias PySide6")
+        log.info("Inicializando Central Inteligente de Mídia PySide6")
 
         # Correção da pré-visualização de alguns MP4 no Windows.
         # Estas variáveis precisam ser definidas ANTES de importar os módulos
@@ -44,7 +44,9 @@ class Application:
         from monitor_noticias.ui.main_window import MainWindow
 
         qt_app = QApplication.instance() or QApplication(sys.argv)
-        qt_app.setApplicationName("Monitor de Notícias")
+        qt_app.setApplicationName("Central Inteligente de Mídia")
+        qt_app.setApplicationDisplayName("Central Inteligente de Mídia")
+        qt_app.setOrganizationName("Central Inteligente de Mídia")
 
         container = AppContainer.build(self.paths)
         window = MainWindow(

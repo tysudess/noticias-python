@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import threading
 from pathlib import Path
 
 from PIL import Image
@@ -52,6 +53,11 @@ from monitor_noticias.pdf_editor import (
 )
 
 log = logging.getLogger(__name__)
+
+# PDFium não é seguro para renderizações concorrentes no mesmo processo.
+# Prévia e miniaturas compartilham este lock para evitar fechamentos nativos
+# ao trocar rapidamente entre páginas de um PDF.
+_PDF_RENDER_LOCK = threading.RLock()
 
 
 def _pil_to_qimage(image: Image.Image) -> QImage:
@@ -144,10 +150,11 @@ class _ThumbTask(QRunnable):
 
     def run(self) -> None:
         try:
-            image = self.model.render_final_page(
-                self.page,
-                58,
-            )
+            with _PDF_RENDER_LOCK:
+                image = self.model.render_final_page(
+                    self.page,
+                    58,
+                )
 
             scale = min(
                 56.0 / max(1, image.width),
@@ -671,7 +678,9 @@ class PdfEditorPage(QWidget):
         self._thumb_signals.ready.connect(
             self._thumbnail_ready
         )
-        self._pool = QThreadPool.globalInstance()
+        self._pool = QThreadPool(self)
+        self._pool.setMaxThreadCount(1)
+        self._pool.setExpiryTimeout(5000)
 
         self._thumbnail_mode = True
 
@@ -1378,6 +1387,15 @@ class PdfEditorPage(QWidget):
         )
         self._request_preview()
 
+        if (
+            0 <= self.model.selected_index
+            < len(self.model.pages)
+        ):
+            self.status.setText(
+                f"Página {self.model.selected_index + 1} de "
+                f"{len(self.model.pages)} selecionada."
+            )
+
     # --------------------------------------------------------------
     # CORTE — correção principal
     # --------------------------------------------------------------
@@ -1412,12 +1430,13 @@ class PdfEditorPage(QWidget):
         try:
             # O corte é preparado de forma direta. Assim não disputa token com
             # a atualização normal da prévia, que era a origem do defeito.
-            rendered = (
-                self.model.render_transformed_source(
-                    page,
-                    120,
+            with _PDF_RENDER_LOCK:
+                rendered = (
+                    self.model.render_transformed_source(
+                        page,
+                        120,
+                    )
                 )
-            )
             image = _pil_to_qimage(
                 rendered
             )
@@ -1617,10 +1636,20 @@ class PdfEditorPage(QWidget):
         thread.start()
 
     def _request_preview(self) -> None:
+        """Atualiza a página selecionada sem criar múltiplos QThreads.
+
+        A combinação anterior de:
+        - um QThread novo a cada clique de miniatura;
+        - tarefas de miniatura no QThreadPool;
+        - pypdfium2/PDFium renderizando ao mesmo tempo
+
+        podia encerrar o processo nativamente ao trocar rapidamente de página.
+        A prévia principal agora é renderizada de forma serial e protegida.
+        """
+
         index = self.model.selected_index
 
         self._preview_token += 1
-        token = self._preview_token
 
         if (
             index
@@ -1634,28 +1663,46 @@ class PdfEditorPage(QWidget):
             )
             return
 
-        # Usa snapshot para que excluir/reordenar enquanto a renderização
-        # acontece não faça o worker renderizar outra página.
         page = self.model.pages[
             index
         ].copy_deep()
 
-        def render_snapshot():
-            if page.crop is not None:
-                return self.model.render_final_page(
-                    page,
-                    120,
-                )
+        try:
+            with _PDF_RENDER_LOCK:
+                if page.crop is not None:
+                    rendered = self.model.render_final_page(
+                        page,
+                        120,
+                    )
+                else:
+                    rendered = self.model.render_transformed_source(
+                        page,
+                        120,
+                    )
 
-            return self.model.render_transformed_source(
-                page,
-                120,
+            image = _pil_to_qimage(
+                rendered
             )
 
-        self._run_image_worker(
-            token,
-            render_snapshot,
-        )
+            self.preview.set_image(
+                image,
+                self.model.zoom,
+                None,
+            )
+
+        except Exception as exc:
+            log.exception(
+                "Falha ao trocar a página na prévia do Editor PDF"
+            )
+            self.preview.set_image(
+                None,
+                self.model.zoom,
+            )
+            self.status.setText(
+                "Não foi possível visualizar esta página: "
+                f"{exc}"
+            )
+
 
     # --------------------------------------------------------------
     # MINIATURAS / LISTA
