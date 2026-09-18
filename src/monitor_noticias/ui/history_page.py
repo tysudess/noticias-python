@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QSize, Qt
 from PySide6.QtWidgets import (
     QButtonGroup, QFrame, QHBoxLayout, QLabel, QListWidget, QListWidgetItem,
     QPushButton, QVBoxLayout,
@@ -10,7 +10,9 @@ from PySide6.QtWidgets import (
 
 from monitor_noticias.ui.controller import MainUiController, UiState
 from monitor_noticias.ui.pages import BasePage
-from monitor_noticias.ui.url_tools import copy_article_url, open_article_url, open_whatsapp
+from monitor_noticias.ui.url_tools import (
+    copy_article_url, open_article_url, open_whatsapp,
+)
 
 
 def _time(ms: int) -> str:
@@ -33,20 +35,20 @@ class HistoryPage(BasePage):
         self.tabs = QButtonGroup(self)
         self.tabs.setExclusive(True)
 
-        self.news_tab = QPushButton("Notícias")
-        self.news_tab.setObjectName("historyTab")
-        self.news_tab.setCheckable(True)
-        self.news_tab.setChecked(True)
+        news = QPushButton("Notícias")
+        news.setObjectName("historyTab")
+        news.setCheckable(True)
+        news.setChecked(True)
 
-        self.video_tab = QPushButton("Vídeos")
-        self.video_tab.setObjectName("historyTab")
-        self.video_tab.setCheckable(True)
+        videos = QPushButton("Vídeos")
+        videos.setObjectName("historyTab")
+        videos.setCheckable(True)
 
-        self.tabs.addButton(self.news_tab, 0)
-        self.tabs.addButton(self.video_tab, 1)
+        self.tabs.addButton(news, 0)
+        self.tabs.addButton(videos, 1)
 
-        tl.addWidget(self.news_tab)
-        tl.addWidget(self.video_tab)
+        tl.addWidget(news)
+        tl.addWidget(videos)
         tl.addStretch()
 
         self.clear = QPushButton("▣  Limpar histórico")
@@ -58,11 +60,18 @@ class HistoryPage(BasePage):
         self.list = QListWidget()
         self.list.setObjectName("historyList")
         self.list.setSpacing(7)
-        self.list.setVerticalScrollMode(QListWidget.ScrollMode.ScrollPerPixel)
-        self.list.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.list.setVerticalScrollMode(
+            QListWidget.ScrollMode.ScrollPerPixel
+        )
+        self.list.setHorizontalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+        )
+
         self.root.addWidget(self.list, 1)
 
-        self.tabs.idClicked.connect(lambda _: self.refresh(self.controller.state))
+        self.tabs.idClicked.connect(
+            lambda _: self.refresh(self.controller.state)
+        )
         self.clear.clicked.connect(self._clear)
 
         self.setStyleSheet(self._stylesheet())
@@ -126,19 +135,8 @@ class HistoryPage(BasePage):
         else:
             self.controller.clear_video_history()
 
-    def _button(self, text: str, style: str, fn):
-        button = QPushButton(text)
-        button.setStyleSheet(
-            style + "border-radius:7px;padding:8px 11px;font-weight:700;"
-        )
-        button.clicked.connect(fn)
-        return button
-
-    def _add_news(self, news) -> None:
-        item = QListWidgetItem()
-
+    def _news_card(self, news):
         card = QFrame()
-        card.setMinimumHeight(94)
         card.setStyleSheet(
             "QFrame{background:white;border:1px solid #DCE9F6;border-radius:10px;}"
             "QLabel{border:0;background:transparent;}"
@@ -165,17 +163,13 @@ class HistoryPage(BasePage):
 
         title = QLabel(news.title)
         title.setWordWrap(True)
-        title.setStyleSheet("color:#08245F;font-size:11px;font-weight:900;")
+        title.setStyleSheet(
+            "color:#08245F;font-size:11px;font-weight:900;"
+        )
 
         snippet = QLabel(getattr(news, "snippet", "") or "")
         snippet.setWordWrap(True)
         snippet.setStyleSheet("color:#6079A5;font-size:9px;")
-
-        text.addWidget(meta)
-        text.addWidget(title)
-
-        if snippet.text().strip():
-            text.addWidget(snippet)
 
         term = " • ".join(
             value
@@ -185,6 +179,12 @@ class HistoryPage(BasePage):
             )
             if value
         )
+
+        text.addWidget(meta)
+        text.addWidget(title)
+
+        if snippet.text().strip():
+            text.addWidget(snippet)
 
         if term:
             tag = QLabel(f"Termo: {term}")
@@ -196,31 +196,30 @@ class HistoryPage(BasePage):
 
         row.addLayout(text, 1)
 
-        row.addWidget(self._button(
-            "↗  Abrir matéria",
-            "background:white;color:#0C3974;border:1px solid #C9DDF2;",
-            lambda: open_article_url(news.link),
-        ))
-        row.addWidget(self._button(
-            "◉  WhatsApp",
-            "background:#EAF9F2;color:#078B5F;border:1px solid #BFE8D5;",
-            lambda: open_whatsapp(news.title, news.link),
-        ))
-        row.addWidget(self._button(
-            "▣  Copiar link",
-            "background:white;color:#0C3974;border:1px solid #C9DDF2;",
-            lambda: copy_article_url(news.link),
-        ))
+        actions = (
+            ("↗  Abrir matéria", lambda: open_article_url(news.link)),
+            ("◉  WhatsApp", lambda: open_whatsapp(news.title, news.link)),
+            ("▣  Copiar link", lambda: copy_article_url(news.link)),
+        )
 
-        item.setSizeHint(card.sizeHint())
-        self.list.addItem(item)
-        self.list.setItemWidget(item, card)
+        for label, callback in actions:
+            button = QPushButton(label)
+            button.setStyleSheet(
+                "background:white;color:#0C3974;border:1px solid #C9DDF2;"
+                "border-radius:7px;padding:8px 11px;font-weight:700;"
+            )
+            if "WhatsApp" in label:
+                button.setStyleSheet(
+                    "background:#EAF9F2;color:#078B5F;border:1px solid #BFE8D5;"
+                    "border-radius:7px;padding:8px 11px;font-weight:700;"
+                )
+            button.clicked.connect(callback)
+            row.addWidget(button)
 
-    def _add_video(self, video) -> None:
-        item = QListWidgetItem()
+        return card
 
+    def _video_card(self, video):
         card = QFrame()
-        card.setMinimumHeight(82)
         card.setStyleSheet(
             "QFrame{background:white;border:1px solid #DCE9F6;border-radius:10px;}"
             "QLabel{border:0;background:transparent;}"
@@ -240,37 +239,58 @@ class HistoryPage(BasePage):
         row.addWidget(icon)
 
         text = QVBoxLayout()
-        meta = QLabel(f"{video.sourceName}  •  {_time(video.publishedAt)}")
+
+        meta = QLabel(
+            f"{video.sourceName}  •  {_time(video.publishedAt)}"
+        )
         meta.setStyleSheet("color:#5D79A7;font-size:9px;")
+
         title = QLabel(video.title)
         title.setWordWrap(True)
-        title.setStyleSheet("color:#08245F;font-size:11px;font-weight:900;")
+        title.setStyleSheet(
+            "color:#08245F;font-size:11px;font-weight:900;"
+        )
 
         text.addWidget(meta)
         text.addWidget(title)
         row.addLayout(text, 1)
 
-        row.addWidget(self._button(
-            "↗  Abrir vídeo",
-            "background:white;color:#0C3974;border:1px solid #C9DDF2;",
-            lambda: open_article_url(video.link),
-        ))
-        row.addWidget(self._button(
-            "▣  Copiar link",
-            "background:white;color:#0C3974;border:1px solid #C9DDF2;",
-            lambda: copy_article_url(video.link),
-        ))
+        for label, callback in (
+            ("↗  Abrir vídeo", lambda: open_article_url(video.link)),
+            ("▣  Copiar link", lambda: copy_article_url(video.link)),
+        ):
+            button = QPushButton(label)
+            button.setStyleSheet(
+                "background:white;color:#0C3974;border:1px solid #C9DDF2;"
+                "border-radius:7px;padding:8px 11px;font-weight:700;"
+            )
+            button.clicked.connect(callback)
+            row.addWidget(button)
 
-        item.setSizeHint(card.sizeHint())
-        self.list.addItem(item)
-        self.list.setItemWidget(item, card)
+        return card
 
     def refresh(self, _state: UiState) -> None:
         self.list.clear()
 
         if self._tab() == 0:
-            for news in self.controller.news_db.listNews(2000):
-                self._add_news(news)
+            rows = self.controller.news_db.listNews(500)
+
+            for news in rows:
+                item = QListWidgetItem()
+                item.setSizeHint(QSize(0, 96))
+                self.list.addItem(item)
+                self.list.setItemWidget(
+                    item,
+                    self._news_card(news),
+                )
         else:
-            for video in self.controller.video_db.listAll(2000):
-                self._add_video(video)
+            rows = self.controller.video_db.listAll(500)
+
+            for video in rows:
+                item = QListWidgetItem()
+                item.setSizeHint(QSize(0, 86))
+                self.list.addItem(item)
+                self.list.setItemWidget(
+                    item,
+                    self._video_card(video),
+                )

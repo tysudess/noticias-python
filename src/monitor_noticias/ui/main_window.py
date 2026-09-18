@@ -14,14 +14,16 @@ from monitor_noticias.ui.catalog import NEWS_SOURCES, SPECIALIZED
 from monitor_noticias.ui.controller import MainUiController
 from monitor_noticias.ui.demands_page import DemandsPage
 from monitor_noticias.ui.extractor_page import ExtractorPage
+from monitor_noticias.ui.history_page import HistoryPage
 from monitor_noticias.ui.layout_refresh import apply_reference_layout
 from monitor_noticias.ui.pdf_editor_page import PdfEditorPage
 from monitor_noticias.ui.video_editor_page import VideoEditorPage
 from monitor_noticias.ui.home_page import HomePage
 from monitor_noticias.ui.news_page import NewsPage
-from monitor_noticias.ui.pages import HistoryPage, SettingsPage, StopPage
-from monitor_noticias.ui.runtime_pages import TermsPage
+from monitor_noticias.ui.pages import StopPage
+from monitor_noticias.ui.settings_page import SettingsPage
 from monitor_noticias.ui.source_page import SourcesPage
+from monitor_noticias.ui.terms_page import TermsPage
 from monitor_noticias.ui.videos_page import VideosPage
 from monitor_noticias.ui.sections import SECTION_ORDER, Section
 from monitor_noticias.ui.theme import APP_STYLESHEET, repolish

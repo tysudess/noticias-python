@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import base64
 import json
 import re
 from urllib.parse import quote, urlparse
@@ -10,13 +9,14 @@ from PySide6.QtCore import QUrl
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import QApplication
 
+
 _CACHE: dict[str, str] = {}
 
 _HEADERS = {
     "User-Agent": (
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
         "AppleWebKit/537.36 (KHTML, like Gecko) "
-        "Chrome/131 Safari/537.36"
+        "Chrome/131.0 Safari/537.36"
     ),
     "Accept-Language": "pt-BR,pt;q=0.9,en-US;q=0.7,en;q=0.6",
 }
@@ -35,93 +35,48 @@ def _article_id(url: str) -> str:
     return path[-1] if path else ""
 
 
-def _old_style_decode(article_id: str) -> str | None:
+def _decode_google_news(url: str) -> str | None:
+    article_id = _article_id(url)
+    if not article_id:
+        return None
+
+    # 1) Obtém assinatura e timestamp da página do Google News.
     try:
-        raw = base64.urlsafe_b64decode(article_id + "===")
+        response = requests.get(
+            f"https://news.google.com/rss/articles/{article_id}",
+            headers=_HEADERS,
+            timeout=(5, 10),
+        )
+        response.raise_for_status()
+        page = response.text or ""
     except Exception:
         return None
 
-    match = re.search(rb"https?://[^\x00\s]+", raw)
-    if not match:
-        return None
+    sg_match = re.search(r'data-n-a-sg=["\']([^"\']+)', page)
+    ts_match = re.search(r'data-n-a-ts=["\']([^"\']+)', page)
 
-    try:
-        decoded = match.group(0).decode("utf-8", errors="ignore")
-    except Exception:
-        return None
-
-    return decoded if decoded.startswith(("http://", "https://")) else None
-
-
-def _walk_find_url(value) -> str | None:
-    if isinstance(value, str):
-        if value.startswith(("http://", "https://")):
-            host = (urlparse(value).hostname or "").lower()
-            if host and "google." not in host and "gstatic." not in host:
-                return value
-
-        stripped = value.strip()
-        if stripped.startswith(("[", "{")):
-            try:
-                nested = json.loads(stripped)
-            except Exception:
-                nested = None
-            if nested is not None:
-                found = _walk_find_url(nested)
-                if found:
-                    return found
-
-    elif isinstance(value, list):
-        for item in value:
-            found = _walk_find_url(item)
-            if found:
-                return found
-
-    elif isinstance(value, dict):
-        for item in value.values():
-            found = _walk_find_url(item)
-            if found:
-                return found
-
-    return None
-
-
-def _decode_with_batchexecute(article_id: str) -> str | None:
-    session = requests.Session()
-
-    page_urls = (
-        f"https://news.google.com/rss/articles/{article_id}",
-        f"https://news.google.com/articles/{article_id}",
-    )
-
-    signature = ""
-    timestamp = ""
-
-    for page_url in page_urls:
+    if not sg_match or not ts_match:
+        # Alguns links respondem melhor sem /rss/.
         try:
-            response = session.get(
-                page_url,
+            response = requests.get(
+                f"https://news.google.com/articles/{article_id}",
                 headers=_HEADERS,
-                timeout=(6, 12),
-                allow_redirects=True,
+                timeout=(5, 10),
             )
             response.raise_for_status()
             page = response.text or ""
-
-            sg = re.search(r'data-n-a-sg=["\']([^"\']+)', page)
-            ts = re.search(r'data-n-a-ts=["\']([^"\']+)', page)
-
-            if sg and ts:
-                signature = sg.group(1)
-                timestamp = ts.group(1)
-                break
+            sg_match = re.search(r'data-n-a-sg=["\']([^"\']+)', page)
+            ts_match = re.search(r'data-n-a-ts=["\']([^"\']+)', page)
         except Exception:
-            continue
+            return None
 
-    if not signature or not timestamp:
+    if not sg_match or not ts_match:
         return None
 
-    inner = (
+    signature = sg_match.group(1)
+    timestamp = ts_match.group(1)
+
+    request_body = (
         '["garturlreq",'
         '[["X","X",["X","X"],null,null,1,1,"BR:pt-419",null,1,'
         'null,null,null,null,null,0,1],'
@@ -129,11 +84,13 @@ def _decode_with_batchexecute(article_id: str) -> str | None:
         f'"{article_id}",{timestamp},"{signature}"]'
     )
 
-    request_item = ["Fbv4je", inner, None, "generic"]
-    payload = {"f.req": json.dumps([[request_item]], separators=(",", ":"))}
+    articles_req = ["Fbv4je", request_body]
+    payload = "f.req=" + quote(
+        json.dumps([[articles_req]], separators=(",", ":"))
+    )
 
     try:
-        response = session.post(
+        response = requests.post(
             "https://news.google.com/_/DotsSplashUi/data/batchexecute",
             params={"rpcids": "Fbv4je"},
             headers={
@@ -142,51 +99,67 @@ def _decode_with_batchexecute(article_id: str) -> str | None:
                 "Referer": "https://news.google.com/",
             },
             data=payload,
-            timeout=(6, 14),
+            timeout=(5, 12),
         )
         response.raise_for_status()
+        text = response.text or ""
     except Exception:
         return None
 
-    text = response.text or ""
-
-    for block in text.split("\n\n"):
-        block = block.strip()
-        if not block or block.startswith(")]}'"):
-            continue
-
-        try:
-            parsed = json.loads(block)
-        except Exception:
-            continue
-
-        found = _walk_find_url(parsed)
-        if found:
-            return found
-
-    for pattern in (
-        r'\[\\"garturlres\\",\\"(https?:[^"\\]+)',
-        r'\["garturlres","(https?://[^"]+)',
-    ):
-        match = re.search(pattern, text)
-        if not match:
-            continue
-
-        candidate = match.group(1).replace(r"\/", "/")
-
+    # Formato atual mais comum.
+    marker = '[\\"garturlres\\",\\"'
+    if marker in text:
+        candidate = text.split(marker, 1)[1].split('\\",', 1)[0]
+        candidate = candidate.replace(r"\/", "/")
         try:
             candidate = bytes(candidate, "utf-8").decode("unicode_escape")
         except Exception:
             pass
 
-        host = (urlparse(candidate).hostname or "").lower()
-        if host and "google." not in host and "gstatic." not in host:
-            return candidate
+        if candidate.startswith(("http://", "https://")):
+            host = (urlparse(candidate).hostname or "").lower()
+            if "google." not in host and "gstatic." not in host:
+                return candidate
+
+    # Formato JSON aninhado usado por algumas respostas.
+    try:
+        chunks = [x for x in text.split("\n\n") if x.strip()]
+        for chunk in chunks:
+            if chunk.startswith(")]}'"):
+                chunk = chunk[4:].lstrip()
+            parsed = json.loads(chunk)
+
+            stack = [parsed]
+            while stack:
+                value = stack.pop()
+
+                if isinstance(value, list):
+                    stack.extend(value)
+                elif isinstance(value, dict):
+                    stack.extend(value.values())
+                elif isinstance(value, str):
+                    if value.startswith(("http://", "https://")):
+                        host = (urlparse(value).hostname or "").lower()
+                        if "google." not in host and "gstatic." not in host:
+                            return value
+
+                    if value.startswith(("[", "{")):
+                        try:
+                            stack.append(json.loads(value))
+                        except Exception:
+                            pass
+    except Exception:
+        pass
 
     return None
 
 
 def resolve_article_url(url: str) -> str:
+    """Resolve Google News para o link direto do veículo.
+
+    Se o Google não permitir resolver o token, conserva o link original.
+    Nunca procura hrefs arbitrários da página, evitando copiar analytics.js.
+    """
     if not url:
         return url
 
@@ -198,13 +171,7 @@ def resolve_article_url(url: str) -> str:
         _CACHE[url] = url
         return url
 
-    article_id = _article_id(url)
-
-    direct = _old_style_decode(article_id)
-    if not direct:
-        direct = _decode_with_batchexecute(article_id)
-
-    resolved = direct or url
+    resolved = _decode_google_news(url) or url
     _CACHE[url] = resolved
     return resolved
 

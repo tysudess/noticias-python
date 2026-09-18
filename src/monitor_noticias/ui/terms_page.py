@@ -22,91 +22,157 @@ class TermsPage(BasePage):
         self.news_list = QListWidget()
         self.video_list = QListWidget()
 
+        self.news_count = QLabel()
+        self.video_count = QLabel()
+
         row.addWidget(
             self._card(
-                "▣", "Termos de Notícias", "Usados na varredura de matérias",
-                self.news_list, controller.add_term, controller.remove_term, "blue"
+                "▣",
+                "Termos de Notícias",
+                "Usados na varredura de matérias",
+                self.news_list,
+                self.news_count,
+                self._add_news,
+                self._remove_news,
+                "blue",
             ),
             1,
         )
 
-        add_video = getattr(controller, "add_video_term", lambda _value: None)
-        remove_video = getattr(controller, "remove_video_term", lambda _value: None)
-
         row.addWidget(
             self._card(
-                "▶", "Termos de Vídeos", "Lista independente para vídeos",
-                self.video_list, add_video, remove_video, "purple"
+                "▶",
+                "Termos de Vídeos",
+                "Lista independente para vídeos",
+                self.video_list,
+                self.video_count,
+                self._add_video,
+                self._remove_video,
+                "purple",
             ),
             1,
         )
 
         self.setStyleSheet(self._stylesheet())
 
-    def _card(self, icon_text, title, subtitle, listw, add_cb, remove_cb, tone):
+    def _video_terms(self) -> list[str]:
+        default = set(self.controller.state.terms)
+        values = self.controller.prefs.get_string_set(
+            "desktop_video_terms",
+            default,
+        )
+        return sorted(values or set(), key=str.casefold)
+
+    def _add_news(self, value: str) -> None:
+        self.controller.add_term(value)
+
+    def _remove_news(self, value: str) -> None:
+        self.controller.remove_term(value)
+
+    def _add_video(self, value: str) -> None:
+        terms = set(self._video_terms())
+        terms.add(value.strip())
+        self.controller.prefs.update(
+            desktop_video_terms=terms
+        )
+        self.controller.refresh()
+
+    def _remove_video(self, value: str) -> None:
+        terms = set(self._video_terms())
+        terms.discard(value)
+        self.controller.prefs.update(
+            desktop_video_terms=terms
+        )
+        self.controller.refresh()
+
+    def _card(
+        self,
+        icon_text,
+        title_text,
+        subtitle_text,
+        listw,
+        count_label,
+        add_cb,
+        remove_cb,
+        tone,
+    ):
         frame = QFrame()
         frame.setObjectName("termCard")
+
         layout = QVBoxLayout(frame)
         layout.setContentsMargins(16, 14, 16, 14)
         layout.setSpacing(10)
 
-        head = QHBoxLayout()
+        header = QHBoxLayout()
 
         icon = QLabel(icon_text)
         icon.setObjectName("termIcon")
         icon.setProperty("tone", tone)
         icon.setAlignment(Qt.AlignmentFlag.AlignCenter)
         icon.setFixedSize(54, 54)
-        head.addWidget(icon)
+        header.addWidget(icon)
 
         text = QVBoxLayout()
-        title_l = QLabel(title)
-        title_l.setObjectName("termTitle")
-        sub_l = QLabel(subtitle)
-        sub_l.setObjectName("termSubtitle")
-        text.addWidget(title_l)
-        text.addWidget(sub_l)
-        head.addLayout(text, 1)
 
-        count = QLabel("0 termo(s)")
-        count.setObjectName("termCount")
-        head.addWidget(count)
-        layout.addLayout(head)
+        title = QLabel(title_text)
+        title.setObjectName("termTitle")
+
+        subtitle = QLabel(subtitle_text)
+        subtitle.setObjectName("termSubtitle")
+
+        text.addWidget(title)
+        text.addWidget(subtitle)
+        header.addLayout(text, 1)
+
+        count_label.setObjectName("termCount")
+        header.addWidget(count_label)
+
+        layout.addLayout(header)
 
         add_row = QHBoxLayout()
+
         edit = QLineEdit()
         edit.setObjectName("termInput")
         edit.setPlaceholderText("⌕  Novo termo")
         add_row.addWidget(edit, 1)
 
-        add_button = QPushButton("+  Adicionar")
-        add_button.setObjectName("termAdd")
-        add_row.addWidget(add_button)
+        add = QPushButton("+  Adicionar")
+        add.setObjectName("termAdd")
+        add_row.addWidget(add)
+
         layout.addLayout(add_row)
 
         listw.setObjectName("termList")
-        listw.setVerticalScrollMode(QListWidget.ScrollMode.ScrollPerPixel)
+        listw.setVerticalScrollMode(
+            QListWidget.ScrollMode.ScrollPerPixel
+        )
         layout.addWidget(listw, 1)
 
         delete = QPushButton("▣  Excluir selecionado")
         delete.setObjectName("termDelete")
-        layout.addWidget(delete, 0, Qt.AlignmentFlag.AlignRight)
-
-        def add_term():
-            value = edit.text().strip()
-            if not value:
-                return
-            add_cb(value)
-            edit.clear()
-
-        add_button.clicked.connect(add_term)
-        edit.returnPressed.connect(add_term)
-        delete.clicked.connect(
-            lambda: remove_cb(listw.currentItem().text())
-            if listw.currentItem() else None
+        layout.addWidget(
+            delete,
+            0,
+            Qt.AlignmentFlag.AlignRight,
         )
 
-        listw._count_label = count
+        def add_value():
+            value = edit.text().strip()
+            if value:
+                add_cb(value)
+                edit.clear()
+
+        add.clicked.connect(add_value)
+        edit.returnPressed.connect(add_value)
+
+        delete.clicked.connect(
+            lambda: remove_cb(
+                listw.currentItem().text()
+            )
+            if listw.currentItem()
+            else None
+        )
+
         return frame
 
     def _stylesheet(self) -> str:
@@ -184,25 +250,20 @@ class TermsPage(BasePage):
             padding:8px 13px;
             font-weight:800;
         }
-        QScrollBar:vertical {
-            background:#EDF4FB;
-            width:9px;
-            border-radius:4px;
-        }
-        QScrollBar::handle:vertical {
-            background:#8EBBE8;
-            min-height:42px;
-            border-radius:4px;
-        }
         """
 
     def refresh(self, state: UiState) -> None:
         self.news_list.clear()
         self.news_list.addItems(state.terms)
 
-        videos = list(getattr(self.controller, "video_terms", []))
-        self.video_list.clear()
-        self.video_list.addItems(videos)
+        video_terms = self._video_terms()
 
-        self.news_list._count_label.setText(f"{len(state.terms)} termo(s)")
-        self.video_list._count_label.setText(f"{len(videos)} termo(s)")
+        self.video_list.clear()
+        self.video_list.addItems(video_terms)
+
+        self.news_count.setText(
+            f"{len(state.terms)} termo(s)"
+        )
+        self.video_count.setText(
+            f"{len(video_terms)} termo(s)"
+        )
