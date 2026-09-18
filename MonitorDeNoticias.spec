@@ -1,12 +1,18 @@
 # -*- mode: python ; coding: utf-8 -*-
-from PyInstaller.utils.hooks import collect_all, collect_data_files
+from pathlib import Path
+from PyInstaller.utils.hooks import collect_all
 
 pdfium_datas, pdfium_bins, pdfium_hidden = collect_all("pypdfium2")
 
-capas_datas = collect_data_files(
-    "monitor_noticias.capas_tool",
-    includes=["assets/*"],
-)
+ROOT = Path(SPECPATH)
+CAPAS_ASSETS = ROOT / "src" / "monitor_noticias" / "capas_tool" / "assets"
+
+capas_datas = [
+    (str(CAPAS_ASSETS / "newspapers.json"), "monitor_noticias/capas_tool/assets"),
+    (str(CAPAS_ASSETS / "principais_capas_cover.png"), "monitor_noticias/capas_tool/assets"),
+    (str(CAPAS_ASSETS / "app_icon.png"), "monitor_noticias/capas_tool/assets"),
+    (str(CAPAS_ASSETS / "app_icon.ico"), "monitor_noticias/capas_tool/assets"),
+]
 
 block_cipher = None
 

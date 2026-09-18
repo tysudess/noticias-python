@@ -315,6 +315,8 @@ function estaIncorporadoNoMonitor() {
 }
 
 function criarJanelaPrincipal() {
+  const incorporado = estaIncorporadoNoMonitor();
+
   mainWindow = new BrowserWindow({
     width: 1280,
     height: 860,
@@ -322,6 +324,9 @@ function criarJanelaPrincipal() {
     minHeight: 680,
     backgroundColor: '#08111f',
     autoHideMenuBar: true,
+    show: !incorporado,
+    frame: !incorporado,
+    skipTaskbar: incorporado,
     icon: path.join(__dirname, 'assets', 'extrator-materias-moderno.ico'),
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
@@ -336,7 +341,6 @@ function criarJanelaPrincipal() {
   mainWindow.loadFile(path.join(__dirname, 'renderer', 'index.html'));
   mainWindow.webContents.on('did-finish-load', () => {
     const urlInicial = obterUrlInicialDoMonitor();
-    const incorporado = estaIncorporadoNoMonitor();
 
     mainWindow.webContents.executeJavaScript(`
       (() => {
@@ -392,7 +396,12 @@ app.whenReady().then(() => {
 
   criarJanelaPrincipal();
   app.on('activate', () => {
-    if (BrowserWindow.getAllWindows().length === 0) criarJanelaPrincipal();
+    if (
+      !estaIncorporadoNoMonitor()
+      && BrowserWindow.getAllWindows().length === 0
+    ) {
+      criarJanelaPrincipal();
+    }
   });
 });
 

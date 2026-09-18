@@ -2,24 +2,13 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from PySide6.QtCore import QUrl, Signal
-from PySide6.QtWidgets import QVBoxLayout, QWidget
+from PySide6.QtCore import QUrl, Signal, Qt
+from PySide6.QtWidgets import QScrollArea, QVBoxLayout, QWidget
 
-from monitor_noticias.video_editor.integrated_editor import (
-    AdvancedVideoEditorWidget300,
-)
+from monitor_noticias.video_editor.integrated_editor import AdvancedVideoEditorWidget300
 
 
 class VideoEditorPage(QWidget):
-    """Editor de Vídeo integrado diretamente na aba do Monitor.
-
-    Usa somente o editor avançado do projeto fornecido pelo usuário:
-    AdvancedVideoEditorWidget300 -> AdvancedVideoEditorWidget.
-
-    Não usa a janela principal do Extrator de Vídeos, não usa o downloader
-    e não cria QMainWindow separada.
-    """
-
     back_requested = Signal()
 
     def __init__(self, app_root: Path) -> None:
@@ -28,11 +17,7 @@ class VideoEditorPage(QWidget):
         self.app_root = Path(app_root)
         self.videos_dir = self.app_root / "Videos"
         self.bin_dir = self.app_root / "bin"
-
-        self.videos_dir.mkdir(
-            parents=True,
-            exist_ok=True,
-        )
+        self.videos_dir.mkdir(parents=True, exist_ok=True)
 
         self.ffmpeg = self.bin_dir / "ffmpeg.exe"
         self.ffprobe = self.bin_dir / "ffprobe.exe"
@@ -41,18 +26,68 @@ class VideoEditorPage(QWidget):
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(0)
 
+        self.scroll = QScrollArea(self)
+        self.scroll.setObjectName("videoEditorOuterScroll")
+        self.scroll.setWidgetResizable(True)
+        self.scroll.setFrameShape(QScrollArea.Shape.NoFrame)
+        self.scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self.scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+
         self.editor = AdvancedVideoEditorWidget300(
             self.videos_dir,
             self.ffmpeg,
             self.ffprobe,
-            self,
+            self.scroll,
         )
 
-        root.addWidget(self.editor, 1)
+        self.editor.setMinimumWidth(1180)
+        self.editor.setMinimumHeight(900)
+
+        self.scroll.setWidget(self.editor)
+        root.addWidget(self.scroll, 1)
+
+        self.setStyleSheet("""
+        QScrollArea#videoEditorOuterScroll {
+            background:#07111f;
+            border:0;
+        }
+        QScrollArea#videoEditorOuterScroll > QWidget > QWidget {
+            background:#07111f;
+        }
+        QScrollBar:vertical {
+            background:#0B1524;
+            width:12px;
+            border-radius:6px;
+        }
+        QScrollBar::handle:vertical {
+            background:#31527D;
+            min-height:54px;
+            border-radius:6px;
+        }
+        QScrollBar::handle:vertical:hover {
+            background:#4675AE;
+        }
+        QScrollBar:horizontal {
+            background:#0B1524;
+            height:12px;
+            border-radius:6px;
+        }
+        QScrollBar::handle:horizontal {
+            background:#31527D;
+            min-width:54px;
+            border-radius:6px;
+        }
+        QScrollBar::handle:horizontal:hover {
+            background:#4675AE;
+        }
+        QScrollBar::add-line,
+        QScrollBar::sub-line {
+            width:0;
+            height:0;
+        }
+        """)
 
     def refresh(self, _state=None) -> None:
-        # O editor é persistente. O refresh de 500 ms do Monitor não deve
-        # reconstruir timeline, preview ou controles.
         pass
 
     def shutdown(self) -> bool:
@@ -70,25 +105,13 @@ class VideoEditorPage(QWidget):
         except Exception:
             pass
 
-        worker = getattr(
-            self.editor,
-            "export_worker",
-            None,
-        )
-
+        worker = getattr(self.editor, "export_worker", None)
         if worker is not None:
             try:
                 if worker.isRunning():
-                    # Não fecha o Monitor no meio de uma exportação.
-                    status = getattr(
-                        self.editor,
-                        "status",
-                        None,
-                    )
+                    status = getattr(self.editor, "status", None)
                     if status is not None:
-                        status.setText(
-                            "Aguarde a exportação do vídeo terminar antes de sair."
-                        )
+                        status.setText("Aguarde a exportação do vídeo terminar antes de sair.")
                     return False
             except Exception:
                 pass
