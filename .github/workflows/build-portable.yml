@@ -9,6 +9,7 @@ on:
       - "resources/**"
       - "portable/**"
       - "tools/news_extractor/**"
+      - "tools/spreadsheet_automation/**"
       - "run.py"
       - "requirements*.txt"
       - "MonitorDeNoticias.spec"
@@ -56,6 +57,20 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install -r requirements.txt -r requirements-build.txt
 
+      - name: Preparar motor da Automação de Planilhas
+        shell: pwsh
+        env:
+          PUPPETEER_SKIP_DOWNLOAD: "true"
+        run: |
+          Push-Location "tools/spreadsheet_automation"
+          try {
+            npm install --omit=dev --no-audit --no-fund
+            node --check "engine/index.js"
+          }
+          finally {
+            Pop-Location
+          }
+
       - name: Gerar Extrator de Notícias Electron
         shell: pwsh
         run: |
@@ -96,7 +111,9 @@ jobs:
             "temp",
             "Videos",
             "VideoEditorExports",
-            "tools/news_extractor"
+            "tools/news_extractor",
+            "tools/spreadsheet_automation/engine",
+            "tools/spreadsheet_automation/node_modules"
           )) {
             New-Item -ItemType Directory -Force -Path (Join-Path $root $dir) | Out-Null
           }
@@ -118,6 +135,37 @@ jobs:
           Copy-Item `
             $extractor.FullName `
             (Join-Path $root "tools/news_extractor/ExtratorMateriasPortable-V1.25.19.exe") `
+            -Force
+
+          # Automação de Planilhas: a interface Electron antiga NÃO é copiada.
+          # Somente o motor Node fica invisível dentro do Central.
+          Copy-Item `
+            "tools/spreadsheet_automation/engine/index.js" `
+            (Join-Path $root "tools/spreadsheet_automation/engine/index.js") `
+            -Force
+
+          Copy-Item `
+            "tools/spreadsheet_automation/package.json" `
+            (Join-Path $root "tools/spreadsheet_automation/package.json") `
+            -Force
+
+          Copy-Item `
+            "tools/spreadsheet_automation/config.default.json" `
+            (Join-Path $root "tools/spreadsheet_automation/config.default.json") `
+            -Force
+
+          Copy-Item `
+            "tools/spreadsheet_automation/node_modules/*" `
+            (Join-Path $root "tools/spreadsheet_automation/node_modules") `
+            -Recurse -Force
+
+          $node = (Get-Command node -ErrorAction Stop).Source
+          if (-not (Test-Path $node)) {
+            throw "node.exe do runner não foi encontrado."
+          }
+          Copy-Item `
+            $node `
+            (Join-Path $root "tools/spreadsheet_automation/node.exe") `
             -Force
 
           if (Test-Path "portable/README_PORTABLE.txt") {
@@ -296,6 +344,24 @@ jobs:
             if (-not $newsExtractor) {
               throw "Extrator de Notícias não está dentro do portable."
             }
+
+            $sheetEngine = $archive.Entries |
+              Where-Object {
+                $_.FullName.Replace("\", "/") -ieq `
+                  "tools/spreadsheet_automation/engine/index.js"
+              } |
+              Select-Object -First 1
+
+            $sheetNode = $archive.Entries |
+              Where-Object {
+                $_.FullName.Replace("\", "/") -ieq `
+                  "tools/spreadsheet_automation/node.exe"
+              } |
+              Select-Object -First 1
+
+            if (-not $sheetEngine -or -not $sheetNode) {
+              throw "Automação de Planilhas não está completa dentro do portable."
+            }
           }
           finally {
             $archive.Dispose()
@@ -327,7 +393,7 @@ jobs:
         shell: bash
         run: |
           echo "RELEASE_TAG=portable-${GITHUB_RUN_NUMBER}-${GITHUB_SHA:0:7}" >> "$GITHUB_ENV"
-          echo "RELEASE_NAME=Monitor de Notícias Portable - Build ${GITHUB_RUN_NUMBER}" >> "$GITHUB_ENV"
+          echo "RELEASE_NAME=Central Inteligente de Mídia Portable - Build ${GITHUB_RUN_NUMBER}" >> "$GITHUB_ENV"
 
       - name: Criar Release
         shell: bash
