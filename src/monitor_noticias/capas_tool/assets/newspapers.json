@@ -1,0 +1,148 @@
+[
+  {
+    "name": "O GLOBO",
+    "type": "HTML",
+    "urls": [
+      "https://www.frontpages.com/o-globo/",
+      "https://www.vercapas.com.br/",
+      "https://www.frontpages.com/brazil-newspapers/",
+      "https://infoglobo.pressreader.com/o-globo"
+    ],
+    "mastheads": [
+      "O GLOBO"
+    ],
+    "keywords": [
+      "O GLOBO"
+    ],
+    "pdfMarginPercent": 2,
+    "enabled": true
+  },
+  {
+    "name": "FOLHA DE SÃO PAULO",
+    "type": "HTML",
+    "urls": [
+      "https://www.frontpages.com/folha-de-s-paulo/",
+      "https://www.vercapas.com.br/",
+      "https://www.frontpages.com/brazil-newspapers/",
+      "https://acervo.folha.uol.com.br/digital/"
+    ],
+    "mastheads": [
+      "FOLHA DE S PAULO",
+      "FOLHA DE SAO PAULO"
+    ],
+    "keywords": [
+      "FOLHA DE S PAULO",
+      "FOLHA DE SAO PAULO"
+    ],
+    "pdfMarginPercent": 2,
+    "enabled": true
+  },
+  {
+    "name": "ESTADÃO",
+    "type": "HTML",
+    "urls": [
+      "https://www.frontpages.com/o-estado-de-s-paulo/",
+      "https://www.vercapas.com.br/",
+      "https://www.frontpages.com/brazil-newspapers/",
+      "https://digital.estadao.com.br"
+    ],
+    "mastheads": [
+      "O ESTADO DE S PAULO",
+      "ESTADO DE S PAULO",
+      "ESTADAO"
+    ],
+    "keywords": [
+      "O ESTADO DE S PAULO",
+      "ESTADO DE S PAULO",
+      "ESTADAO"
+    ],
+    "enabled": true,
+    "pdfMarginPercent": 2
+  },
+  {
+    "name": "VALOR ECONÔMICO",
+    "type": "HTML",
+    "urls": [
+      "https://www.frontpages.com/valor-economico/",
+      "https://valoreconomico.pressreader.com/valor-economico"
+    ],
+    "mastheads": [
+      "VALOR ECONOMICO"
+    ],
+    "keywords": [
+      "VALOR ECONOMICO"
+    ],
+    "enabled": true,
+    "pdfMarginPercent": 2
+  },
+  {
+    "name": "CORREIO BRAZILIENSE",
+    "type": "HTML",
+    "urls": [
+      "https://flip.correiobraziliense.com.br",
+      "https://en.kiosko.net/br/np/correio_braziliense.html"
+    ],
+    "mastheads": [
+      "CORREIO BRAZILIENSE"
+    ],
+    "keywords": [
+      "CORREIO BRAZILIENSE"
+    ],
+    "enabled": true,
+    "pdfMarginPercent": 2
+  },
+  {
+    "name": "ESTADO DE MINAS",
+    "type": "HTML",
+    "urls": [
+      "https://www.em.com.br/capa-do-dia",
+      "https://www.em.com.br/capa-do-dia/"
+    ],
+    "mastheads": [
+      "ESTADO DE MINAS"
+    ],
+    "keywords": [
+      "ESTADO DE MINAS"
+    ],
+    "enabled": true,
+    "pdfMarginPercent": 2,
+    "followSelector": "a[href*=\"/capa-do-dia/2026/\"]",
+    "followText": "",
+    "imageSelector": "img[alt*=Capa], img[title*=Capa], figure img"
+  },
+  {
+    "name": "THE NEW YORK TIMES",
+    "type": "HTML",
+    "urls": [
+      "https://www.frontpages.com/the-new-york-times/",
+      "https://www.frontpages.com/us-newspapers/"
+    ],
+    "mastheads": [
+      "THE NEW YORK TIMES",
+      "NEW YORK TIMES"
+    ],
+    "keywords": [
+      "THE NEW YORK TIMES",
+      "NEW YORK TIMES"
+    ],
+    "enabled": true,
+    "pdfMarginPercent": 2
+  },
+  {
+    "name": "THE WASHINGTON POST",
+    "type": "HTML",
+    "urls": [
+      "https://www.frontpages.com/the-washington-post/"
+    ],
+    "mastheads": [
+      "THE WASHINGTON POST",
+      "WASHINGTON POST"
+    ],
+    "keywords": [
+      "THE WASHINGTON POST",
+      "WASHINGTON POST"
+    ],
+    "enabled": true,
+    "pdfMarginPercent": 2
+  }
+]

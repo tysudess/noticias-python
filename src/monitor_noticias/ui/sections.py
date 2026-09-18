@@ -21,12 +21,36 @@ class Section(Enum):
     TERMS = SectionSpec("Termos", "Termos independentes para notícias e vídeos", "⌕")
     STOP = SectionSpec("Parar buscas", "Interrompa buscas manuais em andamento", "■")
     SETTINGS = SectionSpec("Configurações", "Automação, proxy, inicialização e operação do aplicativo", "⚙")
-    PDF_EDITOR = SectionSpec("Editor de PDF", "Monte, reorganize, recorte e exporte PDFs e imagens", "PDF")
-    EXTRACTOR = SectionSpec("Extrator de Vídeos", "Baixe vídeos com o fluxo direto v3.0.1", "⇩")
-    VIDEO_EDITOR = SectionSpec("Editor de Vídeo", "Abra o editor nativo PySide6/QtMultimedia", "▰")
+
+    NEWS_EXTRACTOR = SectionSpec(
+        "Extrator de Notícias",
+        "Extraia e revise matérias a partir do link do veículo",
+        "⇲",
+    )
+    COVERS = SectionSpec(
+        "Capas",
+        "Principais capas de jornais com revisão e exportação em PDF",
+        "▧",
+    )
+    PDF_EDITOR = SectionSpec(
+        "Editor de PDF",
+        "Monte, reorganize, recorte e exporte PDFs e imagens",
+        "PDF",
+    )
+    EXTRACTOR = SectionSpec(
+        "Extrator de Vídeos",
+        "Baixe vídeos com o fluxo direto v3.0.1",
+        "⇩",
+    )
+    VIDEO_EDITOR = SectionSpec(
+        "Editor de Vídeo",
+        "Editor de vídeo incorporado ao Monitor",
+        "▰",
+    )
 
 
 SECTION_ORDER = tuple(Section)
+
 CORE_SECTIONS = {
     Section.HOME,
     Section.NEWS,
@@ -38,4 +62,11 @@ CORE_SECTIONS = {
     Section.STOP,
     Section.SETTINGS,
 }
-TOOL_SECTIONS = {Section.PDF_EDITOR, Section.EXTRACTOR, Section.VIDEO_EDITOR}
+
+TOOL_SECTIONS = {
+    Section.NEWS_EXTRACTOR,
+    Section.COVERS,
+    Section.PDF_EDITOR,
+    Section.EXTRACTOR,
+    Section.VIDEO_EDITOR,
+}

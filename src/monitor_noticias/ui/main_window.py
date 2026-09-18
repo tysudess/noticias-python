@@ -14,16 +14,18 @@ from monitor_noticias.ui.catalog import NEWS_SOURCES, SPECIALIZED
 from monitor_noticias.ui.controller import MainUiController
 from monitor_noticias.ui.demands_page import DemandsPage
 from monitor_noticias.ui.extractor_page import ExtractorPage
-from monitor_noticias.ui.history_page import HistoryPage
 from monitor_noticias.ui.layout_refresh import apply_reference_layout
 from monitor_noticias.ui.pdf_editor_page import PdfEditorPage
 from monitor_noticias.ui.video_editor_page import VideoEditorPage
 from monitor_noticias.ui.home_page import HomePage
 from monitor_noticias.ui.news_page import NewsPage
+from monitor_noticias.ui.news_extractor_page import NewsExtractorPage
+from monitor_noticias.ui.covers_page import CoversPage
 from monitor_noticias.ui.pages import StopPage
+from monitor_noticias.ui.history_page import HistoryPage
 from monitor_noticias.ui.settings_page import SettingsPage
-from monitor_noticias.ui.source_page import SourcesPage
 from monitor_noticias.ui.terms_page import TermsPage
+from monitor_noticias.ui.source_page import SourcesPage
 from monitor_noticias.ui.videos_page import VideosPage
 from monitor_noticias.ui.sections import SECTION_ORDER, Section
 from monitor_noticias.ui.theme import APP_STYLESHEET, repolish
@@ -231,6 +233,8 @@ class MainWindow(QMainWindow):
             Section.TERMS: TermsPage(self.controller),
             Section.STOP: StopPage(self.controller),
             Section.SETTINGS: SettingsPage(self.controller),
+            Section.NEWS_EXTRACTOR: NewsExtractorPage(self.paths.root),
+            Section.COVERS: CoversPage(self.paths.root),
             Section.PDF_EDITOR: PdfEditorPage(self.paths.root),
             Section.EXTRACTOR: ExtractorPage(self.paths.root),
             Section.VIDEO_EDITOR: VideoEditorPage(self.paths.root),
@@ -248,13 +252,13 @@ class MainWindow(QMainWindow):
         news_page = self.pages[Section.NEWS]
         if isinstance(news_page, NewsPage):
             news_page.extract_requested.connect(
-                self._open_extractor_link
+                self._open_news_extractor_link
             )
 
         videos_page = self.pages[Section.VIDEOS]
         if isinstance(videos_page, VideosPage):
             videos_page.extract_requested.connect(
-                self._open_extractor_link
+                self._open_video_extractor_link
             )
 
         pdf_page = self.pages[Section.PDF_EDITOR]
@@ -359,7 +363,7 @@ class MainWindow(QMainWindow):
             if hasattr(page, "query"):
                 page.query.setText(text)
 
-    def _open_extractor_link(self, url: str) -> None:
+    def _open_video_extractor_link(self, url: str) -> None:
         extractor = self.pages.get(Section.EXTRACTOR)
 
         if isinstance(extractor, ExtractorPage):
@@ -369,6 +373,13 @@ class MainWindow(QMainWindow):
                 field.setText(url)
 
             self.navigate(Section.EXTRACTOR)
+
+    def _open_news_extractor_link(self, url: str) -> None:
+        page = self.pages.get(Section.NEWS_EXTRACTOR)
+
+        if isinstance(page, NewsExtractorPage):
+            self.navigate(Section.NEWS_EXTRACTOR)
+            page.open_url(url)
 
     def navigate(self, section: Section) -> None:
         self._current = section
@@ -476,6 +487,14 @@ class MainWindow(QMainWindow):
             )
             self._restore()
             return
+
+        news_extractor = self.pages.get(Section.NEWS_EXTRACTOR)
+        if isinstance(news_extractor, NewsExtractorPage):
+            news_extractor.shutdown()
+
+        covers = self.pages.get(Section.COVERS)
+        if isinstance(covers, CoversPage):
+            covers.shutdown()
 
         video_editor = self.pages.get(
             Section.VIDEO_EDITOR
