@@ -1,0 +1,49 @@
+{
+  "name": "extrator-materias-portable-v12519",
+  "version": "1.25.19",
+  "description": "Extrator de Materias Windows Portable V1.25.19 com corretor PT-BR rigido e acentuacao obrigatoria",
+  "main": "main.js",
+  "author": "",
+  "license": "UNLICENSED",
+  "scripts": {
+    "start": "electron .",
+    "dist": "electron-builder --win portable --x64"
+  },
+  "dependencies": {
+    "@mozilla/readability": "^0.6.0",
+    "cspell-dict-pt-br": "1.1.1",
+    "cspell-lib": "10.1.1",
+    "jsdom": "^26.1.0",
+    "undici": "7.29.0"
+  },
+  "devDependencies": {
+    "electron": "^37.2.6",
+    "electron-builder": "^26.0.12"
+  },
+  "build": {
+    "appId": "br.com.extratormaterias",
+    "productName": "Extrator de Materias",
+    "asar": true,
+    "files": [
+      "main.js",
+      "preload.js",
+      "engine/**/*",
+      "assets/**/*",
+      "renderer/**/*",
+      "package.json"
+    ],
+    "win": {
+      "icon": "assets/extrator-materias-moderno.ico",
+      "artifactName": "ExtratorMateriasPortable-V1.25.19.exe",
+      "target": [
+        {
+          "target": "portable",
+          "arch": ["x64"]
+        }
+      ]
+    },
+    "portable": {
+      "artifactName": "ExtratorMateriasPortable-V1.25.19.exe"
+    }
+  }
+}

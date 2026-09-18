@@ -1,0 +1,7 @@
+{
+  "ATIVADO": false,
+  "SERVIDOR": "proxy-7dn.mb",
+  "PORTA": "6060",
+  "TIMEOUT_MS": 45000,
+  "CERTIFICADO_CA": ""
+}
