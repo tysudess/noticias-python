@@ -31,14 +31,17 @@ def _duration(ms: int) -> str:
 
 class NewsModel(QAbstractListModel):
     NewsRole = Qt.ItemDataRole.UserRole + 1
+    NewRole = Qt.ItemDataRole.UserRole + 2
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
         self.rows = []
+        self.new_links: set[str] = set()
 
-    def set_rows(self, rows) -> None:
+    def set_rows(self, rows, new_links=()) -> None:
         self.beginResetModel()
         self.rows = list(rows)
+        self.new_links = set(new_links or ())
         self.endResetModel()
 
     def rowCount(self, parent=QModelIndex()) -> int:
@@ -47,11 +50,18 @@ class NewsModel(QAbstractListModel):
     def data(self, index: QModelIndex, role=Qt.ItemDataRole.DisplayRole):
         if not index.isValid() or not (0 <= index.row() < len(self.rows)):
             return None
+
         news = self.rows[index.row()]
+
         if role == self.NewsRole:
             return news
+
+        if role == self.NewRole:
+            return news.link in self.new_links
+
         if role == Qt.ItemDataRole.DisplayRole:
             return news.title
+
         return None
 
 
@@ -70,6 +80,7 @@ class NewsDelegate(QStyledItemDelegate):
         total = self.BTN_W * 4 + self.GAP * 3
         x = rect.right() - total - 10
         y = rect.top() + (rect.height() - self.BTN_H) // 2
+
         return [
             QRect(
                 x + i * (self.BTN_W + self.GAP),
@@ -88,8 +99,11 @@ class NewsDelegate(QStyledItemDelegate):
 
     def paint(self, painter: QPainter, option: QStyleOptionViewItem, index: QModelIndex) -> None:
         news = index.data(NewsModel.NewsRole)
+
         if news is None:
             return
+
+        is_new = bool(index.data(NewsModel.NewRole))
 
         painter.save()
         painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
@@ -97,13 +111,16 @@ class NewsDelegate(QStyledItemDelegate):
         card = option.rect.adjusted(2, 3, -4, -3)
         self._rounded(painter, card, "#FFFFFF", "#DCE9F6", 10)
 
+        accent = "#12A872" if is_new else "#1689F8"
+
         painter.fillRect(
             QRect(card.left(), card.top() + 7, 4, card.height() - 14),
-            QColor("#1689F8"),
+            QColor(accent),
         )
 
         avatar = QRect(card.left() + 14, card.top() + 16, 40, 40)
         self._rounded(painter, avatar, "#1284F7", "#1284F7", 8)
+
         painter.setPen(QColor("#FFFFFF"))
         painter.setFont(QFont("Segoe UI", 12, QFont.Weight.Bold))
         painter.drawText(
@@ -129,12 +146,25 @@ class NewsDelegate(QStyledItemDelegate):
             )
             text_right = tag_rect.left() - 10
 
+        new_rect = None
+        meta_right = text_right
+
+        if is_new:
+            new_rect = QRect(
+                max(text_left + 110, text_right - 50),
+                card.top() + 8,
+                46,
+                18,
+            )
+            meta_right = new_rect.left() - 7
+
         meta_rect = QRect(
             text_left,
             card.top() + 10,
-            max(20, text_right - text_left),
+            max(20, meta_right - text_left),
             18,
         )
+
         title_rect = QRect(
             text_left,
             card.top() + 29,
@@ -147,17 +177,39 @@ class NewsDelegate(QStyledItemDelegate):
         painter.drawText(
             meta_rect,
             Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
-            f"{news.source}  •  {_format_time(news.date)}",
+            QFontMetrics(painter.font()).elidedText(
+                f"{news.source}  •  {_format_time(news.date)}",
+                Qt.TextElideMode.ElideRight,
+                meta_rect.width(),
+            ),
         )
+
+        if new_rect is not None:
+            self._rounded(
+                painter,
+                new_rect,
+                "#E6F8F0",
+                "#A9E4CB",
+                6,
+            )
+            painter.setFont(QFont("Segoe UI", 8, QFont.Weight.Bold))
+            painter.setPen(QColor("#078B5F"))
+            painter.drawText(
+                new_rect,
+                Qt.AlignmentFlag.AlignCenter,
+                "NOVO",
+            )
 
         painter.setFont(QFont("Segoe UI", 10, QFont.Weight.Bold))
         painter.setPen(QColor("#08245F"))
+
         fm = QFontMetrics(painter.font())
         title = fm.elidedText(
             news.title,
             Qt.TextElideMode.ElideRight,
             title_rect.width() * 2,
         )
+
         painter.drawText(
             title_rect,
             Qt.AlignmentFlag.AlignLeft
@@ -188,10 +240,15 @@ class NewsDelegate(QStyledItemDelegate):
         ]
 
         painter.setFont(QFont("Segoe UI", 9, QFont.Weight.Bold))
+
         for rect, (label, fill, border, color) in zip(buttons, specs):
             self._rounded(painter, rect, fill, border, 7)
             painter.setPen(QColor(color))
-            painter.drawText(rect, Qt.AlignmentFlag.AlignCenter, label)
+            painter.drawText(
+                rect,
+                Qt.AlignmentFlag.AlignCenter,
+                label,
+            )
 
         painter.restore()
 
@@ -200,6 +257,7 @@ class NewsDelegate(QStyledItemDelegate):
             return False
 
         news = index.data(NewsModel.NewsRole)
+
         if news is None:
             return False
 
@@ -208,7 +266,10 @@ class NewsDelegate(QStyledItemDelegate):
             if hasattr(event, "position")
             else event.pos()
         )
-        buttons = self._buttons(option.rect.adjusted(2, 3, -4, -3))
+
+        buttons = self._buttons(
+            option.rect.adjusted(2, 3, -4, -3)
+        )
 
         for idx, rect in enumerate(buttons):
             if not rect.contains(point):
@@ -726,7 +787,13 @@ class NewsPage(QWidget):
 
     def refresh(self, state: UiState) -> None:
         rows = self._rows(state)
-        self.model.set_rows(rows)
+
+        # O conjunto new_news_links representa SOMENTE a execução atual.
+        # AutomationService limpa esse conjunto no início de cada nova busca.
+        self.model.set_rows(
+            rows,
+            state.new_news_links,
+        )
 
         self.count.setText(
             f"▣  Notícias encontradas   "

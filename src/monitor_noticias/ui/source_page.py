@@ -192,7 +192,6 @@ class SourceDelegate(QStyledItemDelegate):
         card = option.rect.adjusted(2, 3, -4, -3)
         checkbox = self._check_rect(card)
 
-        # Permite clicar no checkbox OU na linha inteira até antes do status.
         clickable = QRect(
             card.left(),
             card.top(),
@@ -292,11 +291,11 @@ class SourcesPage(BasePage):
         text = QVBoxLayout()
         text.setSpacing(1)
 
-        self.state_title = QLabel("Fontes de notícias")
+        self.state_title = QLabel("Pesquisar todos")
         self.state_title.setObjectName("sourceStateTitle")
 
         self.state_subtitle = QLabel(
-            "Escolha quais veículos participam da varredura."
+            "Ative para pesquisar todas as fontes. Desative para escolher manualmente."
         )
         self.state_subtitle.setObjectName("sourceStateSubtitle")
 
@@ -304,14 +303,15 @@ class SourcesPage(BasePage):
         text.addWidget(self.state_subtitle)
         ml.addLayout(text, 1)
 
-        self.mode_label = QLabel("TODOS")
+        self.mode_label = QLabel("")
         self.mode_label.setObjectName("sourceStateValue")
+        self.mode_label.hide()
         ml.addWidget(self.mode_label)
 
-        self.all_news = QPushButton("✓")
+        self.all_news = QPushButton("ATIVADO")
         self.all_news.setObjectName("sourceModeButton")
         self.all_news.setCheckable(True)
-        self.all_news.setFixedSize(44, 30)
+        self.all_news.setFixedSize(112, 34)
         ml.addWidget(self.all_news)
 
         self.root.addWidget(mode)
@@ -464,16 +464,20 @@ class SourcesPage(BasePage):
             font-weight:900;
         }
         QPushButton#sourceModeButton {
-            background:white;
-            color:#0B6872;
-            border:1px solid #8EBDBD;
-            border-radius:8px;
+            background:#FFFFFF;
+            color:#526D78;
+            border:1px solid #A9C8C0;
+            border-radius:9px;
             font-weight:900;
+            font-size:10px;
+        }
+        QPushButton#sourceModeButton:hover {
+            border-color:#0B8A75;
         }
         QPushButton#sourceModeButton:checked {
-            background:#0B6872;
+            background:#08786F;
             color:white;
-            border-color:#0B6872;
+            border-color:#08786F;
         }
         QLabel#sourceCount {
             color:#08245F;
@@ -637,24 +641,27 @@ class SourcesPage(BasePage):
         self._guard = True
         self.all_news.blockSignals(True)
 
-        self.all_news.setChecked(
+        all_enabled = (
             self.controller.news_all_sources
             if tab != 1
             else False
+        )
+
+        self.all_news.setChecked(all_enabled)
+        self.all_news.setText(
+            "ATIVADO"
+            if all_enabled
+            else "DESATIVADO"
         )
 
         self.all_news.blockSignals(False)
         self._guard = False
 
         if tab == 0:
-            self.state_title.setText("Fontes de notícias")
+            self.state_title.setText("Pesquisar todos")
             self.state_subtitle.setText(
-                "Escolha quais veículos participam da varredura."
-            )
-            self.mode_label.setText(
-                "TODOS"
-                if self.controller.news_all_sources
-                else "Seleção manual"
+                "Ative para pesquisar todos os veículos. "
+                "Desative para usar somente as fontes marcadas abaixo."
             )
             self.all_news.show()
 
@@ -663,18 +670,13 @@ class SourcesPage(BasePage):
             self.state_subtitle.setText(
                 "Escolha quais fontes participam da busca de vídeos."
             )
-            self.mode_label.setText("Seleção própria")
             self.all_news.hide()
 
         else:
-            self.state_title.setText("Mídia especializada")
+            self.state_title.setText("Pesquisar todos")
             self.state_subtitle.setText(
-                "Veículos especializados em Defesa e Forças Armadas."
-            )
-            self.mode_label.setText(
-                "TODOS"
-                if self.controller.news_all_sources
-                else "Seleção manual"
+                "Ative para incluir toda a mídia especializada. "
+                "Desative para usar somente as fontes marcadas abaixo."
             )
             self.all_news.show()
 

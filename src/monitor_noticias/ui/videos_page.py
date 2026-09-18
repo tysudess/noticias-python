@@ -67,17 +67,25 @@ class VideosPage(BasePage):
         periods = QHBoxLayout()
         periods.setSpacing(8)
         self.period_buttons = []
-        for label, hours in (("24 horas", 24), ("7 dias", 168), ("30 dias", 720)):
+
+        for label, hours in (
+            ("24 horas", 24),
+            ("7 dias", 168),
+            ("30 dias", 720),
+        ):
             button = QPushButton(label)
             button.setObjectName("videoPeriod")
             button.setCheckable(True)
+
             if label == "24 horas":
                 button.setChecked(True)
+
             button.clicked.connect(
                 lambda _checked=False, h=hours: controller.search_videos(
                     *controller.period_last_hours(h)
                 )
             )
+
             periods.addWidget(button)
             self.period_buttons.append(button)
 
@@ -92,6 +100,7 @@ class VideosPage(BasePage):
         self.period_box.setObjectName("videoCustom")
         pl = QHBoxLayout(self.period_box)
         pl.setContentsMargins(8, 5, 8, 5)
+
         today = QDate.currentDate()
         self.start_date = QDateEdit(today.addDays(-1))
         self.start_time = QTimeEdit(QTime(0, 0))
@@ -123,6 +132,7 @@ class VideosPage(BasePage):
         pcl.setSpacing(7)
 
         head = QHBoxLayout()
+
         icon = QLabel("✓")
         icon.setObjectName("videoCheck")
         icon.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -130,15 +140,20 @@ class VideosPage(BasePage):
         head.addWidget(icon)
 
         title_box = QVBoxLayout()
+
         self.exec_title = QLabel("Vídeos • última execução concluída")
         self.exec_title.setObjectName("videoExecTitle")
+
         self.exec_sub = QLabel("Pronto")
         self.exec_sub.setObjectName("videoMuted")
+
         title_box.addWidget(self.exec_title)
         title_box.addWidget(self.exec_sub)
+
         head.addLayout(title_box, 1)
 
         self.metrics = {}
+
         for key, caption in (
             ("pct", "Conclusão"),
             ("found", "Encontrados"),
@@ -151,12 +166,15 @@ class VideosPage(BasePage):
             value = QLabel("0")
             value.setObjectName("videoMetric")
             value.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
             cap = QLabel(caption)
             cap.setObjectName("videoMetricCaption")
             cap.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
             box.addWidget(value)
             box.addWidget(cap)
             head.addLayout(box)
+
             self.metrics[key] = value
 
         pcl.addLayout(head)
@@ -177,31 +195,47 @@ class VideosPage(BasePage):
         self.stop.setObjectName("videoStop")
         self.stop.clicked.connect(controller.stop_video_search)
         self.stop.hide()
-        self.root.addWidget(self.stop, 0, Qt.AlignmentFlag.AlignLeft)
+
+        self.root.addWidget(
+            self.stop,
+            0,
+            Qt.AlignmentFlag.AlignLeft,
+        )
 
         head_list = QHBoxLayout()
+
         self.count = QLabel("Vídeos encontrados")
         self.count.setObjectName("videoListTitle")
         head_list.addWidget(self.count)
+
         head_list.addStretch()
+
         self.shown = QLabel("")
         self.shown.setObjectName("videoMuted")
         head_list.addWidget(self.shown)
+
         self.root.addLayout(head_list)
 
         self.scroll = QScrollArea()
         self.scroll.setWidgetResizable(True)
-        self.scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.scroll.setHorizontalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+        )
         self.scroll.setObjectName("videoScroll")
+
         self.container = QWidget()
         self.items = QVBoxLayout(self.container)
         self.items.setContentsMargins(0, 0, 2, 0)
         self.items.setSpacing(7)
         self.items.addStretch()
+
         self.scroll.setWidget(self.container)
         self.root.addWidget(self.scroll, 1)
 
-        self.query.textChanged.connect(lambda _: self.refresh(controller.state))
+        self.query.textChanged.connect(
+            lambda _: self.refresh(controller.state)
+        )
+
         self.setStyleSheet(self._stylesheet())
 
     def _stylesheet(self) -> str:
@@ -211,71 +245,150 @@ class VideosPage(BasePage):
             border:1px solid #D6E6F7;
             border-radius:12px;
         }
-        QLineEdit#videoSearch { min-height:35px; padding:0 11px; }
+        QLineEdit#videoSearch {
+            min-height:35px;
+            padding:0 11px;
+        }
         QPushButton#videoPrimary {
-            background:#0A7DF8;color:white;border:0;border-radius:8px;
-            padding:8px 15px;font-weight:800;
+            background:#0A7DF8;
+            color:white;
+            border:0;
+            border-radius:8px;
+            padding:8px 15px;
+            font-weight:800;
         }
         QPushButton#videoPeriod {
-            background:white;color:#153E75;border:1px solid #C9DCF2;
-            border-radius:8px;padding:7px 14px;font-weight:700;
+            background:white;
+            color:#153E75;
+            border:1px solid #C9DCF2;
+            border-radius:8px;
+            padding:7px 14px;
+            font-weight:700;
         }
         QPushButton#videoPeriod:checked {
-            background:#EAF4FF;color:#087AF7;border-color:#087AF7;
+            background:#EAF4FF;
+            color:#087AF7;
+            border-color:#087AF7;
         }
         QFrame#videoCustom {
-            background:#F8FBFF;border:1px solid #DDE9F6;border-radius:8px;
+            background:#F8FBFF;
+            border:1px solid #DDE9F6;
+            border-radius:8px;
         }
         QLabel#videoCheck {
-            background:#DDF8EC;color:#078B5F;border-radius:27px;
-            font-size:29px;font-weight:900;
+            background:#DDF8EC;
+            color:#078B5F;
+            border-radius:27px;
+            font-size:29px;
+            font-weight:900;
         }
         QLabel#videoExecTitle {
-            color:#08245F;font-size:18px;font-weight:900;
+            color:#08245F;
+            font-size:18px;
+            font-weight:900;
         }
-        QLabel#videoMuted { color:#6079A5;font-size:10px; }
+        QLabel#videoMuted {
+            color:#6079A5;
+            font-size:10px;
+        }
         QLabel#videoMetric {
-            color:#087AF7;font-size:18px;font-weight:900;min-width:56px;
+            color:#087AF7;
+            font-size:18px;
+            font-weight:900;
+            min-width:56px;
         }
-        QLabel#videoMetricCaption { color:#6079A5;font-size:9px; }
+        QLabel#videoMetricCaption {
+            color:#6079A5;
+            font-size:9px;
+        }
         QProgressBar#videoProgress {
-            background:#E3ECF6;border:0;border-radius:4px;max-height:10px;
+            background:#E3ECF6;
+            border:0;
+            border-radius:4px;
+            max-height:10px;
         }
         QProgressBar#videoProgress::chunk {
-            background:#0A7DF8;border-radius:4px;
+            background:#0A7DF8;
+            border-radius:4px;
         }
         QLabel#videoSuccess {
-            background:#EAF9F2;color:#078B5F;border:1px solid #C4ECD9;
-            border-radius:7px;padding:7px 10px;font-size:10px;
+            background:#EAF9F2;
+            color:#078B5F;
+            border:1px solid #C4ECD9;
+            border-radius:7px;
+            padding:7px 10px;
+            font-size:10px;
         }
         QPushButton#videoStop {
-            background:#FFF1F4;color:#E03155;border:1px solid #FFB8C8;
-            border-radius:8px;padding:8px 14px;
+            background:#FFF1F4;
+            color:#E03155;
+            border:1px solid #FFB8C8;
+            border-radius:8px;
+            padding:8px 14px;
         }
         QLabel#videoListTitle {
-            color:#08245F;font-size:18px;font-weight:900;
+            color:#08245F;
+            font-size:18px;
+            font-weight:900;
         }
-        QScrollArea#videoScroll { border:0;background:transparent; }
+        QScrollArea#videoScroll {
+            border:0;
+            background:transparent;
+        }
         QFrame#videoItem {
-            background:white;border:1px solid #DCE9F6;border-radius:10px;
+            background:white;
+            border:1px solid #DCE9F6;
+            border-radius:10px;
         }
         QLabel#videoIcon {
-            background:#F0E9FF;color:#7145F5;border-radius:25px;
-            font-size:24px;font-weight:900;
+            background:#F0E9FF;
+            color:#7145F5;
+            border-radius:25px;
+            font-size:24px;
+            font-weight:900;
         }
-        QLabel#videoMeta { color:#5272A1;font-size:9px; }
-        QLabel#videoTitle { color:#08245F;font-size:12px;font-weight:900; }
+        QLabel#videoMeta {
+            color:#5272A1;
+            font-size:9px;
+        }
+        QLabel#videoTitle {
+            color:#08245F;
+            font-size:12px;
+            font-weight:900;
+        }
         QLabel#videoTag {
-            background:#F4ECFF;color:#8B3CF6;border:1px solid #DFC6FF;
-            border-radius:7px;padding:6px 10px;font-size:9px;font-weight:800;
+            background:#F4ECFF;
+            color:#8B3CF6;
+            border:1px solid #DFC6FF;
+            border-radius:7px;
+            padding:6px 10px;
+            font-size:9px;
+            font-weight:800;
+        }
+        QLabel#videoNew {
+            background:#E6F8F0;
+            color:#078B5F;
+            border:1px solid #A9E4CB;
+            border-radius:6px;
+            padding:3px 8px;
+            font-size:8px;
+            font-weight:900;
         }
         QPushButton#videoAction {
-            background:white;color:#0C3974;border:1px solid #C9DDF2;
-            border-radius:7px;padding:7px 10px;font-weight:700;
+            background:white;
+            color:#0C3974;
+            border:1px solid #C9DDF2;
+            border-radius:7px;
+            padding:7px 10px;
+            font-weight:700;
         }
         QPushButton#videoWhats {
-            background:#EAF9F2;color:#078B5F;border:1px solid #BFE8D5;
-            border-radius:7px;padding:7px 10px;font-weight:700;
+            background:#EAF9F2;
+            color:#078B5F;
+            border:1px solid #BFE8D5;
+            border-radius:7px;
+            padding:7px 10px;
+            font-weight:700;
         }
         """
 
@@ -286,6 +399,7 @@ class VideosPage(BasePage):
             self.end_date.date().toString("yyyy-MM-dd"),
             self.end_time.time().toString("HH:mm"),
         )
+
         if parsed:
             self.controller.search_videos(*parsed)
 
@@ -293,10 +407,11 @@ class VideosPage(BasePage):
         while self.items.count() > 1:
             item = self.items.takeAt(0)
             widget = item.widget()
+
             if widget:
                 widget.deleteLater()
 
-    def _card(self, video) -> QFrame:
+    def _card(self, video, is_new: bool = False) -> QFrame:
         card = QFrame()
         card.setObjectName("videoItem")
         card.setMinimumHeight(100)
@@ -313,20 +428,45 @@ class VideosPage(BasePage):
 
         text = QVBoxLayout()
         text.setSpacing(3)
-        meta = QLabel(f"{video.sourceName}  •  {_time(video.publishedAt)}")
+
+        meta_row = QHBoxLayout()
+        meta_row.setSpacing(7)
+
+        meta = QLabel(
+            f"{video.sourceName}  •  {_time(video.publishedAt)}"
+        )
         meta.setObjectName("videoMeta")
+        meta_row.addWidget(meta)
+
+        if is_new:
+            new_badge = QLabel("NOVO")
+            new_badge.setObjectName("videoNew")
+            new_badge.setFixedHeight(20)
+            meta_row.addWidget(
+                new_badge,
+                0,
+                Qt.AlignmentFlag.AlignVCenter,
+            )
+
+        meta_row.addStretch()
+        text.addLayout(meta_row)
+
         title = QLabel(video.title)
         title.setObjectName("videoTitle")
         title.setWordWrap(True)
-        text.addWidget(meta)
         text.addWidget(title)
 
         tag_text = video.matchedDemand or video.matchedTerm or ""
+
         if tag_text:
             tag = QLabel(f"Termo: {tag_text}")
             tag.setObjectName("videoTag")
             tag.setMaximumWidth(210)
-            text.addWidget(tag, 0, Qt.AlignmentFlag.AlignLeft)
+            text.addWidget(
+                tag,
+                0,
+                Qt.AlignmentFlag.AlignLeft,
+            )
 
         row.addLayout(text, 1)
 
@@ -345,26 +485,47 @@ class VideosPage(BasePage):
 
     def refresh(self, state: UiState) -> None:
         query = self.query.text().strip().lower()
+
         rows = [
             video
             for video in state.videos
             if not query
             or query
-            in f"{video.title} {video.sourceName} {video.matchedTerm} {video.matchedDemand}".lower()
+            in (
+                f"{video.title} "
+                f"{video.sourceName} "
+                f"{video.matchedTerm} "
+                f"{video.matchedDemand}"
+            ).lower()
         ]
 
         self.count.setText("Vídeos encontrados")
         self.shown.setText(f"{len(rows)} exibido(s)")
-        self.run.setEnabled(not state.video_busy and self.controller.search_available)
-        self.period_go.setEnabled(not state.video_busy and self.controller.search_available)
+
+        self.run.setEnabled(
+            not state.video_busy
+            and self.controller.search_available
+        )
+        self.period_go.setEnabled(
+            not state.video_busy
+            and self.controller.search_available
+        )
         self.stop.setVisible(state.video_busy)
 
         progress = state.video_progress
+
         fraction = (
-            max(0.0, min(1.0, float(getattr(progress, "fraction", 0.0))))
+            max(
+                0.0,
+                min(
+                    1.0,
+                    float(getattr(progress, "fraction", 0.0)),
+                ),
+            )
             if state.video_busy
             else 1.0
         )
+
         pct = round(fraction * 100)
         found = int(getattr(progress, "found", 0))
         errors = int(getattr(progress, "errors", 0))
@@ -378,28 +539,53 @@ class VideosPage(BasePage):
             else "Vídeos • última execução concluída"
         )
         self.exec_sub.setText(state.video_status)
+
         self.metrics["pct"].setText(f"{pct}%")
         self.metrics["found"].setText(str(found))
         self.metrics["new"].setText(str(fresh))
         self.metrics["errors"].setText(str(errors))
         self.metrics["steps"].setText(f"{completed}/{total}")
-        self.metrics["time"].setText(_duration(state.last_video_duration_ms))
+        self.metrics["time"].setText(
+            _duration(state.last_video_duration_ms)
+        )
+
         self.progress.setValue(pct)
 
         if state.video_busy:
-            source = getattr(progress, "currentSource", "") or "Preparando"
-            query_text = getattr(progress, "currentQuery", "") or "consultas"
-            self.detail.setText(f"{source} • {query_text}")
+            source = (
+                getattr(progress, "currentSource", "")
+                or "Preparando"
+            )
+            query_text = (
+                getattr(progress, "currentQuery", "")
+                or "consultas"
+            )
+            self.detail.setText(
+                f"{source} • {query_text}"
+            )
         else:
             self.detail.setText(
-                f"A busca foi concluída. {found} vídeo(s) encontrado(s) nesta execução."
+                f"A busca foi concluída. "
+                f"{found} vídeo(s) encontrado(s) nesta execução."
             )
 
         self._clear()
+
+        # new_video_links contém somente os vídeos inseridos na execução atual.
+        # Assim que outra busca inicia, AutomationService limpa o conjunto e os
+        # selos NOVO da execução anterior desaparecem automaticamente.
         for video in rows:
-            self.items.insertWidget(self.items.count() - 1, self._card(video))
+            self.items.insertWidget(
+                self.items.count() - 1,
+                self._card(
+                    video,
+                    video.link in state.new_video_links,
+                ),
+            )
 
         if rows:
-            self.container.setMinimumHeight(len(rows) * 108)
+            self.container.setMinimumHeight(
+                len(rows) * 108
+            )
         else:
             self.container.setMinimumHeight(120)
