@@ -3,6 +3,7 @@ from pathlib import Path
 from PyInstaller.utils.hooks import collect_all
 
 pdfium_datas, pdfium_bins, pdfium_hidden = collect_all("pypdfium2")
+pawp_datas, pawp_bins, pawp_hidden = collect_all("pyaudiowpatch")
 
 ROOT = Path(SPECPATH)
 CAPAS_ASSETS = ROOT / "src" / "monitor_noticias" / "capas_tool" / "assets"
@@ -19,9 +20,9 @@ block_cipher = None
 a = Analysis(
     ["run.py"],
     pathex=["src"],
-    binaries=pdfium_bins,
-    datas=pdfium_datas + capas_datas,
-    hiddenimports=pdfium_hidden,
+    binaries=pdfium_bins + pawp_bins,
+    datas=pdfium_datas + pawp_datas + capas_datas,
+    hiddenimports=pdfium_hidden + pawp_hidden,
     hookspath=[],
     hooksconfig={},
     runtime_hooks=["scripts/pyi_runtime_portable_validation.py"],

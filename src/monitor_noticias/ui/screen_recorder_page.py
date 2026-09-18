@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import ctypes
-import locale
 import os
 import re
 import shutil
@@ -20,7 +19,6 @@ from PySide6.QtGui import (
     QMouseEvent,
     QPainter,
     QPen,
-    QPixmap,
     QScreen,
 )
 from PySide6.QtWidgets import (
@@ -36,178 +34,33 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QPushButton,
     QScrollArea,
-    QSizePolicy,
     QVBoxLayout,
     QWidget,
+)
+
+from monitor_noticias.ui.screen_recorder_audio import (
+    AudioDevice,
+    WasapiSegmentRecorder,
+    backend_available,
+    list_wasapi_devices,
+)
+from monitor_noticias.ui.screen_recorder_floating import (
+    FloatingRecorderWidget,
 )
 
 
 CREATE_NO_WINDOW = 0x08000000 if sys.platform.startswith("win") else 0
 
 
-class RegionSelectionOverlay(QWidget):
-    selected = Signal(QRect)
-    cancelled = Signal()
-
-    def __init__(self, screen: QScreen) -> None:
-        super().__init__(None)
-        self.screen = screen
-        self._origin: QPoint | None = None
-        self._current: QPoint | None = None
-
-        self.setWindowFlags(
-            Qt.WindowType.FramelessWindowHint
-            | Qt.WindowType.Tool
-            | Qt.WindowType.WindowStaysOnTopHint
-        )
-        self.setAttribute(
-            Qt.WidgetAttribute.WA_TranslucentBackground,
-            True,
-        )
-        self.setMouseTracking(True)
-        self.setCursor(Qt.CursorShape.CrossCursor)
-        self.setGeometry(screen.geometry())
-        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
-
-    def showEvent(self, event) -> None:
-        super().showEvent(event)
-        self.raise_()
-        self.activateWindow()
-        self.setFocus()
-
-    def keyPressEvent(self, event: QKeyEvent) -> None:
-        if event.key() == Qt.Key.Key_Escape:
-            self.cancelled.emit()
-            self.close()
-            return
-        super().keyPressEvent(event)
-
-    def mousePressEvent(self, event: QMouseEvent) -> None:
-        if event.button() != Qt.MouseButton.LeftButton:
-            return
-        self._origin = event.position().toPoint()
-        self._current = self._origin
-        self.update()
-
-    def mouseMoveEvent(self, event: QMouseEvent) -> None:
-        if self._origin is None:
-            return
-        self._current = event.position().toPoint()
-        self.update()
-
-    def mouseReleaseEvent(self, event: QMouseEvent) -> None:
-        if (
-            event.button() != Qt.MouseButton.LeftButton
-            or self._origin is None
-        ):
-            return
-
-        self._current = event.position().toPoint()
-        local = QRect(
-            self._origin,
-            self._current,
-        ).normalized()
-
-        if local.width() < 40 or local.height() < 40:
-            self._origin = None
-            self._current = None
-            self.update()
-            return
-
-        top_left = self.geometry().topLeft() + local.topLeft()
-        global_rect = QRect(
-            top_left,
-            local.size(),
-        )
-
-        self.selected.emit(global_rect)
-        self.close()
-
-    def paintEvent(self, _event) -> None:
-        painter = QPainter(self)
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
-
-        painter.fillRect(
-            self.rect(),
-            QColor(5, 18, 39, 160),
-        )
-
-        if self._origin is None or self._current is None:
-            painter.setPen(QColor("#FFFFFF"))
-            painter.drawText(
-                self.rect(),
-                Qt.AlignmentFlag.AlignCenter,
-                "ARRASTE PARA SELECIONAR A ÁREA\nESC para cancelar",
-            )
-            return
-
-        rect = QRect(
-            self._origin,
-            self._current,
-        ).normalized()
-
-        painter.setCompositionMode(
-            QPainter.CompositionMode.CompositionMode_Clear
-        )
-        painter.fillRect(rect, Qt.GlobalColor.transparent)
-
-        painter.setCompositionMode(
-            QPainter.CompositionMode.CompositionMode_SourceOver
-        )
-        painter.setPen(
-            QPen(
-                QColor("#19A0FF"),
-                3,
-            )
-        )
-        painter.drawRect(rect)
-
-        painter.setPen(QColor("#FFFFFF"))
-        painter.drawText(
-            rect.adjusted(10, 10, -10, -10),
-            Qt.AlignmentFlag.AlignTop
-            | Qt.AlignmentFlag.AlignLeft,
-            f"{rect.width()} × {rect.height()}",
-        )
-
-
-class CaptureAreaOverlay(QWidget):
-    """Borda vermelha persistente, móvel e redimensionável.
-
-    Modo normal:
-    - apenas mostra a área;
-    - não bloqueia cliques do usuário.
-
-    Modo AJUSTAR:
-    - arraste pelo centro para mover;
-    - arraste bordas/cantos para redimensionar;
-    - Enter confirma;
-    - Esc cancela e restaura a área anterior.
-
-    No Windows tentamos excluir esta janela da própria gravação usando
-    WDA_EXCLUDEFROMCAPTURE, para a moldura ficar visível ao operador sem
-    aparecer no vídeo final em versões compatíveis do Windows.
-    """
-
-    rect_changed = Signal(QRect)
-    edit_finished = Signal(QRect)
-    edit_cancelled = Signal(QRect)
+class CaptureAreaOutline(QWidget):
+    """Moldura vermelha persistente que não bloqueia o mouse."""
 
     BORDER = 4
-    HIT = 14
-    MIN_WIDTH = 160
-    MIN_HEIGHT = 100
 
     def __init__(self) -> None:
         super().__init__(None)
 
         self._capture_rect = QRect()
-        self._bounds = QRect()
-        self._editing = False
-        self._edit_original = QRect()
-        self._drag_mode = ""
-        self._drag_start_global = QPoint()
-        self._drag_start_rect = QRect()
 
         self.setWindowFlags(
             Qt.WindowType.FramelessWindowHint
@@ -223,37 +76,20 @@ class CaptureAreaOverlay(QWidget):
             Qt.WidgetAttribute.WA_TransparentForMouseEvents,
             True,
         )
-        self.setMouseTracking(True)
-        self.setFocusPolicy(
-            Qt.FocusPolicy.StrongFocus
-        )
-
-    @property
-    def editing(self) -> bool:
-        return self._editing
-
-    @property
-    def capture_rect(self) -> QRect:
-        return QRect(self._capture_rect)
 
     def showEvent(self, event) -> None:
         super().showEvent(event)
         self._exclude_from_capture()
         self.raise_()
 
-        if self._editing:
-            self.activateWindow()
-            self.setFocus()
-
     def _exclude_from_capture(self) -> None:
         if not sys.platform.startswith("win"):
             return
 
         try:
-            hwnd = int(self.winId())
             ctypes.windll.user32.SetWindowDisplayAffinity(
-                hwnd,
-                0x00000011,  # WDA_EXCLUDEFROMCAPTURE
+                int(self.winId()),
+                0x00000011,
             )
         except Exception:
             pass
@@ -261,24 +97,15 @@ class CaptureAreaOverlay(QWidget):
     def set_capture_rect(
         self,
         rect: QRect | None,
-        bounds: QRect | None = None,
     ) -> None:
         if rect is None or rect.isEmpty():
             self._capture_rect = QRect()
             self.hide()
             return
 
-        self._capture_rect = QRect(rect.normalized())
-
-        if bounds is not None and not bounds.isEmpty():
-            self._bounds = QRect(bounds)
-
-        self._apply_geometry()
-
-    def _apply_geometry(self) -> None:
-        if self._capture_rect.isEmpty():
-            self.hide()
-            return
+        self._capture_rect = QRect(
+            rect.normalized()
+        )
 
         self.setGeometry(
             self._capture_rect.adjusted(
@@ -295,95 +122,177 @@ class CaptureAreaOverlay(QWidget):
         self.raise_()
         self.update()
 
-    def set_editing(
+    def paintEvent(self, _event) -> None:
+        painter = QPainter(self)
+        painter.setRenderHint(
+            QPainter.RenderHint.Antialiasing,
+            True,
+        )
+
+        frame = self.rect().adjusted(
+            self.BORDER // 2,
+            self.BORDER // 2,
+            -(self.BORDER // 2) - 1,
+            -(self.BORDER // 2) - 1,
+        )
+
+        painter.setPen(
+            QPen(
+                QColor("#FF274B"),
+                self.BORDER,
+            )
+        )
+        painter.setBrush(
+            Qt.BrushStyle.NoBrush
+        )
+        painter.drawRect(frame)
+
+        badge = QRect(
+            10,
+            10,
+            122,
+            30,
+        )
+        painter.setPen(
+            Qt.PenStyle.NoPen
+        )
+        painter.setBrush(
+            QColor("#E71D43")
+        )
+        painter.drawRoundedRect(
+            badge,
+            7,
+            7,
+        )
+        painter.setPen(
+            QColor("#FFFFFF")
+        )
+        painter.setFont(
+            QFont(
+                "Segoe UI",
+                10,
+                QFont.Weight.Bold,
+            )
+        )
+        painter.drawText(
+            badge,
+            Qt.AlignmentFlag.AlignCenter,
+            "● ÁREA REC",
+        )
+
+
+class RegionEditorOverlay(QWidget):
+    """Editor de área em tela cheia.
+
+    Pode criar uma área do zero ou editar uma área existente.
+    A tela cheia evita o problema da versão anterior em que a própria moldura
+    mudava WindowTransparentForInput e depois deixava de receber o mouse.
+    """
+
+    accepted = Signal(QRect)
+    cancelled = Signal()
+    cleared = Signal()
+
+    HANDLE = 12
+    MIN_W = 160
+    MIN_H = 100
+
+    def __init__(
         self,
-        enabled: bool,
+        screen: QScreen,
+        initial: QRect | None = None,
     ) -> None:
-        if enabled == self._editing:
-            return
+        super().__init__(None)
 
-        if enabled:
-            if self._capture_rect.isEmpty():
-                return
-            self._edit_original = QRect(
-                self._capture_rect
+        self.screen = screen
+        self._screen_geometry = QRect(
+            screen.geometry()
+        )
+
+        self._selection = QRect()
+        self._drag_mode = ""
+        self._drag_start = QPoint()
+        self._drag_rect = QRect()
+        self._creating = False
+
+        if initial is not None and not initial.isEmpty():
+            local = QRect(initial)
+            local.translate(
+                -self._screen_geometry.x(),
+                -self._screen_geometry.y(),
+            )
+            self._selection = local.intersected(
+                QRect(
+                    0,
+                    0,
+                    self._screen_geometry.width(),
+                    self._screen_geometry.height(),
+                )
             )
 
-        self._editing = enabled
-
-        # Em edição a moldura precisa receber mouse/teclado.
-        # Fora da edição ela volta a ser "atravessável".
+        self.setWindowFlags(
+            Qt.WindowType.FramelessWindowHint
+            | Qt.WindowType.Tool
+            | Qt.WindowType.WindowStaysOnTopHint
+        )
         self.setAttribute(
-            Qt.WidgetAttribute.WA_TransparentForMouseEvents,
-            not enabled,
+            Qt.WidgetAttribute.WA_TranslucentBackground,
+            True,
         )
-        self.setWindowFlag(
-            Qt.WindowType.WindowTransparentForInput,
-            not enabled,
+        self.setMouseTracking(True)
+        self.setFocusPolicy(
+            Qt.FocusPolicy.StrongFocus
+        )
+        self.setGeometry(
+            self._screen_geometry
         )
 
-        # Alterar WindowFlag recria a janela nativa.
-        self.show()
-        self._exclude_from_capture()
+    def showEvent(self, event) -> None:
+        super().showEvent(event)
         self.raise_()
+        self.activateWindow()
+        self.setFocus()
 
-        if enabled:
-            self.activateWindow()
-            self.setFocus()
-            self.setCursor(
-                Qt.CursorShape.SizeAllCursor
-            )
-        else:
-            self.unsetCursor()
-
-        self.update()
-
-    def finish_edit(self) -> None:
-        if not self._editing:
-            return
-
-        rect = QRect(self._capture_rect)
-        self.set_editing(False)
-        self.edit_finished.emit(rect)
-
-    def cancel_edit(self) -> None:
-        if not self._editing:
-            return
-
-        original = QRect(self._edit_original)
-
-        if not original.isEmpty():
-            self._capture_rect = original
-            self._apply_geometry()
-
-        self.set_editing(False)
-        self.edit_cancelled.emit(
-            QRect(self._capture_rect)
-        )
-
-    def keyPressEvent(self, event: QKeyEvent) -> None:
-        if not self._editing:
-            super().keyPressEvent(event)
+    def keyPressEvent(
+        self,
+        event: QKeyEvent,
+    ) -> None:
+        if event.key() == Qt.Key.Key_Escape:
+            self.cancelled.emit()
+            self.close()
             return
 
         if event.key() in (
             Qt.Key.Key_Return,
             Qt.Key.Key_Enter,
         ):
-            self.finish_edit()
+            self._confirm()
             return
 
-        if event.key() == Qt.Key.Key_Escape:
-            self.cancel_edit()
+        if event.key() in (
+            Qt.Key.Key_Delete,
+            Qt.Key.Key_Backspace,
+        ):
+            self.cleared.emit()
+            self.close()
             return
 
-        # Ajuste fino pelo teclado.
-        step = 10 if (
-            event.modifiers()
-            & Qt.KeyboardModifier.ShiftModifier
-        ) else 1
+        if self._selection.isEmpty():
+            super().keyPressEvent(event)
+            return
 
-        rect = QRect(self._capture_rect)
+        step = (
+            10
+            if (
+                event.modifiers()
+                & Qt.KeyboardModifier.ShiftModifier
+            )
+            else 1
+        )
+
+        rect = QRect(
+            self._selection
+        )
 
         if event.key() == Qt.Key.Key_Left:
             rect.translate(-step, 0)
@@ -397,159 +306,229 @@ class CaptureAreaOverlay(QWidget):
             super().keyPressEvent(event)
             return
 
-        self._set_rect_from_edit(rect)
+        self._selection = self._clamp(
+            rect
+        )
+        self.update()
 
-    def mousePressEvent(self, event: QMouseEvent) -> None:
-        if (
-            not self._editing
-            or event.button()
-            != Qt.MouseButton.LeftButton
-        ):
+    def mousePressEvent(
+        self,
+        event: QMouseEvent,
+    ) -> None:
+        if event.button() != Qt.MouseButton.LeftButton:
             return
 
-        local = event.position().toPoint()
-        self._drag_mode = self._hit_test(local)
-        self._drag_start_global = (
-            event.globalPosition().toPoint()
-        )
-        self._drag_start_rect = QRect(
-            self._capture_rect
-        )
+        point = event.position().toPoint()
 
-        event.accept()
-
-    def mouseMoveEvent(self, event: QMouseEvent) -> None:
-        if not self._editing:
+        if self._selection.isEmpty():
+            self._creating = True
+            self._drag_start = point
+            self._selection = QRect(
+                point,
+                point,
+            )
+            self.update()
             return
 
-        local = event.position().toPoint()
+        mode = self._hit_test(point)
+
+        if not mode:
+            # Clicar fora começa uma NOVA seleção imediatamente.
+            self._creating = True
+            self._drag_start = point
+            self._selection = QRect(
+                point,
+                point,
+            )
+            self.update()
+            return
+
+        self._creating = False
+        self._drag_mode = mode
+        self._drag_start = point
+        self._drag_rect = QRect(
+            self._selection
+        )
+
+    def mouseMoveEvent(
+        self,
+        event: QMouseEvent,
+    ) -> None:
+        point = event.position().toPoint()
 
         if (
             event.buttons()
             & Qt.MouseButton.LeftButton
-            and self._drag_mode
         ):
-            current = (
-                event.globalPosition().toPoint()
-            )
-            delta = (
-                current
-                - self._drag_start_global
-            )
-
-            rect = QRect(
-                self._drag_start_rect
-            )
-            mode = self._drag_mode
-
-            if mode == "move":
-                rect.translate(
-                    delta.x(),
-                    delta.y(),
+            if self._creating:
+                self._selection = self._clamp(
+                    QRect(
+                        self._drag_start,
+                        point,
+                    ).normalized()
                 )
-            else:
-                if "left" in mode:
-                    rect.setLeft(
-                        self._drag_start_rect.left()
-                        + delta.x()
-                    )
-                if "right" in mode:
-                    rect.setRight(
-                        self._drag_start_rect.right()
-                        + delta.x()
-                    )
-                if "top" in mode:
-                    rect.setTop(
-                        self._drag_start_rect.top()
-                        + delta.y()
-                    )
-                if "bottom" in mode:
-                    rect.setBottom(
-                        self._drag_start_rect.bottom()
-                        + delta.y()
-                    )
+                self.update()
+                return
 
-            self._set_rect_from_edit(
-                rect.normalized()
-            )
-            event.accept()
+            if self._drag_mode:
+                delta = (
+                    point
+                    - self._drag_start
+                )
+                rect = QRect(
+                    self._drag_rect
+                )
+
+                if self._drag_mode == "move":
+                    rect.translate(
+                        delta.x(),
+                        delta.y(),
+                    )
+                else:
+                    if "left" in self._drag_mode:
+                        rect.setLeft(
+                            self._drag_rect.left()
+                            + delta.x()
+                        )
+                    if "right" in self._drag_mode:
+                        rect.setRight(
+                            self._drag_rect.right()
+                            + delta.x()
+                        )
+                    if "top" in self._drag_mode:
+                        rect.setTop(
+                            self._drag_rect.top()
+                            + delta.y()
+                        )
+                    if "bottom" in self._drag_mode:
+                        rect.setBottom(
+                            self._drag_rect.bottom()
+                            + delta.y()
+                        )
+
+                rect = rect.normalized()
+                rect = self._minimum(
+                    rect
+                )
+                self._selection = self._clamp(
+                    rect
+                )
+                self.update()
+                return
+
+        self._update_cursor(point)
+
+    def mouseReleaseEvent(
+        self,
+        event: QMouseEvent,
+    ) -> None:
+        if event.button() != Qt.MouseButton.LeftButton:
             return
 
-        self._update_cursor(local)
+        if self._creating:
+            self._creating = False
 
-    def mouseReleaseEvent(self, event: QMouseEvent) -> None:
-        if (
-            self._editing
-            and event.button()
-            == Qt.MouseButton.LeftButton
-        ):
-            self._drag_mode = ""
-            self._update_cursor(
-                event.position().toPoint()
-            )
-            event.accept()
+            if (
+                self._selection.width()
+                < self.MIN_W
+                or self._selection.height()
+                < self.MIN_H
+            ):
+                self._selection = QRect()
+
+        self._drag_mode = ""
+        self._update_cursor(
+            event.position().toPoint()
+        )
+        self.update()
 
     def mouseDoubleClickEvent(
         self,
         event: QMouseEvent,
     ) -> None:
         if (
-            self._editing
-            and event.button()
+            event.button()
             == Qt.MouseButton.LeftButton
+            and not self._selection.isEmpty()
+            and self._selection.contains(
+                event.position().toPoint()
+            )
         ):
-            self.finish_edit()
-            event.accept()
+            self._confirm()
+
+    def _confirm(self) -> None:
+        if (
+            self._selection.width()
+            < self.MIN_W
+            or self._selection.height()
+            < self.MIN_H
+        ):
+            return
+
+        rect = QRect(
+            self._selection
+        )
+        rect.translate(
+            self._screen_geometry.x(),
+            self._screen_geometry.y(),
+        )
+
+        self.accepted.emit(rect)
+        self.close()
 
     def _hit_test(
         self,
-        pos: QPoint,
+        point: QPoint,
     ) -> str:
-        rect = self.rect().adjusted(
-            self.BORDER,
-            self.BORDER,
-            -self.BORDER,
-            -self.BORDER,
+        if self._selection.isEmpty():
+            return ""
+
+        rect = QRect(
+            self._selection
         )
 
-        left = abs(
-            pos.x() - rect.left()
-        ) <= self.HIT
-        right = abs(
-            pos.x() - rect.right()
-        ) <= self.HIT
-        top = abs(
-            pos.y() - rect.top()
-        ) <= self.HIT
-        bottom = abs(
-            pos.y() - rect.bottom()
-        ) <= self.HIT
+        near_left = abs(
+            point.x()
+            - rect.left()
+        ) <= self.HANDLE
+        near_right = abs(
+            point.x()
+            - rect.right()
+        ) <= self.HANDLE
+        near_top = abs(
+            point.y()
+            - rect.top()
+        ) <= self.HANDLE
+        near_bottom = abs(
+            point.y()
+            - rect.bottom()
+        ) <= self.HANDLE
 
-        if left and top:
+        if near_left and near_top:
             return "left-top"
-        if right and top:
+        if near_right and near_top:
             return "right-top"
-        if left and bottom:
+        if near_left and near_bottom:
             return "left-bottom"
-        if right and bottom:
+        if near_right and near_bottom:
             return "right-bottom"
-        if left:
+        if near_left:
             return "left"
-        if right:
+        if near_right:
             return "right"
-        if top:
+        if near_top:
             return "top"
-        if bottom:
+        if near_bottom:
             return "bottom"
+        if rect.contains(point):
+            return "move"
 
-        return "move"
+        return ""
 
     def _update_cursor(
         self,
-        pos: QPoint,
+        point: QPoint,
     ) -> None:
-        mode = self._hit_test(pos)
-
         mapping = {
             "left": Qt.CursorShape.SizeHorCursor,
             "right": Qt.CursorShape.SizeHorCursor,
@@ -564,69 +543,50 @@ class CaptureAreaOverlay(QWidget):
 
         self.setCursor(
             mapping.get(
-                mode,
-                Qt.CursorShape.ArrowCursor,
+                self._hit_test(point),
+                Qt.CursorShape.CrossCursor,
             )
         )
 
-    def _set_rect_from_edit(
-        self,
-        rect: QRect,
-    ) -> None:
-        rect = self._enforce_minimum(
-            rect.normalized()
-        )
-        rect = self._clamp_to_bounds(
-            rect
-        )
-
-        self._capture_rect = rect
-        self._apply_geometry()
-        self.rect_changed.emit(
-            QRect(rect)
-        )
-
-    def _enforce_minimum(
+    def _minimum(
         self,
         rect: QRect,
     ) -> QRect:
         rect = QRect(rect)
 
-        if rect.width() < self.MIN_WIDTH:
+        if rect.width() < self.MIN_W:
             rect.setWidth(
-                self.MIN_WIDTH
+                self.MIN_W
             )
 
-        if rect.height() < self.MIN_HEIGHT:
+        if rect.height() < self.MIN_H:
             rect.setHeight(
-                self.MIN_HEIGHT
+                self.MIN_H
             )
 
         return rect
 
-    def _clamp_to_bounds(
+    def _clamp(
         self,
         rect: QRect,
     ) -> QRect:
-        if self._bounds.isEmpty():
-            return rect
+        bounds = QRect(
+            0,
+            0,
+            self.width(),
+            self.height(),
+        )
 
-        bounds = QRect(self._bounds)
         rect = QRect(rect)
 
-        width = min(
-            rect.width(),
-            bounds.width(),
-        )
-        height = min(
-            rect.height(),
-            bounds.height(),
-        )
-        rect.setSize(
-            rect.size().boundedTo(
-                bounds.size()
+        if rect.width() > bounds.width():
+            rect.setWidth(
+                bounds.width()
             )
-        )
+        if rect.height() > bounds.height():
+            rect.setHeight(
+                bounds.height()
+            )
 
         if rect.left() < bounds.left():
             rect.moveLeft(
@@ -654,54 +614,55 @@ class CaptureAreaOverlay(QWidget):
             True,
         )
 
-        inner = self.rect().adjusted(
-            self.BORDER // 2,
-            self.BORDER // 2,
-            -(self.BORDER // 2) - 1,
-            -(self.BORDER // 2) - 1,
+        painter.fillRect(
+            self.rect(),
+            QColor(4, 14, 28, 155),
         )
 
-        if self._editing:
-            # Leve destaque sem esconder a tela que está sendo ajustada.
-            painter.fillRect(
-                inner,
-                QColor(255, 20, 60, 18),
+        if self._selection.isEmpty():
+            painter.setPen(
+                QColor("#FFFFFF")
             )
+            painter.setFont(
+                QFont(
+                    "Segoe UI",
+                    14,
+                    QFont.Weight.Bold,
+                )
+            )
+            painter.drawText(
+                self.rect(),
+                Qt.AlignmentFlag.AlignCenter,
+                "ARRASTE PARA CRIAR UMA NOVA ÁREA\n"
+                "Enter confirma • Esc cancela",
+            )
+            return
+
+        rect = QRect(
+            self._selection
+        )
+
+        painter.setCompositionMode(
+            QPainter.CompositionMode.CompositionMode_Clear
+        )
+        painter.fillRect(
+            rect,
+            Qt.GlobalColor.transparent,
+        )
+        painter.setCompositionMode(
+            QPainter.CompositionMode.CompositionMode_SourceOver
+        )
 
         painter.setPen(
             QPen(
                 QColor("#FF274B"),
-                self.BORDER,
+                4,
             )
         )
         painter.setBrush(
             Qt.BrushStyle.NoBrush
         )
-        painter.drawRect(inner)
-
-        badge_width = (
-            258
-            if self._editing
-            else 116
-        )
-        badge = QRect(
-            10,
-            10,
-            badge_width,
-            30,
-        )
-
-        painter.setPen(
-            Qt.PenStyle.NoPen
-        )
-        painter.setBrush(
-            QColor("#E71D43")
-        )
-        painter.drawRoundedRect(
-            badge,
-            7,
-            7,
-        )
+        painter.drawRect(rect)
 
         painter.setPen(
             QColor("#FFFFFF")
@@ -713,30 +674,30 @@ class CaptureAreaOverlay(QWidget):
                 QFont.Weight.Bold,
             )
         )
-
-        badge_text = (
-            "↔ ARRASTE • BORDAS REDIMENSIONAM • ENTER OK"
-            if self._editing
-            else "● ÁREA REC"
-        )
-
         painter.drawText(
-            badge,
-            Qt.AlignmentFlag.AlignCenter,
-            badge_text,
+            rect.adjusted(
+                12,
+                10,
+                -12,
+                -10,
+            ),
+            Qt.AlignmentFlag.AlignTop
+            | Qt.AlignmentFlag.AlignLeft,
+            f"{rect.width()}×{rect.height()}  "
+            "• arraste centro para mover "
+            "• bordas/cantos para redimensionar",
         )
 
-        if self._editing:
-            self._draw_handles(
-                painter,
-                inner,
+        painter.setBrush(
+            QColor("#FF274B")
+        )
+        painter.setPen(
+            QPen(
+                QColor("#FFFFFF"),
+                2,
             )
+        )
 
-    def _draw_handles(
-        self,
-        painter: QPainter,
-        rect: QRect,
-    ) -> None:
         points = [
             rect.topLeft(),
             rect.topRight(),
@@ -760,25 +721,13 @@ class CaptureAreaOverlay(QWidget):
             ),
         ]
 
-        painter.setPen(
-            QPen(
-                QColor("#FFFFFF"),
-                2,
-            )
-        )
-        painter.setBrush(
-            QColor("#FF274B")
-        )
-
-        size = 10
-
         for point in points:
             painter.drawRect(
                 QRect(
-                    point.x() - size // 2,
-                    point.y() - size // 2,
-                    size,
-                    size,
+                    point.x() - 5,
+                    point.y() - 5,
+                    10,
+                    10,
                 )
             )
 
@@ -835,27 +784,21 @@ class ScreenRecorderPage(QWidget):
         self._segment_started_at: float | None = None
         self._elapsed_before_segment = 0.0
         self._region: QRect | None = None
-        self._overlay: RegionSelectionOverlay | None = None
-        self._capture_overlay = CaptureAreaOverlay()
-        self._capture_overlay.rect_changed.connect(
-            self._region_live_changed
-        )
-        self._capture_overlay.edit_finished.connect(
-            self._region_edit_finished
-        )
-        self._capture_overlay.edit_cancelled.connect(
-            self._region_edit_cancelled
-        )
-        self._hidden_by_recorder = False
+        self._region_editor: RegionEditorOverlay | None = None
+        self._capture_overlay = CaptureAreaOutline()
+
         self._audio_loaded = False
+        self._audio_devices: dict[str, AudioDevice] = {}
+        self._audio_engine: WasapiSegmentRecorder | None = None
+        self._audio_segments: list[Path | None] = []
+        self._session_audio_device: AudioDevice | None = None
+
+        self._hidden_by_recorder = False
         self._module_enabled = False
         self._closing = False
 
-        self._preview_timer = QTimer(self)
-        self._preview_timer.setInterval(700)
-        self._preview_timer.timeout.connect(
-            self._update_preview
-        )
+        # Não existe mais pré-visualização contínua. Isso reduz CPU/GPU e evita
+        # o efeito de espelho infinito quando a Central captura a própria tela.
 
         self._status_timer = QTimer(self)
         self._status_timer.setInterval(250)
@@ -865,12 +808,24 @@ class ScreenRecorderPage(QWidget):
         self._status_timer.start()
 
         self._build_ui()
+
+        self.floating = FloatingRecorderWidget()
+        self.floating.record_requested.connect(
+            self.start_recording
+        )
+        self.floating.pause_requested.connect(
+            self.toggle_pause
+        )
+        self.floating.stop_requested.connect(
+            self.stop_recording
+        )
+        self.floating.central_requested.connect(
+            self._show_central
+        )
+        self.floating.hide()
+
         self._refresh_screens()
         self._refresh_recordings()
-        self.preview.clear()
-        self.preview.setText(
-            "Gravador de Tela desligado. Clique em LIGAR para ativar."
-        )
         self._apply_state(
             self.OFF,
             "Gravador de Tela desligado por padrão.",
@@ -981,44 +936,104 @@ class ScreenRecorderPage(QWidget):
         center = QHBoxLayout()
         center.setSpacing(12)
 
-        preview_card = QFrame()
-        preview_card.setObjectName("recCard")
-        preview_layout = QVBoxLayout(preview_card)
-        preview_layout.setContentsMargins(14, 14, 14, 14)
-        preview_layout.setSpacing(10)
+        capture_card = QFrame()
+        capture_card.setObjectName("recCard")
+        capture_l = QVBoxLayout(capture_card)
+        capture_l.setContentsMargins(16, 14, 16, 14)
+        capture_l.setSpacing(10)
 
-        ph = QHBoxLayout()
+        capture_title = QLabel("Área de captura")
+        capture_title.setObjectName("recSectionTitle")
+        capture_l.addWidget(capture_title)
 
-        preview_title = QLabel("Pré-visualização")
-        preview_title.setObjectName("recSectionTitle")
-        ph.addWidget(preview_title)
-
-        ph.addStretch()
-
-        self.region_badge = QLabel("Tela inteira")
+        self.region_badge = QLabel("● REC  Tela inteira")
         self.region_badge.setObjectName("recSmallBadge")
-        ph.addWidget(self.region_badge)
+        self.region_badge.setWordWrap(True)
+        capture_l.addWidget(self.region_badge)
 
-        preview_layout.addLayout(ph)
-
-        self.preview = QLabel("Preparando pré-visualização…")
-        self.preview.setObjectName("recPreview")
-        self.preview.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.preview.setMinimumHeight(390)
-        self.preview.setSizePolicy(
-            QSizePolicy.Policy.Expanding,
-            QSizePolicy.Policy.Expanding,
+        self.capture_details = QLabel(
+            "Monitor inteiro. A moldura vermelha mostra exatamente "
+            "o que será gravado."
         )
-        preview_layout.addWidget(self.preview, 1)
+        self.capture_details.setObjectName("recMuted")
+        self.capture_details.setWordWrap(True)
+        capture_l.addWidget(self.capture_details)
 
-        hint = QLabel(
-            "A prévia é apenas uma referência visual. "
-            "A gravação usa o FFmpeg incluído no portable."
+        capture_actions = QHBoxLayout()
+        capture_actions.setSpacing(8)
+
+        self.new_region_button = QPushButton(
+            "＋  Nova área"
         )
-        hint.setObjectName("recMuted")
-        preview_layout.addWidget(hint)
+        self.new_region_button.setObjectName(
+            "recSecondary"
+        )
+        self.new_region_button.clicked.connect(
+            self._choose_region
+        )
+        capture_actions.addWidget(
+            self.new_region_button
+        )
 
-        center.addWidget(preview_card, 2)
+        self.adjust_region = QPushButton(
+            "↔  Ajustar área"
+        )
+        self.adjust_region.setObjectName(
+            "recSecondary"
+        )
+        self.adjust_region.clicked.connect(
+            self._adjust_region
+        )
+        capture_actions.addWidget(
+            self.adjust_region
+        )
+
+        self.clear_region = QPushButton(
+            "×  Remover área"
+        )
+        self.clear_region.setObjectName(
+            "recSecondary"
+        )
+        self.clear_region.clicked.connect(
+            self._clear_region
+        )
+        capture_actions.addWidget(
+            self.clear_region
+        )
+
+        self.quick_rec = QPushButton(
+            "●  REC"
+        )
+        self.quick_rec.setObjectName(
+            "recQuickRec"
+        )
+        self.quick_rec.clicked.connect(
+            self._quick_record
+        )
+        capture_actions.addWidget(
+            self.quick_rec
+        )
+
+        capture_l.addLayout(
+            capture_actions
+        )
+
+        capture_help = QLabel(
+            "Você pode recriar a área quantas vezes quiser. "
+            "Ao ajustar, arraste o centro para mover e as bordas/cantos para redimensionar."
+        )
+        capture_help.setObjectName(
+            "recAudioStatus"
+        )
+        capture_help.setWordWrap(True)
+        capture_l.addWidget(
+            capture_help
+        )
+
+        center.addWidget(
+            capture_card,
+            1,
+        )
 
         config_card = QFrame()
         config_card.setObjectName("recCard")
@@ -1053,67 +1068,11 @@ class ScreenRecorderPage(QWidget):
         self.mode_combo.currentTextChanged.connect(
             self._mode_changed
         )
-
-        mode_row = QHBoxLayout()
-        mode_row.setSpacing(8)
-        mode_row.addWidget(self.mode_combo, 1)
-
-        self.select_region = QPushButton(
-            "Selecionar área"
-        )
-        self.select_region.setObjectName(
-            "recSecondary"
-        )
-        self.select_region.clicked.connect(
-            self._choose_region
-        )
-        mode_row.addWidget(self.select_region)
-
-        self.adjust_region = QPushButton(
-            "Ajustar área"
-        )
-        self.adjust_region.setObjectName(
-            "recSecondary"
-        )
-        self.adjust_region.setEnabled(False)
-        self.adjust_region.clicked.connect(
-            self._toggle_region_edit
-        )
-        mode_row.addWidget(
-            self.adjust_region
-        )
-
-        self.quick_rec = QPushButton(
-            "●  REC"
-        )
-        self.quick_rec.setObjectName(
-            "recQuickRec"
-        )
-        self.quick_rec.setFixedWidth(92)
-        self.quick_rec.clicked.connect(
-            self._quick_record
-        )
-        mode_row.addWidget(self.quick_rec)
-
-        mode_wrap = QWidget()
-        mode_wrap.setLayout(mode_row)
         config_l.addWidget(
             self._field(
-                "Área de captura",
-                mode_wrap,
+                "Modo de captura",
+                self.mode_combo,
             )
-        )
-
-        self.region_help = QLabel(
-            "Área personalizada: use “Selecionar área” uma vez. "
-            "Depois use “Ajustar área” para mover e redimensionar a moldura vermelha."
-        )
-        self.region_help.setObjectName(
-            "recAudioStatus"
-        )
-        self.region_help.setWordWrap(True)
-        config_l.addWidget(
-            self.region_help
         )
 
         self.fps_combo = QComboBox()
@@ -1153,7 +1112,7 @@ class ScreenRecorderPage(QWidget):
 
         self.audio_combo = QComboBox()
         self.audio_combo.setObjectName("recCombo")
-        self.audio_combo.addItem("Sem áudio")
+        self.audio_combo.addItem("Sem áudio", "none")
         audio_row.addWidget(self.audio_combo, 1)
 
         self.refresh_audio = QPushButton("↻")
@@ -1176,7 +1135,7 @@ class ScreenRecorderPage(QWidget):
         )
 
         self.audio_status = QLabel(
-            "Procurando dispositivos de áudio do Windows…"
+            "Ao ligar o módulo, a Central procura áudio do sistema via WASAPI."
         )
         self.audio_status.setObjectName(
             "recAudioStatus"
@@ -1682,14 +1641,9 @@ class ScreenRecorderPage(QWidget):
         self._refresh_screens()
         self._refresh_recordings()
 
-        # Abrir a aba não liga o módulo. O usuário precisa clicar em LIGAR.
         if not self._module_enabled:
-            self._preview_timer.stop()
             self._capture_overlay.hide()
-            self.preview.clear()
-            self.preview.setText(
-                "Gravador de Tela desligado. Clique em LIGAR para ativar."
-            )
+            self.floating.hide()
             self._apply_state(
                 self.OFF,
                 "Gravador de Tela desligado por padrão.",
@@ -1699,29 +1653,26 @@ class ScreenRecorderPage(QWidget):
         if not self._audio_loaded:
             self._load_audio_devices()
 
-        if not self._preview_timer.isActive():
-            self._preview_timer.start()
-
-        self._update_preview()
+        self._update_capture_labels()
         self._update_capture_overlay()
+
+        if not self.floating.isVisible():
+            self.floating.show()
 
     def showEvent(self, event) -> None:
         super().showEvent(event)
 
-        if (
-            self._module_enabled
-            and not self._preview_timer.isActive()
-        ):
-            self._preview_timer.start()
-
-        self._update_capture_overlay()
+        if self._module_enabled:
+            self._update_capture_overlay()
 
     def hideEvent(self, event) -> None:
         super().hideEvent(event)
-        self._preview_timer.stop()
-        # A borda vermelha continua visível enquanto o módulo estiver ligado,
-        # mesmo se o usuário navegar para outra aba.
-        self._update_capture_overlay()
+
+        # A moldura e o widget flutuante continuam disponíveis mesmo quando
+        # o usuário navega para outra aba.
+        if self._module_enabled:
+            self._update_capture_overlay()
+
 
     def refresh(self, _state=None) -> None:
         # Compatível com o restante das páginas do Central.
@@ -1766,72 +1717,253 @@ class ScreenRecorderPage(QWidget):
         index = min(max(index, 0), len(screens) - 1)
         return screens[index]
 
-    def _screen_changed(self, _index: int) -> None:
-        self._finish_region_edit()
-        self._region = None
+    # ------------------------------------------------------------------
+    # REGION
+    # ------------------------------------------------------------------
+
+    def _choose_region(self) -> None:
+        """Cria uma NOVA área, mesmo que já exista outra."""
+        if self.is_active or not self._module_enabled:
+            return
+
+        self._close_region_editor()
+
+        screen = self._selected_screen()
+
+        if screen is None:
+            return
+
+        self.mode_combo.setCurrentText(
+            "Área personalizada"
+        )
+
+        # Esconde a moldura antiga enquanto o usuário cria a nova.
+        self._capture_overlay.hide()
+
+        editor = RegionEditorOverlay(
+            screen,
+            None,
+        )
+        editor.accepted.connect(
+            self._region_accepted
+        )
+        editor.cancelled.connect(
+            self._region_editor_cancelled
+        )
+        editor.cleared.connect(
+            self._clear_region
+        )
+
+        self._region_editor = editor
+        editor.show()
+
+    def _adjust_region(self) -> None:
+        if (
+            self.is_active
+            or not self._module_enabled
+            or self._region is None
+        ):
+            return
+
+        self._close_region_editor()
+
+        screen = self._selected_screen()
+
+        if screen is None:
+            return
+
+        self._capture_overlay.hide()
+
+        editor = RegionEditorOverlay(
+            screen,
+            self._region,
+        )
+        editor.accepted.connect(
+            self._region_accepted
+        )
+        editor.cancelled.connect(
+            self._region_editor_cancelled
+        )
+        editor.cleared.connect(
+            self._clear_region
+        )
+
+        self._region_editor = editor
+        editor.show()
+
+    def _region_accepted(
+        self,
+        rect: QRect,
+    ) -> None:
+        self._region_editor = None
+        self._region = QRect(
+            rect.normalized()
+        )
+        self.mode_combo.blockSignals(True)
+        self.mode_combo.setCurrentText(
+            "Área personalizada"
+        )
+        self.mode_combo.blockSignals(False)
+
         self._update_capture_labels()
         self._update_capture_overlay()
-        self._update_preview()
 
-    def _mode_changed(self, text: str) -> None:
-        self._finish_region_edit()
+        self.status_text.setText(
+            "Área definida: "
+            f"X {self._region.x()} • "
+            f"Y {self._region.y()} • "
+            f"{self._region.width()}×{self._region.height()}"
+        )
 
+    def _region_editor_cancelled(self) -> None:
+        self._region_editor = None
+        self._update_capture_overlay()
+        self.status_text.setText(
+            "Ajuste cancelado."
+        )
+
+    def _close_region_editor(self) -> None:
+        editor = self._region_editor
+        self._region_editor = None
+
+        if editor is not None:
+            try:
+                editor.close()
+            except Exception:
+                pass
+
+    def _clear_region(self) -> None:
+        if self.is_active:
+            return
+
+        self._close_region_editor()
+        self._region = None
+
+        self.mode_combo.blockSignals(True)
+        self.mode_combo.setCurrentText(
+            "Tela inteira"
+        )
+        self.mode_combo.blockSignals(False)
+
+        self._update_capture_labels()
+        self._update_capture_overlay()
+
+        self.status_text.setText(
+            "Área personalizada removida. "
+            "A captura voltou para a tela inteira."
+        )
+
+    def _mode_changed(
+        self,
+        text: str,
+    ) -> None:
         if text == "Tela inteira":
             self._region = None
 
+        elif (
+            text == "Área personalizada"
+            and self._region is None
+            and self._module_enabled
+            and not self.is_active
+        ):
+            QTimer.singleShot(
+                0,
+                self._choose_region,
+            )
+            return
+
         self._update_capture_labels()
         self._update_capture_overlay()
-        self._update_preview()
+
+    def _screen_changed(
+        self,
+        _index: int,
+    ) -> None:
+        if self.is_active:
+            return
+
+        self._close_region_editor()
+        self._region = None
+
+        self.mode_combo.blockSignals(True)
+        self.mode_combo.setCurrentText(
+            "Tela inteira"
+        )
+        self.mode_combo.blockSignals(False)
+
+        self._update_capture_labels()
+        self._update_capture_overlay()
 
     def _update_capture_labels(self) -> None:
-        personalized = (
+        custom = (
             self.mode_combo.currentText()
             == "Área personalizada"
             and self._region is not None
         )
 
-        if personalized:
-            text = (
-                f"{self._region.width()}×"
-                f"{self._region.height()}"
-            )
-            self.region_badge.setText(
-                f"● REC  {text}"
-            )
+        if custom:
+            rect = self._region
             self.source_value.setText(
                 "Área personalizada"
             )
-        else:
             self.region_badge.setText(
-                "● REC  Tela inteira"
+                "● REC  "
+                f"{rect.width()}×{rect.height()} "
+                f"• X {rect.x()} • Y {rect.y()}"
+            )
+            self.capture_details.setText(
+                "Área personalizada ativa. "
+                "Use Nova área para refazer do zero, Ajustar área para mover/redimensionar "
+                "ou Remover área para voltar à tela inteira."
+            )
+        else:
+            screen = self._selected_screen()
+            geometry = (
+                screen.geometry()
+                if screen is not None
+                else QRect()
             )
             self.source_value.setText(
                 "Tela inteira"
             )
-
-        self.adjust_region.setEnabled(
-            self._module_enabled
-            and personalized
-            and not self.is_active
-        )
-
-        self.adjust_region.setText(
-            "Concluir ajuste"
-            if self._capture_overlay.editing
-            else "Ajustar área"
-        )
+            self.region_badge.setText(
+                "● REC  Tela inteira"
+            )
+            self.capture_details.setText(
+                "Monitor inteiro: "
+                f"{geometry.width()}×{geometry.height()}."
+            )
 
         self.region_badge.setStyleSheet(
             "background:#FFE7EC;"
             "color:#D8173C;"
             "border:1px solid #F3AABC;"
             "border-radius:7px;"
-            "padding:5px 9px;"
-            "font-size:9px;"
+            "padding:7px 10px;"
+            "font-size:10px;"
             "font-weight:900;"
         )
 
-    def _current_capture_rect(self) -> QRect | None:
+        idle = (
+            self._module_enabled
+            and not self.is_active
+        )
+
+        self.new_region_button.setEnabled(
+            idle
+        )
+        self.adjust_region.setEnabled(
+            idle
+            and custom
+        )
+        self.clear_region.setEnabled(
+            idle
+            and custom
+        )
+
+    def _current_capture_rect(
+        self,
+    ) -> QRect | None:
         if not self._module_enabled:
             return None
 
@@ -1858,195 +1990,8 @@ class ScreenRecorderPage(QWidget):
             self._capture_overlay.hide()
             return
 
-        rect = self._current_capture_rect()
-
-        if rect is None:
-            self._capture_overlay.hide()
-            return
-
-        screen = self._selected_screen()
-        bounds = (
-            QRect(screen.geometry())
-            if screen is not None
-            else QRect()
-        )
-
         self._capture_overlay.set_capture_rect(
-            rect,
-            bounds,
-        )
-
-    def _update_preview(self) -> None:
-        if not self.isVisible():
-            return
-
-        screen = self._selected_screen()
-
-        if screen is None:
-            self.preview.setText(
-                "Nenhum monitor disponível."
-            )
-            return
-
-        pixmap = screen.grabWindow(0)
-
-        if pixmap.isNull():
-            self.preview.setText(
-                "Não foi possível gerar a prévia."
-            )
-            return
-
-        if (
-            self.mode_combo.currentText()
-            == "Área personalizada"
-            and self._region is not None
-        ):
-            screen_geo = screen.geometry()
-            local = QRect(
-                self._region.x() - screen_geo.x(),
-                self._region.y() - screen_geo.y(),
-                self._region.width(),
-                self._region.height(),
-            )
-            pixmap = pixmap.copy(local)
-
-        size = self.preview.size()
-
-        if size.width() <= 1 or size.height() <= 1:
-            return
-
-        scaled = pixmap.scaled(
-            size,
-            Qt.AspectRatioMode.KeepAspectRatio,
-            Qt.TransformationMode.SmoothTransformation,
-        )
-        self.preview.setPixmap(scaled)
-
-    # ------------------------------------------------------------------
-    # REGION
-    # ------------------------------------------------------------------
-
-    def _choose_region(self) -> None:
-        if self.is_active:
-            return
-
-        self._finish_region_edit()
-
-        screen = self._selected_screen()
-
-        if screen is None:
-            return
-
-        self.mode_combo.setCurrentText(
-            "Área personalizada"
-        )
-
-        self._overlay = RegionSelectionOverlay(
-            screen
-        )
-        self._overlay.selected.connect(
-            self._region_selected
-        )
-        self._overlay.cancelled.connect(
-            self._region_cancelled
-        )
-        self._overlay.show()
-
-    def _region_selected(
-        self,
-        rect: QRect,
-    ) -> None:
-        self._region = rect.normalized()
-        self._overlay = None
-        self._update_capture_labels()
-        self._update_capture_overlay()
-        self._update_preview()
-
-        # Depois da primeira seleção já entra no modo de ajuste,
-        # para o usuário poder mover/redimensionar imediatamente.
-        self._start_region_edit()
-
-    def _region_cancelled(self) -> None:
-        self._overlay = None
-        self._update_capture_overlay()
-
-    def _toggle_region_edit(self) -> None:
-        if self._capture_overlay.editing:
-            self._finish_region_edit()
-        else:
-            self._start_region_edit()
-
-    def _start_region_edit(self) -> None:
-        if (
-            self.is_active
-            or not self._module_enabled
-            or self.mode_combo.currentText()
-            != "Área personalizada"
-            or self._region is None
-        ):
-            return
-
-        self._update_capture_overlay()
-        self._capture_overlay.set_editing(
-            True
-        )
-        self.adjust_region.setText(
-            "Concluir ajuste"
-        )
-        self.status_text.setText(
-            "Ajuste ativo: arraste o centro para mover; "
-            "arraste bordas/cantos para redimensionar; "
-            "Enter confirma e Esc cancela."
-        )
-
-    def _finish_region_edit(self) -> None:
-        if self._capture_overlay.editing:
-            self._capture_overlay.finish_edit()
-
-    def _region_live_changed(
-        self,
-        rect: QRect,
-    ) -> None:
-        if rect.isEmpty():
-            return
-
-        self._region = rect.normalized()
-        self._update_capture_labels()
-        self._update_preview()
-
-        self.status_text.setText(
-            "Área: "
-            f"X {self._region.x()} • "
-            f"Y {self._region.y()} • "
-            f"{self._region.width()}×{self._region.height()}"
-        )
-
-    def _region_edit_finished(
-        self,
-        rect: QRect,
-    ) -> None:
-        if not rect.isEmpty():
-            self._region = rect.normalized()
-
-        self._update_capture_labels()
-        self._update_capture_overlay()
-        self._update_preview()
-        self.status_text.setText(
-            "Área de captura ajustada."
-        )
-
-    def _region_edit_cancelled(
-        self,
-        rect: QRect,
-    ) -> None:
-        if not rect.isEmpty():
-            self._region = rect.normalized()
-
-        self._update_capture_labels()
-        self._update_capture_overlay()
-        self._update_preview()
-        self.status_text.setText(
-            "Ajuste cancelado; área anterior restaurada."
+            self._current_capture_rect()
         )
 
     # ------------------------------------------------------------------
@@ -2054,244 +1999,171 @@ class ScreenRecorderPage(QWidget):
     # ------------------------------------------------------------------
 
     def _load_audio_devices(self) -> None:
-        """Lê dispositivos de áudio do DirectShow de forma tolerante.
-
-        A V17.1 deixava "Sem áudio" como padrão e dependia de uma regex
-        específica. Agora:
-        - usamos a codificação nativa do Windows;
-        - reconhecemos a seção "DirectShow audio devices";
-        - aceitamos também o formato "(audio)";
-        - selecionamos automaticamente Stereo Mix/Mixagem estéreo quando existe;
-        - se não houver loopback, selecionamos o primeiro microfone disponível.
-        """
+        """Carrega áudio do sistema via WASAPI loopback e microfones."""
         previous = self.audio_combo.currentData()
 
         self.audio_combo.blockSignals(True)
         self.audio_combo.clear()
         self.audio_combo.addItem(
             "Sem áudio",
-            None,
+            "none",
         )
-        self.audio_combo.blockSignals(False)
+        self._audio_devices = {}
 
-        self._audio_loaded = True
-
-        if not self.ffmpeg.is_file():
-            self.audio_status.setText(
-                "FFmpeg não encontrado; não foi possível detectar áudio."
-            )
-            self.audio_value.setText(
-                "Sem áudio"
-            )
-            return
+        devices, diagnostic = (
+            list_wasapi_devices()
+        )
 
         try:
-            result = subprocess.run(
-                [
-                    str(self.ffmpeg),
-                    "-hide_banner",
-                    "-list_devices",
-                    "true",
-                    "-f",
-                    "dshow",
-                    "-i",
-                    "dummy",
-                ],
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-                encoding=(
-                    "mbcs"
-                    if sys.platform.startswith("win")
-                    else locale.getpreferredencoding(False)
-                ),
-                errors="replace",
-                timeout=15,
-                creationflags=CREATE_NO_WINDOW,
-            )
-            output = (
-                result.stdout
-                + "\n"
-                + result.stderr
-            )
-        except Exception as exc:
-            self.audio_status.setText(
-                f"Falha ao consultar áudio do Windows: {exc}"
-            )
-            self._write_audio_diagnostic(
-                f"ERRO: {exc}"
-            )
-            return
-
-        self._write_audio_diagnostic(
-            output
-        )
-
-        devices: list[str] = []
-        in_audio_section = False
-
-        for raw_line in output.splitlines():
-            line = raw_line.strip()
-            lower = line.casefold()
-
-            if (
-                "directshow audio devices" in lower
-                or "audio devices" in lower
-            ):
-                in_audio_section = True
-                continue
-
-            if (
-                "directshow video devices" in lower
-                or "video devices" in lower
-            ):
-                in_audio_section = False
-                continue
-
-            if "alternative name" in lower:
-                continue
-
-            match = re.search(
-                r'"([^"]+)"\s+\(audio\)',
-                line,
-                flags=re.IGNORECASE,
-            )
-
-            if match is None and in_audio_section:
-                match = re.search(
-                    r'"([^"]+)"',
-                    line,
-                )
-
-            if match is None:
-                continue
-
-            name = match.group(1).strip()
-
-            if (
-                name
-                and name not in devices
-                and not name.startswith("@device_")
-            ):
-                devices.append(name)
-
-        preferred_index = -1
-        first_device_index = -1
-
-        for name in devices:
-            folded = name.casefold()
-            system_audio = any(
-                token in folded
-                for token in (
-                    "stereo mix",
-                    "mixagem estéreo",
-                    "mixagem estereo",
-                    "what u hear",
-                    "wave out",
-                    "loopback",
-                )
-            )
-
-            label = name
-
-            if system_audio:
-                label += "  •  ÁUDIO DO SISTEMA"
-
-            self.audio_combo.addItem(
-                label,
-                name,
-            )
-
-            combo_index = (
-                self.audio_combo.count() - 1
-            )
-
-            if first_device_index < 0:
-                first_device_index = combo_index
-
-            if system_audio and preferred_index < 0:
-                preferred_index = combo_index
-
-        if previous:
-            old_index = self.audio_combo.findData(
-                previous
-            )
-        else:
-            old_index = -1
-
-        if old_index >= 1:
-            selected_index = old_index
-        elif preferred_index >= 1:
-            selected_index = preferred_index
-        elif first_device_index >= 1:
-            selected_index = first_device_index
-        else:
-            selected_index = 0
-
-        self.audio_combo.setCurrentIndex(
-            selected_index
-        )
-
-        if not devices:
-            self.audio_status.setText(
-                "Nenhum dispositivo DirectShow foi encontrado. "
-                "A gravação continuará sem áudio. "
-                "Veja logs/screen_recorder_audio_devices.log."
-            )
-        elif preferred_index >= 1:
-            self.audio_status.setText(
-                "Áudio do sistema detectado e selecionado automaticamente."
-            )
-        else:
-            self.audio_status.setText(
-                "Dispositivo de áudio detectado. "
-                "O Windows não expôs Stereo Mix/Mixagem estéreo; "
-                "o dispositivo selecionado pode ser somente o microfone."
-            )
-
-        self._audio_selection_changed(
-            self.audio_combo.currentIndex()
-        )
-
-    def _write_audio_diagnostic(
-        self,
-        content: str,
-    ) -> None:
-        try:
-            path = (
+            (
                 self.logs_dir
                 / "screen_recorder_audio_devices.log"
-            )
-            path.write_text(
-                content,
+            ).write_text(
+                diagnostic,
                 encoding="utf-8",
                 errors="ignore",
             )
         except Exception:
             pass
 
+        system_index = -1
+        first_mic_index = -1
+
+        for device in devices:
+            self._audio_devices[
+                device.key
+            ] = device
+
+            if device.kind == "system":
+                label = (
+                    "Áudio do sistema • WASAPI "
+                    f"({device.name})"
+                )
+            else:
+                label = (
+                    "Microfone • "
+                    f"{device.name}"
+                )
+
+            self.audio_combo.addItem(
+                label,
+                device.key,
+            )
+
+            index = (
+                self.audio_combo.count()
+                - 1
+            )
+
+            if (
+                device.kind == "system"
+                and system_index < 0
+            ):
+                system_index = index
+
+            if (
+                device.kind == "microphone"
+                and first_mic_index < 0
+            ):
+                first_mic_index = index
+
+        self.audio_combo.blockSignals(False)
+        self._audio_loaded = True
+
+        old_index = (
+            self.audio_combo.findData(
+                previous
+            )
+            if previous
+            else -1
+        )
+
+        if old_index >= 0:
+            selected = old_index
+        elif system_index >= 0:
+            # Áudio do sistema é o padrão quando o módulo está ligado.
+            selected = system_index
+        elif first_mic_index >= 0:
+            selected = first_mic_index
+        else:
+            selected = 0
+
+        self.audio_combo.setCurrentIndex(
+            selected
+        )
+
+        if not backend_available():
+            self.audio_status.setText(
+                "PyAudioWPatch não está disponível. "
+                "O portable precisa ser recompilado com a V18."
+            )
+        elif system_index >= 0:
+            self.audio_status.setText(
+                "Áudio do sistema detectado via WASAPI loopback. "
+                "Não depende de Stereo Mix."
+            )
+        elif first_mic_index >= 0:
+            self.audio_status.setText(
+                "O Windows não expôs loopback de saída, "
+                "mas há microfone disponível."
+            )
+        else:
+            self.audio_status.setText(
+                "Nenhum dispositivo WASAPI foi encontrado. "
+                "Veja logs/screen_recorder_audio_devices.log."
+            )
+
+        self._audio_selection_changed(
+            self.audio_combo.currentIndex()
+        )
+
+    def _selected_audio_device(
+        self,
+    ) -> AudioDevice | None:
+        key = self.audio_combo.currentData()
+
+        if not key or key == "none":
+            return None
+
+        return self._audio_devices.get(
+            str(key)
+        )
+
     def _audio_selection_changed(
         self,
         _index: int,
     ) -> None:
-        if self.audio_combo.currentIndex() <= 0:
+        device = self._selected_audio_device()
+
+        if device is None:
             self.audio_value.setText(
                 "Sem áudio"
             )
             return
 
-        text = self.audio_combo.currentText()
         self.audio_value.setText(
-            text.replace(
-                "  •  ÁUDIO DO SISTEMA",
-                "",
-            )
+            "Sistema"
+            if device.kind == "system"
+            else "Microfone"
         )
-
 
     # ------------------------------------------------------------------
     # POWER / QUICK REC
     # ------------------------------------------------------------------
+
+    def _quick_record(self) -> None:
+        if not self._module_enabled:
+            return
+
+        if self._state in {
+            self.RECORDING,
+            self.PAUSED,
+            self.STARTING,
+        }:
+            self.stop_recording()
+            return
+
+        self.start_recording()
 
     def _quick_record(self) -> None:
         if not self._module_enabled:
@@ -2325,16 +2197,25 @@ class ScreenRecorderPage(QWidget):
                 QMessageBox.StandardButton.No,
             )
 
-            if answer != QMessageBox.StandardButton.Yes:
-                self.power_button.blockSignals(True)
-                self.power_button.setChecked(True)
-                self.power_button.blockSignals(False)
+            if (
+                answer
+                != QMessageBox.StandardButton.Yes
+            ):
+                self.power_button.blockSignals(
+                    True
+                )
+                self.power_button.setChecked(
+                    True
+                )
+                self.power_button.blockSignals(
+                    False
+                )
                 return
 
         self._module_enabled = enabled
 
         if not enabled:
-            self._finish_region_edit()
+            self._close_region_editor()
 
             if self._state in {
                 self.RECORDING,
@@ -2343,12 +2224,9 @@ class ScreenRecorderPage(QWidget):
             }:
                 self.stop_recording()
 
-            self._preview_timer.stop()
             self._capture_overlay.hide()
-            self.preview.clear()
-            self.preview.setText(
-                "Gravador de Tela desligado."
-            )
+            self.floating.hide()
+
             self.power_button.setText(
                 "⏻  LIGAR"
             )
@@ -2362,12 +2240,7 @@ class ScreenRecorderPage(QWidget):
             "⏻  DESLIGAR"
         )
         self._refresh_screens()
-
-        if not self._audio_loaded:
-            self._load_audio_devices()
-
-        if not self._preview_timer.isActive():
-            self._preview_timer.start()
+        self._load_audio_devices()
 
         self._apply_state(
             self.IDLE,
@@ -2375,7 +2248,19 @@ class ScreenRecorderPage(QWidget):
         )
         self._update_capture_labels()
         self._update_capture_overlay()
-        self._update_preview()
+
+        self.floating.show()
+        self.floating.raise_()
+
+    def _show_central(self) -> None:
+        window = self.window()
+
+        if window is None:
+            return
+
+        window.show()
+        window.raise_()
+        window.activateWindow()
 
     # ------------------------------------------------------------------
     # OUTPUT
@@ -2474,7 +2359,7 @@ class ScreenRecorderPage(QWidget):
     # ------------------------------------------------------------------
 
     def start_recording(self) -> None:
-        self._finish_region_edit()
+        self._close_region_editor()
 
         if not self._module_enabled:
             QMessageBox.information(
@@ -2581,6 +2466,10 @@ class ScreenRecorderPage(QWidget):
             / f"Gravacao_Tela_{stamp}.mp4"
         )
         self._segments = []
+        self._audio_segments = []
+        self._session_audio_device = (
+            self._selected_audio_device()
+        )
         self._elapsed_before_segment = 0.0
 
         if not self._start_segment():
@@ -2661,16 +2550,45 @@ class ScreenRecorderPage(QWidget):
         if self._session_dir is None:
             return False
 
-        segment_number = len(self._segments) + 1
+        segment_number = len(
+            self._segments
+        ) + 1
+
         segment = (
             self._session_dir
             / f"segment_{segment_number:03d}.mp4"
+        )
+        audio_path = (
+            self._session_dir
+            / f"audio_{segment_number:03d}.wav"
         )
 
         rect = self._capture_rect()
         fps = self._fps()
         crf = self._crf()
-        audio = self._audio_device()
+
+        # Áudio via WASAPI loopback/microfone em arquivo WAV paralelo.
+        self._audio_engine = None
+
+        if self._session_audio_device is not None:
+            try:
+                recorder = (
+                    WasapiSegmentRecorder(
+                        self._session_audio_device,
+                        audio_path,
+                    )
+                )
+                recorder.start()
+                self._audio_engine = recorder
+            except Exception as exc:
+                self.audio_status.setText(
+                    "Falha ao iniciar áudio WASAPI: "
+                    f"{exc}"
+                )
+                self.status_text.setText(
+                    "A gravação não iniciou porque o áudio selecionado falhou."
+                )
+                return False
 
         command = [
             str(self.ffmpeg),
@@ -2685,7 +2603,9 @@ class ScreenRecorderPage(QWidget):
             "-framerate",
             str(fps),
             "-draw_mouse",
-            "1" if self.draw_mouse.isChecked() else "0",
+            "1"
+            if self.draw_mouse.isChecked()
+            else "0",
             "-offset_x",
             str(rect.x()),
             "-offset_y",
@@ -2694,30 +2614,8 @@ class ScreenRecorderPage(QWidget):
             f"{rect.width()}x{rect.height()}",
             "-i",
             "desktop",
-        ]
-
-        if audio:
-            command += [
-                "-thread_queue_size",
-                "1024",
-                "-f",
-                "dshow",
-                "-i",
-                f"audio={audio}",
-            ]
-
-        command += [
             "-map",
             "0:v:0",
-        ]
-
-        if audio:
-            command += [
-                "-map",
-                "1:a:0",
-            ]
-
-        command += [
             "-c:v",
             "libx264",
             "-preset",
@@ -2728,17 +2626,6 @@ class ScreenRecorderPage(QWidget):
             "yuv420p",
             "-r",
             str(fps),
-        ]
-
-        if audio:
-            command += [
-                "-c:a",
-                "aac",
-                "-b:a",
-                "160k",
-            ]
-
-        command += [
             "-movflags",
             "+faststart",
             str(segment),
@@ -2775,30 +2662,60 @@ class ScreenRecorderPage(QWidget):
                 stderr=self._log_handle,
                 creationflags=CREATE_NO_WINDOW,
             )
+
         except Exception as exc:
+            self._stop_audio_engine()
             self._close_log()
             self.status_text.setText(
                 f"Falha ao iniciar: {exc}"
             )
             return False
 
-        # Dá um instante para o FFmpeg acusar erro imediato.
         time.sleep(0.18)
 
         if self._process.poll() is not None:
+            self._stop_audio_engine()
             self._close_log()
             return False
 
-        self._segments.append(segment)
-        self._segment_started_at = time.monotonic()
-
-        self.audio_value.setText(
-            "Sem áudio"
-            if not audio
-            else self.audio_combo.currentText()
+        self._segments.append(
+            segment
+        )
+        self._audio_segments.append(
+            audio_path
+            if self._session_audio_device is not None
+            else None
+        )
+        self._segment_started_at = (
+            time.monotonic()
         )
 
+        if self._session_audio_device is None:
+            self.audio_value.setText(
+                "Sem áudio"
+            )
+        else:
+            self.audio_value.setText(
+                "Sistema"
+                if (
+                    self._session_audio_device.kind
+                    == "system"
+                )
+                else "Microfone"
+            )
+
         return True
+
+    def _stop_audio_engine(self) -> None:
+        recorder = self._audio_engine
+        self._audio_engine = None
+
+        if recorder is not None:
+            try:
+                recorder.stop()
+            except Exception:
+                pass
+
 
     def toggle_pause(self) -> None:
         if self._state == self.RECORDING:
@@ -2899,44 +2816,63 @@ class ScreenRecorderPage(QWidget):
         process = self._process
         self._process = None
 
-        if process is None:
-            self._close_log()
-            return
-
-        if process.poll() is None:
+        if process is not None and process.poll() is None:
             try:
                 if process.stdin is not None:
-                    process.stdin.write(b"q\n")
+                    process.stdin.write(
+                        b"q\n"
+                    )
                     process.stdin.flush()
             except Exception:
                 pass
 
             try:
-                process.wait(timeout=12)
+                process.wait(
+                    timeout=12
+                )
             except subprocess.TimeoutExpired:
                 try:
                     process.terminate()
-                    process.wait(timeout=4)
+                    process.wait(
+                        timeout=4
+                    )
                 except Exception:
                     try:
                         process.kill()
                     except Exception:
                         pass
 
+        self._stop_audio_engine()
         self._close_log()
 
-    def _finalize_session(self) -> bool:
-        valid_segments = [
-            path
-            for path in self._segments
-            if path.is_file()
-            and path.stat().st_size > 1024
-        ]
 
-        if (
-            not valid_segments
-            or self._final_path is None
+    def _finalize_session(self) -> bool:
+        if self._final_path is None:
+            return False
+
+        records: list[
+            tuple[Path, Path | None]
+        ] = []
+
+        for index, video in enumerate(
+            self._segments
         ):
+            if (
+                not video.is_file()
+                or video.stat().st_size <= 1024
+            ):
+                continue
+
+            audio = (
+                self._audio_segments[index]
+                if index < len(self._audio_segments)
+                else None
+            )
+            records.append(
+                (video, audio)
+            )
+
+        if not records:
             return False
 
         try:
@@ -2945,13 +2881,41 @@ class ScreenRecorderPage(QWidget):
         except Exception:
             pass
 
-        if len(valid_segments) == 1:
+        prepared: list[Path] = []
+
+        for index, (
+            video,
+            audio,
+        ) in enumerate(records, start=1):
+            if self._session_audio_device is None:
+                prepared.append(video)
+                continue
+
+            muxed = (
+                self._session_dir
+                / f"muxed_{index:03d}.mp4"
+            )
+
+            if not self._mux_audio_segment(
+                video,
+                audio,
+                muxed,
+            ):
+                return False
+
+            prepared.append(muxed)
+
+        if len(prepared) == 1:
             try:
                 shutil.move(
-                    str(valid_segments[0]),
+                    str(prepared[0]),
                     str(self._final_path),
                 )
-                return self._final_path.is_file()
+                return (
+                    self._final_path.is_file()
+                    and self._final_path.stat().st_size
+                    > 1024
+                )
             except Exception:
                 return False
 
@@ -2965,7 +2929,7 @@ class ScreenRecorderPage(QWidget):
 
         lines = []
 
-        for path in valid_segments:
+        for path in prepared:
             safe = str(
                 path.resolve()
             ).replace(
@@ -3000,11 +2964,12 @@ class ScreenRecorderPage(QWidget):
             str(self._final_path),
         ]
 
-        if self._run_finalize_command(copy_cmd):
+        if self._run_finalize_command(
+            copy_cmd
+        ):
             return True
 
-        # Fallback: se os segmentos diferirem em algum detalhe,
-        # recodifica a junção.
+        # Fallback recodificando caso algum detalhe entre segmentos varie.
         fallback = [
             str(self.ffmpeg),
             "-y",
@@ -3025,10 +2990,17 @@ class ScreenRecorderPage(QWidget):
             str(self._crf()),
             "-pix_fmt",
             "yuv420p",
-            "-c:a",
-            "aac",
-            "-b:a",
-            "160k",
+        ]
+
+        if self._session_audio_device is not None:
+            fallback += [
+                "-c:a",
+                "aac",
+                "-b:a",
+                "192k",
+            ]
+
+        fallback += [
             "-movflags",
             "+faststart",
             str(self._final_path),
@@ -3038,9 +3010,99 @@ class ScreenRecorderPage(QWidget):
             fallback
         )
 
+    def _mux_audio_segment(
+        self,
+        video: Path,
+        audio: Path | None,
+        output: Path,
+    ) -> bool:
+        device = self._session_audio_device
+
+        if device is None:
+            return False
+
+        has_audio = (
+            audio is not None
+            and audio.is_file()
+            and audio.stat().st_size > 64
+        )
+
+        if has_audio:
+            command = [
+                str(self.ffmpeg),
+                "-y",
+                "-hide_banner",
+                "-loglevel",
+                "warning",
+                "-i",
+                str(video),
+                "-i",
+                str(audio),
+                "-map",
+                "0:v:0",
+                "-map",
+                "1:a:0",
+                "-c:v",
+                "copy",
+                "-c:a",
+                "aac",
+                "-b:a",
+                "192k",
+                "-shortest",
+                "-movflags",
+                "+faststart",
+                str(output),
+            ]
+        else:
+            layout = (
+                "mono"
+                if device.channels == 1
+                else "stereo"
+            )
+
+            command = [
+                str(self.ffmpeg),
+                "-y",
+                "-hide_banner",
+                "-loglevel",
+                "warning",
+                "-i",
+                str(video),
+                "-f",
+                "lavfi",
+                "-i",
+                (
+                    "anullsrc="
+                    f"channel_layout={layout}:"
+                    f"sample_rate={device.rate}"
+                ),
+                "-map",
+                "0:v:0",
+                "-map",
+                "1:a:0",
+                "-c:v",
+                "copy",
+                "-c:a",
+                "aac",
+                "-b:a",
+                "192k",
+                "-shortest",
+                "-movflags",
+                "+faststart",
+                str(output),
+            ]
+
+        return self._run_finalize_command(
+            command,
+            output_path=output,
+        )
+
+
     def _run_finalize_command(
         self,
         command: list[str],
+        *,
+        output_path: Path | None = None,
     ) -> bool:
         try:
             log_path = (
@@ -3061,11 +3123,17 @@ class ScreenRecorderPage(QWidget):
                     creationflags=CREATE_NO_WINDOW,
                 )
 
+            expected = (
+                output_path
+                if output_path is not None
+                else self._final_path
+            )
+
             return (
                 result.returncode == 0
-                and self._final_path is not None
-                and self._final_path.is_file()
-                and self._final_path.stat().st_size > 1024
+                and expected is not None
+                and expected.is_file()
+                and expected.stat().st_size > 1024
             )
         except Exception:
             return False
@@ -3073,7 +3141,10 @@ class ScreenRecorderPage(QWidget):
     def _cleanup_session(self) -> None:
         self._process = None
         self._segment_started_at = None
+        self._stop_audio_engine()
         self._segments = []
+        self._audio_segments = []
+        self._session_audio_device = None
 
         if (
             self._session_dir is not None
@@ -3128,11 +3199,17 @@ class ScreenRecorderPage(QWidget):
         )
 
     def _update_runtime(self) -> None:
-        self.duration_value.setText(
-            self._clock_text(
-                self._elapsed_seconds()
-            )
+        elapsed_text = self._clock_text(
+            self._elapsed_seconds()
         )
+        self.duration_value.setText(
+            elapsed_text
+        )
+
+        if hasattr(self, "floating"):
+            self.floating.set_elapsed(
+                elapsed_text
+            )
 
         if (
             self._state == self.RECORDING
@@ -3140,6 +3217,7 @@ class ScreenRecorderPage(QWidget):
             and self._process.poll() is not None
         ):
             self._process = None
+            self._stop_audio_engine()
             self._close_log()
             self._apply_state(
                 self.ERROR,
@@ -3204,8 +3282,9 @@ class ScreenRecorderPage(QWidget):
         for widget in (
             self.screen_combo,
             self.mode_combo,
-            self.select_region,
+            self.new_region_button,
             self.adjust_region,
+            self.clear_region,
             self.fps_combo,
             self.quality_combo,
             self.audio_combo,
@@ -3282,6 +3361,12 @@ class ScreenRecorderPage(QWidget):
             )
 
         self._update_capture_labels()
+
+        if hasattr(self, "floating"):
+            self.floating.set_state(
+                state
+            )
+
         self.state_changed.emit(state)
 
     def _restore_window_after_recording(self) -> None:
@@ -3303,7 +3388,7 @@ class ScreenRecorderPage(QWidget):
 
     def shutdown(self) -> bool:
         self._closing = True
-        self._finish_region_edit()
+        self._close_region_editor()
 
         try:
             if self._state == self.RECORDING:
@@ -3321,9 +3406,14 @@ class ScreenRecorderPage(QWidget):
 
             self._cleanup_session()
         finally:
-            self._preview_timer.stop()
             self._status_timer.stop()
             self._capture_overlay.hide()
+            self._stop_audio_engine()
+
+            if hasattr(self, "floating"):
+                self.floating.hide()
+                self.floating.close()
+
             self._close_log()
 
         return True
