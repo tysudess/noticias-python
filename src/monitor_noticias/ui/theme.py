@@ -467,90 +467,90 @@ QLabel#dots {{
 }}
 
 /* REFINO GLOBAL V13 */
-QAbstractScrollArea {
+QAbstractScrollArea {{
     outline: 0;
-}
+}}
 
-QScrollBar:vertical {
+QScrollBar:vertical {{
     background: #EDF4FB;
     width: 10px;
     margin: 2px 1px 2px 1px;
     border: 0;
     border-radius: 5px;
-}
-QScrollBar::handle:vertical {
+}}
+QScrollBar::handle:vertical {{
     background: #91B8E3;
     min-height: 42px;
     border-radius: 5px;
-}
-QScrollBar::handle:vertical:hover {
+}}
+QScrollBar::handle:vertical:hover {{
     background: #6FA5DD;
-}
+}}
 QScrollBar::add-line:vertical,
-QScrollBar::sub-line:vertical {
+QScrollBar::sub-line:vertical {{
     height: 0px;
-}
+}}
 
-QScrollBar:horizontal {
+QScrollBar:horizontal {{
     background: #EDF4FB;
     height: 10px;
     margin: 1px 2px 1px 2px;
     border: 0;
     border-radius: 5px;
-}
-QScrollBar::handle:horizontal {
+}}
+QScrollBar::handle:horizontal {{
     background: #91B8E3;
     min-width: 48px;
     border-radius: 5px;
-}
-QScrollBar::handle:horizontal:hover {
+}}
+QScrollBar::handle:horizontal:hover {{
     background: #6FA5DD;
-}
+}}
 QScrollBar::add-line:horizontal,
-QScrollBar::sub-line:horizontal {
+QScrollBar::sub-line:horizontal {{
     width: 0px;
-}
+}}
 
 QLineEdit:hover,
 QComboBox:hover,
 QSpinBox:hover,
 QDateEdit:hover,
-QTimeEdit:hover {
+QTimeEdit:hover {{
     border-color: #A7C9EA;
-}
+}}
 
-QListWidget::item {
+QListWidget::item {{
     border-radius: 7px;
     padding: 3px;
-}
-QListWidget::item:selected {
+}}
+QListWidget::item:selected {{
     background: #E7F3FF;
     color: #08245F;
     border: 1px solid #8EC2F4;
-}
+}}
 
-QPushButton:focus {
+QPushButton:focus {{
     outline: none;
-}
-QPushButton[secondary="true"]:focus {
+}}
+QPushButton[secondary="true"]:focus {{
     border-color: #7DB4E9;
-}
+}}
 
-QMenu {
+QMenu {{
     background: #FFFFFF;
     color: #08245F;
     border: 1px solid #CFE0F5;
     border-radius: 8px;
     padding: 5px;
-}
-QMenu::item {
+}}
+QMenu::item {{
     padding: 7px 20px 7px 10px;
     border-radius: 6px;
-}
-QMenu::item:selected {
+}}
+QMenu::item:selected {{
     background: #EAF4FF;
     color: #087AF7;
-}
+}}
 
 """
 
