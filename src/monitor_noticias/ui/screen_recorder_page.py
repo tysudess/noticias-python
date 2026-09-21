@@ -2976,10 +2976,23 @@ class ScreenRecorderPage(QWidget):
             )
             return
 
+        # Zera o relógio imediatamente quando o REC é aceito.
+        # Isso evita manter no widget o tempo da sessão anterior enquanto
+        # FFmpeg/WASAPI estão sendo preparados.
+        self._elapsed_before_segment = 0.0
+        self._segment_started_at = None
+        self.duration_value.setText("00:00:00")
+
+        if hasattr(self, "floating"):
+            self.floating.set_elapsed("00:00:00")
+
         self._apply_state(
             self.STARTING,
             "Iniciando gravação…",
         )
+
+        # Força a atualização visual do widget no mesmo clique do REC.
+        QApplication.processEvents()
 
         delay = {
             0: 0,
@@ -3359,7 +3372,24 @@ class ScreenRecorderPage(QWidget):
                 stderr=self._log_handle,
                 creationflags=CREATE_NO_WINDOW,
             )
+
+            # Dois relógios com funções diferentes:
+            # - perf_counter: sincronismo A/V com PyAudioWPatch;
+            # - monotonic: cronômetro da interface/widget.
+            #
+            # Antes o mesmo timestamp de perf_counter era salvo em
+            # _segment_started_at e depois comparado com time.monotonic().
+            # Em ambientes Windows/Python empacotados esses relógios não devem
+            # ser misturados; o resultado podia ficar <= 0 e o contador do
+            # widget permanecer parado em 00:00:00.
             video_started_at = time.perf_counter()
+            segment_clock_started_at = time.monotonic()
+
+            # O relógio da interface passa a existir assim que o FFmpeg foi
+            # realmente criado.
+            self._segment_started_at = (
+                segment_clock_started_at
+            )
 
         except Exception as exc:
             self._stop_audio_engine()
@@ -3398,10 +3428,6 @@ class ScreenRecorderPage(QWidget):
         )
         self._segment_audio_offsets.append(
             audio_offset
-        )
-
-        self._segment_started_at = (
-            video_started_at
         )
 
         if self._session_audio_device is None:
@@ -3458,6 +3484,8 @@ class ScreenRecorderPage(QWidget):
             self.RECORDING,
             "Gravando…",
         )
+        self._update_runtime()
+        QApplication.processEvents()
 
     def stop_recording(self) -> None:
         """Finaliza e ZERA o estado da sessão.
@@ -4094,7 +4122,11 @@ class ScreenRecorderPage(QWidget):
         value = self._elapsed_before_segment
 
         if (
-            self._state == self.RECORDING
+            self._state
+            in {
+                self.STARTING,
+                self.RECORDING,
+            }
             and self._segment_started_at is not None
         ):
             value += max(
