@@ -214,11 +214,72 @@ jobs:
       - name: Baixar yt-dlp
         shell: pwsh
         run: |
+          $ErrorActionPreference = "Stop"
+
           $bin = Resolve-Path "dist/MonitorDeNoticias/bin"
+
           Invoke-WebRequest `
             -Uri "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe" `
             -OutFile (Join-Path $bin "yt-dlp.exe") `
             -TimeoutSec 180
+
+          & (Join-Path $bin "yt-dlp.exe") --version
+
+      - name: Baixar Deno para suporte completo ao YouTube
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          $bin = Resolve-Path "dist/MonitorDeNoticias/bin"
+          $tmpZip = Join-Path $env:RUNNER_TEMP "deno-x86_64-pc-windows-msvc.zip"
+          $tmpDir = Join-Path $env:RUNNER_TEMP "deno-extracted"
+
+          if (Test-Path $tmpZip) {
+            Remove-Item $tmpZip -Force
+          }
+
+          if (Test-Path $tmpDir) {
+            Remove-Item $tmpDir -Recurse -Force
+          }
+
+          Invoke-WebRequest `
+            -Uri "https://github.com/denoland/deno/releases/latest/download/deno-x86_64-pc-windows-msvc.zip" `
+            -OutFile $tmpZip `
+            -TimeoutSec 300 `
+            -MaximumRedirection 10
+
+          if (-not (Test-Path $tmpZip)) {
+            throw "Pacote do Deno não foi baixado."
+          }
+
+          Expand-Archive `
+            -Path $tmpZip `
+            -DestinationPath $tmpDir `
+            -Force
+
+          $deno = Get-ChildItem `
+            $tmpDir `
+            -Filter "deno.exe" `
+            -Recurse |
+            Select-Object -First 1
+
+          if (-not $deno) {
+            throw "deno.exe não foi encontrado após a extração."
+          }
+
+          Copy-Item `
+            $deno.FullName `
+            (Join-Path $bin "deno.exe") `
+            -Force
+
+          $denoTarget = Join-Path $bin "deno.exe"
+
+          if (-not (Test-Path $denoTarget)) {
+            throw "deno.exe não foi copiado para bin."
+          }
+
+          Write-Host "Deno incluído para o Extrator de Vídeos:"
+          & $denoTarget --version
 
       - name: Baixar FFmpeg e FFprobe
         shell: pwsh
@@ -348,6 +409,26 @@ jobs:
 
             if (-not $audioBackend) {
               throw "Backend WASAPI (_portaudiowpatch.pyd) não está no ZIP final."
+            }
+
+            $deno = $archive.Entries |
+              Where-Object {
+                $_.FullName.Replace("\", "/") -ieq "bin/deno.exe"
+              } |
+              Select-Object -First 1
+
+            if (-not $deno) {
+              throw "Deno não está no ZIP final. O YouTube ficaria sem runtime JavaScript."
+            }
+
+            $ytdlp = $archive.Entries |
+              Where-Object {
+                $_.FullName.Replace("\", "/") -ieq "bin/yt-dlp.exe"
+              } |
+              Select-Object -First 1
+
+            if (-not $ytdlp) {
+              throw "yt-dlp.exe não está no ZIP final."
             }
 
             $newsExtractor = $archive.Entries |
