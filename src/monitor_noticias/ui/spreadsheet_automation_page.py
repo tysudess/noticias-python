@@ -184,7 +184,7 @@ class SpreadsheetAutomationPage(BasePage):
         self.nav_buttons: list[QPushButton] = []
         self.views = QStackedWidget()
 
-        for idx, label in enumerate(("Painel", "Configurações", "Log", "Sobre")):
+        for idx, label in enumerate(("Painel", "WhatsApp", "Configurações", "Log", "Sobre")):
             btn = QPushButton(label)
             btn.setObjectName("sheetTab")
             btn.setCheckable(True)
@@ -203,6 +203,7 @@ class SpreadsheetAutomationPage(BasePage):
         self.root.addWidget(self.views, 1)
 
         self.views.addWidget(self._build_dashboard())
+        self.views.addWidget(self._build_whatsapp())
         self.views.addWidget(self._build_settings())
         self.views.addWidget(self._build_log())
         self.views.addWidget(self._build_about())
@@ -213,6 +214,14 @@ class SpreadsheetAutomationPage(BasePage):
         self.views.setCurrentIndex(index)
         for i, button in enumerate(self.nav_buttons):
             button.setChecked(i == index)
+
+        # A aba WhatsApp usa a MESMA página controlada pelo whatsapp-web.js.
+        # O motor envia capturas JPEG da página real para dentro do PySide.
+        if index == 1:
+            self._send_engine_command("VIEW_ON")
+            self._send_engine_command("SCREENSHOT")
+        else:
+            self._send_engine_command("VIEW_OFF")
 
     def _build_dashboard(self) -> QWidget:
         page = QWidget()
@@ -371,7 +380,7 @@ class SpreadsheetAutomationPage(BasePage):
 
         log_btn = QPushButton("▤  ABRIR LOG")
         log_btn.setObjectName("sheetSecondary")
-        log_btn.clicked.connect(lambda: self._set_view(2))
+        log_btn.clicked.connect(lambda: self._set_view(3))
         ctl.addWidget(log_btn)
 
         folder_btn = QPushButton("▣  ABRIR PASTA")
@@ -386,6 +395,184 @@ class SpreadsheetAutomationPage(BasePage):
         layout.addWidget(self.dashboard_status)
 
         return page
+
+    def _build_whatsapp(self) -> QWidget:
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(10)
+
+        card = QFrame()
+        card.setObjectName("sheetCard")
+        cl = QVBoxLayout(card)
+        cl.setContentsMargins(14, 12, 14, 12)
+        cl.setSpacing(10)
+
+        head = QHBoxLayout()
+
+        title_box = QVBoxLayout()
+        title_box.setSpacing(2)
+
+        title = QLabel("WhatsApp Web")
+        title.setObjectName("sheetSectionTitle")
+
+        subtitle = QLabel(
+            "Visualização da mesma sessão usada pela Automação de Planilhas. "
+            "Se aparecer o QR Code aqui, leia com WhatsApp → Aparelhos conectados."
+        )
+        subtitle.setObjectName("sheetMuted")
+        subtitle.setWordWrap(True)
+
+        title_box.addWidget(title)
+        title_box.addWidget(subtitle)
+        head.addLayout(title_box, 1)
+
+        self.whatsapp_view_status = QLabel("Motor parado")
+        self.whatsapp_view_status.setObjectName("sheetInfoStrip")
+        head.addWidget(self.whatsapp_view_status)
+
+        cl.addLayout(head)
+
+        controls = QHBoxLayout()
+        controls.setSpacing(8)
+
+        self.whatsapp_start_btn = QPushButton("▶  INICIAR WHATSAPP")
+        self.whatsapp_start_btn.setObjectName("sheetPrimary")
+        self.whatsapp_start_btn.clicked.connect(self._open_whatsapp_tab)
+        controls.addWidget(self.whatsapp_start_btn)
+
+        refresh = QPushButton("↻  ATUALIZAR TELA")
+        refresh.setObjectName("sheetSecondary")
+        refresh.clicked.connect(
+            lambda: self._send_engine_command("SCREENSHOT")
+        )
+        controls.addWidget(refresh)
+
+        reload_btn = QPushButton("⟳  RECARREGAR WHATSAPP")
+        reload_btn.setObjectName("sheetSecondary")
+        reload_btn.clicked.connect(
+            lambda: self._send_engine_command("RELOAD_WHATSAPP")
+        )
+        controls.addWidget(reload_btn)
+
+        show_browser = QPushButton("▣  ABRIR JANELA REAL")
+        show_browser.setObjectName("sheetSecondary")
+        show_browser.setToolTip(
+            "Mostra a mesma janela do Chrome controlada pela automação. "
+            "Não abre uma segunda sessão."
+        )
+        show_browser.clicked.connect(
+            lambda: self._send_engine_command("SHOW_BROWSER")
+        )
+        controls.addWidget(show_browser)
+
+        hide_browser = QPushButton("—  OCULTAR JANELA")
+        hide_browser.setObjectName("sheetSecondary")
+        hide_browser.clicked.connect(
+            lambda: self._send_engine_command("HIDE_BROWSER")
+        )
+        controls.addWidget(hide_browser)
+
+        controls.addStretch()
+        cl.addLayout(controls)
+
+        self.whatsapp_preview = QLabel(
+            "Inicie a Automação de Planilhas.\n"
+            "A tela real do WhatsApp Web aparecerá aqui."
+        )
+        self.whatsapp_preview.setObjectName("sheetWhatsappPreview")
+        self.whatsapp_preview.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.whatsapp_preview.setMinimumHeight(520)
+        self.whatsapp_preview.setWordWrap(True)
+        cl.addWidget(self.whatsapp_preview, 1)
+
+        help_box = QLabel(
+            "Esta visualização não cria outro login: ela é uma imagem atualizada "
+            "da própria página do Chrome/Puppeteer usada pelo motor. "
+            "Se precisar interagir diretamente, use “ABRIR JANELA REAL”."
+        )
+        help_box.setObjectName("sheetMuted")
+        help_box.setWordWrap(True)
+        cl.addWidget(help_box)
+
+        layout.addWidget(card, 1)
+        return page
+
+    def _open_whatsapp_tab(self) -> None:
+        if not self._is_running():
+            self.start_engine()
+
+        self._set_view(1)
+
+        # Dá tempo para o Chromium ser criado antes do primeiro frame.
+        QTimer.singleShot(
+            1000,
+            lambda: self._send_engine_command("SCREENSHOT"),
+        )
+
+    def _send_engine_command(self, command: str) -> None:
+        if not self._is_running() or self.process is None:
+            return
+
+        try:
+            self.process.write(
+                (str(command).strip() + "\\n").encode("utf-8")
+            )
+        except Exception as exc:
+            self._append_log(
+                f"Falha ao enviar comando ao WhatsApp: {exc}",
+                True,
+            )
+
+    def _show_whatsapp_frame(self, data_url: str) -> None:
+        try:
+            marker = "base64,"
+            if marker not in data_url:
+                raise ValueError("imagem inválida")
+
+            raw = base64.b64decode(
+                data_url.split(marker, 1)[1]
+            )
+
+            pixmap = QPixmap()
+            if not pixmap.loadFromData(raw):
+                raise ValueError("não foi possível carregar a imagem")
+
+            self._whatsapp_last_pixmap = pixmap
+            self._render_whatsapp_pixmap()
+
+        except Exception as exc:
+            self._append_log(
+                f"Falha ao mostrar WhatsApp Web: {exc}",
+                True,
+            )
+
+    def _render_whatsapp_pixmap(self) -> None:
+        pixmap = getattr(
+            self,
+            "_whatsapp_last_pixmap",
+            None,
+        )
+
+        if pixmap is None or pixmap.isNull():
+            return
+
+        size = self.whatsapp_preview.size()
+
+        self.whatsapp_preview.setPixmap(
+            pixmap.scaled(
+                max(320, size.width() - 8),
+                max(300, size.height() - 8),
+                Qt.AspectRatioMode.KeepAspectRatio,
+                Qt.TransformationMode.SmoothTransformation,
+            )
+        )
+
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+
+        if hasattr(self, "whatsapp_preview"):
+            self._render_whatsapp_pixmap()
 
     def _build_settings(self) -> QWidget:
         outer = QWidget()
@@ -833,6 +1020,7 @@ class SpreadsheetAutomationPage(BasePage):
         process.readyReadStandardError.connect(self._read_stderr)
         process.finished.connect(self._process_finished)
         process.errorOccurred.connect(self._process_error)
+        process.started.connect(self._process_started)
         self.process = process
 
         self.stats["motor"] = "INICIANDO"
@@ -843,6 +1031,16 @@ class SpreadsheetAutomationPage(BasePage):
         self._append_log("Iniciando Automação de Planilhas...")
         self._update_status_ui()
         process.start()
+
+    def _process_started(self) -> None:
+        # Se a aba WhatsApp estiver aberta, ativa o stream visual assim que o
+        # processo Node estiver pronto para receber comandos.
+        if self.views.currentIndex() == 1:
+            self._send_engine_command("VIEW_ON")
+            QTimer.singleShot(
+                700,
+                lambda: self._send_engine_command("SCREENSHOT"),
+            )
 
     def stop_engine(self) -> None:
         self._manual_stop = True
@@ -941,15 +1139,35 @@ class SpreadsheetAutomationPage(BasePage):
             if browser:
                 self._append_log(f"Navegador detectado: {browser}")
 
+        elif kind == "browser_frame":
+            self._show_whatsapp_frame(
+                str(event.get("dataUrl", ""))
+            )
+            url = str(event.get("url", ""))
+            title = str(event.get("title", ""))
+            label = title or url or "WhatsApp Web"
+            self.whatsapp_view_status.setText(label)
+
+        elif kind == "browser_view_status":
+            message = str(event.get("message", "WhatsApp Web"))
+            self.whatsapp_view_status.setText(message)
+
+        elif kind == "browser_window":
+            message = str(event.get("message", "Janela do Chrome atualizada."))
+            self.whatsapp_view_status.setText(message)
+
         elif kind == "qr":
             self.stats["motor"] = "AGUARDANDO QR"
             self.stats["whatsapp"] = "AGUARDANDO AUTENTICAÇÃO"
             self.qr_status.setText("QR Code pronto. Faça a leitura pelo WhatsApp.")
+            self.whatsapp_view_status.setText("QR Code pronto para leitura")
+            self._send_engine_command("SCREENSHOT")
             self._show_qr(str(event.get("dataUrl", "")))
 
         elif kind == "authenticated":
             self.stats["whatsapp"] = "AUTENTICADO"
             self.qr_status.setText("WhatsApp autenticado. Finalizando conexão...")
+            self.whatsapp_view_status.setText("WhatsApp autenticado")
 
         elif kind == "loading":
             percent = event.get("percent", 0)
@@ -961,6 +1179,8 @@ class SpreadsheetAutomationPage(BasePage):
             self._restart_attempts = 0
             self.qr_frame.hide()
             self.dashboard_status.setText("Automação ativa e monitorando os grupos.")
+            self.whatsapp_view_status.setText("WhatsApp conectado")
+            self._send_engine_command("SCREENSHOT")
 
         elif kind == "reconnecting":
             self.stats["whatsapp"] = "RECONECTANDO"
@@ -1043,6 +1263,8 @@ class SpreadsheetAutomationPage(BasePage):
 
         was_manual = self._manual_stop
         self.process = None
+        if hasattr(self, "whatsapp_view_status"):
+            self.whatsapp_view_status.setText("Motor parado")
         self.stats["motor"] = "PARADO" if was_manual or exit_code == 0 else "ERRO"
         if self.stats["whatsapp"] != "ERRO":
             self.stats["whatsapp"] = "DESCONECTADO"
@@ -1293,6 +1515,15 @@ class SpreadsheetAutomationPage(BasePage):
             border-radius:22px;
             font-size:40px;
             font-weight:900;
+        }
+        QLabel#sheetWhatsappPreview {
+            background:#0B141A;
+            color:#C9D7DF;
+            border:1px solid #24404F;
+            border-radius:10px;
+            padding:8px;
+            font-size:13px;
+            font-weight:700;
         }
         QLabel#sheetAboutTitle { color:#08245F; font-size:25px; font-weight:900; }
         """

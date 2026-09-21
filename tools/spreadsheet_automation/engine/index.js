@@ -897,7 +897,7 @@ emit(
 );
 
 log(
-  "MODO DO NAVEGADOR: OCULTO (HEADLESS)"
+  "MODO DO NAVEGADOR: VISUAL CONTROLADO PELO CENTRAL"
 );
 
 if (navegador) {
@@ -939,6 +939,8 @@ const chromeArgs = [
   "--disable-background-timer-throttling",
   "--disable-renderer-backgrounding",
   "--disable-backgrounding-occluded-windows",
+  "--window-size=1200,820",
+  "--window-position=-32000,-32000",
 ];
 
 const proxyArg =
@@ -957,7 +959,7 @@ const clientOptions = {
     rmMaxRetries: 10,
   }),
   puppeteer: {
-    headless: true,
+    headless: false,
     ...(navegador
       ? {
         executablePath:
@@ -995,6 +997,289 @@ function wait(ms) {
       setTimeout(resolve, ms)
   );
 }
+
+let browserViewEnabled = false;
+let browserFrameTimer = null;
+let browserFrameBusy = false;
+
+async function browserPage() {
+  const page = client?.pupPage;
+
+  if (
+    !page
+    || page.isClosed()
+  ) {
+    return null;
+  }
+
+  return page;
+}
+
+async function emitBrowserFrame(force = false) {
+  if (
+    browserFrameBusy
+    || (!browserViewEnabled && !force)
+  ) {
+    return;
+  }
+
+  const page = await browserPage();
+
+  if (!page) {
+    if (force) {
+      emit(
+        "browser_view_status",
+        {
+          message:
+            "Chrome ainda está inicializando...",
+        }
+      );
+    }
+    return;
+  }
+
+  browserFrameBusy = true;
+
+  try {
+    try {
+      const viewport =
+        page.viewport();
+
+      if (
+        !viewport
+        || viewport.width < 1000
+        || viewport.height < 650
+      ) {
+        await page.setViewport(
+          {
+            width: 1200,
+            height: 760,
+            deviceScaleFactor: 1,
+          }
+        );
+      }
+    } catch (_) {}
+
+    const base64 =
+      await page.screenshot(
+        {
+          type: "jpeg",
+          quality: 68,
+          encoding: "base64",
+          captureBeyondViewport: false,
+        }
+      );
+
+    let title = "";
+    let url = "";
+
+    try {
+      title = await page.title();
+    } catch (_) {}
+
+    try {
+      url = page.url();
+    } catch (_) {}
+
+    emit(
+      "browser_frame",
+      {
+        dataUrl:
+          `data:image/jpeg;base64,${base64}`,
+        title,
+        url,
+      }
+    );
+
+  } catch (e) {
+    if (force) {
+      emit(
+        "browser_view_status",
+        {
+          message:
+            `Não foi possível capturar a tela: `
+            + `${e.message}`,
+        }
+      );
+    }
+  } finally {
+    browserFrameBusy = false;
+  }
+}
+
+function ensureBrowserFrameTimer() {
+  if (browserFrameTimer) {
+    return;
+  }
+
+  browserFrameTimer =
+    setInterval(
+      () => {
+        emitBrowserFrame(false);
+      },
+      1500
+    );
+}
+
+async function browserWindowBounds() {
+  const page =
+    await browserPage();
+
+  if (!page) {
+    throw new Error(
+      "Chrome ainda não foi criado."
+    );
+  }
+
+  const session =
+    await page.target().createCDPSession();
+
+  const info =
+    await session.send(
+      "Browser.getWindowForTarget"
+    );
+
+  return {
+    session,
+    windowId:
+      info.windowId,
+  };
+}
+
+async function showBrowserWindow() {
+  try {
+    const {
+      session,
+      windowId,
+    } =
+      await browserWindowBounds();
+
+    await session.send(
+      "Browser.setWindowBounds",
+      {
+        windowId,
+        bounds: {
+          windowState: "normal",
+          left: 90,
+          top: 70,
+          width: 1200,
+          height: 820,
+        },
+      }
+    );
+
+    emit(
+      "browser_window",
+      {
+        message:
+          "Janela real do WhatsApp Web aberta.",
+      }
+    );
+
+  } catch (e) {
+    emit(
+      "browser_view_status",
+      {
+        message:
+          `Chrome ainda não está disponível: `
+          + `${e.message}`,
+      }
+    );
+  }
+}
+
+async function hideBrowserWindow() {
+  try {
+    const {
+      session,
+      windowId,
+    } =
+      await browserWindowBounds();
+
+    // Move a MESMA janela para fora da área visível. Mantém a renderização
+    // ativa para o preview da aba WhatsApp continuar funcionando.
+    await session.send(
+      "Browser.setWindowBounds",
+      {
+        windowId,
+        bounds: {
+          windowState: "normal",
+          left: -32000,
+          top: -32000,
+          width: 1200,
+          height: 820,
+        },
+      }
+    );
+
+    emit(
+      "browser_window",
+      {
+        message:
+          "Janela real ocultada; sessão continua ativa.",
+      }
+    );
+
+  } catch (e) {
+    emit(
+      "browser_view_status",
+      {
+        message:
+          `Não foi possível ocultar a janela: `
+          + `${e.message}`,
+      }
+    );
+  }
+}
+
+async function reloadWhatsApp() {
+  const page =
+    await browserPage();
+
+  if (!page) {
+    emit(
+      "browser_view_status",
+      {
+        message:
+          "Chrome ainda está inicializando...",
+      }
+    );
+    return;
+  }
+
+  try {
+    emit(
+      "browser_view_status",
+      {
+        message:
+          "Recarregando WhatsApp Web...",
+      }
+    );
+
+    await page.reload(
+      {
+        waitUntil:
+          "domcontentloaded",
+        timeout: 45000,
+      }
+    );
+
+    await wait(1200);
+    await emitBrowserFrame(true);
+
+  } catch (e) {
+    emit(
+      "browser_view_status",
+      {
+        message:
+          `Falha ao recarregar: `
+          + `${e.message}`,
+      }
+    );
+  }
+}
+
+ensureBrowserFrameTimer();
 
 function recoverableInitializeError(err) {
   const text =
@@ -1071,6 +1356,9 @@ function installClientEvents() {
             dataUrl,
           }
         );
+
+        browserViewEnabled = true;
+        emitBrowserFrame(true);
       } catch (e) {
         emit(
           "engine_error",
@@ -1138,6 +1426,8 @@ function installClientEvents() {
       emit(
         "ready"
       );
+
+      emitBrowserFrame(true);
     }
   );
 
@@ -1283,7 +1573,16 @@ async function initializeWithRecovery() {
         }
       );
 
+      browserViewEnabled = true;
+
+      // O preview começa ANTES de initialize() resolver. Isso é intencional:
+      // mesmo se o evento "qr" falhar por uma navegação do WhatsApp Web,
+      // a página real continua sendo capturada e exibida na aba WhatsApp.
+      emitBrowserFrame(true);
+
       await client.initialize();
+
+      emitBrowserFrame(true);
 
       // O QR/ready será entregue pelos eventos do cliente.
       return;
@@ -1779,6 +2078,11 @@ async function shutdown(
 
   shuttingDown = true;
 
+  if (browserFrameTimer) {
+    clearInterval(browserFrameTimer);
+    browserFrameTimer = null;
+  }
+
   log(
     "Encerrando motor:",
     reason
@@ -1815,6 +2119,38 @@ input.on(
       shutdown(
         "comando do Central"
       );
+      return;
+    }
+
+    if (cmd === "VIEW_ON") {
+      browserViewEnabled = true;
+      emitBrowserFrame(true);
+      return;
+    }
+
+    if (cmd === "VIEW_OFF") {
+      browserViewEnabled = false;
+      return;
+    }
+
+    if (cmd === "SCREENSHOT") {
+      emitBrowserFrame(true);
+      return;
+    }
+
+    if (cmd === "SHOW_BROWSER") {
+      showBrowserWindow();
+      return;
+    }
+
+    if (cmd === "HIDE_BROWSER") {
+      hideBrowserWindow();
+      return;
+    }
+
+    if (cmd === "RELOAD_WHATSAPP") {
+      reloadWhatsApp();
+      return;
     }
   }
 );
