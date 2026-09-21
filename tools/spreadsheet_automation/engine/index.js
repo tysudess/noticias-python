@@ -3,7 +3,84 @@ const axios = require("axios");
 const fs = require("fs");
 const path = require("path");
 const readline = require("readline");
+
 const { Client, LocalAuth } = require("whatsapp-web.js");
+
+/*
+ * V22 — correção específica para:
+ * "Protocol error (Runtime.callFunctionOn): Execution context was destroyed"
+ *
+ * O whatsapp-web.js chama Client.inject() durante a inicialização e também
+ * depois de navegações internas do WhatsApp Web. Quando a página navega
+ * exatamente no momento de uma evaluate(), o Puppeteer invalida o contexto
+ * JavaScript e a Promise rejeita.
+ *
+ * A correção anterior destruía o browser e recriava a sessão; isso podia
+ * deixar arquivos do perfil do Chrome ainda bloqueados (EPERM) e impedir
+ * a geração do QR.
+ *
+ * Aqui a injeção é repetida NA MESMA página depois que a navegação estabiliza.
+ * Não apaga, não renomeia e não recria a sessão por causa desse erro transitório.
+ */
+const _originalInject = Client.prototype.inject;
+
+function isExecutionContextNavigationError(err) {
+  const message = String(err?.message || err || "").toLowerCase();
+  return (
+    message.includes("execution context was destroyed")
+    || message.includes("cannot find context with specified id")
+    || message.includes("inspected target navigated or closed")
+    || message.includes("most likely because of a navigation")
+  );
+}
+
+Client.prototype.inject = async function (...args) {
+  const maxAttempts = 8;
+  let lastError = null;
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    try {
+      return await _originalInject.apply(this, args);
+    } catch (err) {
+      lastError = err;
+
+      if (!isExecutionContextNavigationError(err)) {
+        throw err;
+      }
+
+      const page = this.pupPage;
+      if (!page || page.isClosed()) {
+        throw err;
+      }
+
+      log(
+        `WhatsApp Web navegou durante a inicialização. `
+        + `Repetindo injeção sem reiniciar a sessão `
+        + `(${attempt}/${maxAttempts})...`
+      );
+
+      emit("initialization_retry", {
+        attempt,
+        maxAttempts,
+        message: String(err?.message || err || ""),
+      });
+
+      // Dá tempo para o novo execution context do Chromium ficar disponível.
+      await new Promise(resolve => setTimeout(resolve, 700 + attempt * 250));
+
+      try {
+        await page.waitForFunction(
+          "window.Debug?.VERSION != undefined",
+          { timeout: 10000 }
+        );
+      } catch (_) {
+        // A próxima tentativa de inject() faz a verificação novamente.
+      }
+    }
+  }
+
+  throw lastError;
+};
 
 const EVENT_PREFIX = "CENTRAL_EVENT:";
 
@@ -781,6 +858,16 @@ function localizarNavegador() {
 const navegador =
   localizarNavegador();
 
+try {
+  const wwebVersion =
+    require("whatsapp-web.js/package.json").version;
+  log(
+    "WHATSAPP-WEB.JS:",
+    wwebVersion
+  );
+} catch (_) {}
+
+
 emit(
   "engine_start",
   {
@@ -864,9 +951,10 @@ if (proxyArg) {
 const clientOptions = {
   authStrategy: new LocalAuth({
     clientId:
-      "central-planilhas",
+      "monitor-planilha",
     dataPath:
       AUTH_DIR,
+    rmMaxRetries: 10,
   }),
   puppeteer: {
     headless: true,
@@ -941,60 +1029,17 @@ async function safeDestroy() {
   } catch (_) {}
 }
 
-function sessionPath() {
-  return path.join(
+function noteLegacySession() {
+  const legacyDir = path.join(
     AUTH_DIR,
     "session-central-planilhas"
   );
-}
 
-function resetBrokenSession() {
-  const sessionDir =
-    sessionPath();
-
-  if (
-    !fs.existsSync(sessionDir)
-  ) {
-    return false;
-  }
-
-  const backup =
-    path.join(
-      AUTH_DIR,
-      (
-        "session-central-planilhas-backup-"
-        + Date.now()
-      )
-    );
-
-  try {
-    fs.renameSync(
-      sessionDir,
-      backup
-    );
-
+  if (fs.existsSync(legacyDir)) {
     log(
-      "Sessão anterior do WhatsApp foi isolada "
-      + "para permitir um novo QR Code."
+      "Sessão integrada antiga detectada em session-central-planilhas. "
+      + "Ela será preservada, mas a V22 usa o clientId original monitor-planilha."
     );
-
-    emit(
-      "auth_reset",
-      {
-        message:
-          "Sessão antiga incompatível. "
-          + "Será exibido um novo QR Code.",
-      }
-    );
-
-    return true;
-  } catch (e) {
-    error(
-      "Não foi possível isolar a sessão antiga:",
-      e.message
-    );
-
-    return false;
   }
 }
 
@@ -1146,9 +1191,7 @@ function installClientEvents() {
 
         installClientEvents();
 
-        await initializeWithRecovery(
-          false
-        );
+        await initializeWithRecovery();
       } catch (e) {
         error(
           "Falha na reconexão:",
@@ -1207,16 +1250,15 @@ function installClientEvents() {
   );
 }
 
-async function initializeWithRecovery(
-  allowAuthReset = true
-) {
-  const maxAttempts = 4;
-  let sessionWasReset = false;
+async function initializeWithRecovery() {
+  const maxBrowserAttempts = 3;
   let lastError = null;
+
+  noteLegacySession();
 
   for (
     let attempt = 1;
-    attempt <= maxAttempts;
+    attempt <= maxBrowserAttempts;
     attempt += 1
   ) {
     if (shuttingDown) {
@@ -1229,21 +1271,21 @@ async function initializeWithRecovery(
       log(
         `Inicializando WhatsApp `
         + `(tentativa ${attempt}/`
-        + `${maxAttempts})...`
+        + `${maxBrowserAttempts})...`
       );
 
       emit(
         "initializing",
         {
           attempt,
-          maxAttempts,
+          maxAttempts:
+            maxBrowserAttempts,
         }
       );
 
       await client.initialize();
 
-      // initialize() ter resolvido significa que a página foi injetada.
-      // Os eventos qr/ready continuam chegando normalmente.
+      // O QR/ready será entregue pelos eventos do cliente.
       return;
 
     } catch (e) {
@@ -1261,12 +1303,12 @@ async function initializeWithRecovery(
         message
       );
 
-      const recoverable =
-        recoverableInitializeError(e);
-
+      // O erro transitório de navegação já recebeu 8 tentativas dentro
+      // do próprio Client.inject(). Só chegamos aqui se realmente não
+      // foi possível estabilizar a página ou ocorreu outro erro.
       if (
-        !recoverable
-        || attempt >= maxAttempts
+        attempt
+        >= maxBrowserAttempts
       ) {
         break;
       }
@@ -1275,27 +1317,17 @@ async function initializeWithRecovery(
         "initialization_retry",
         {
           attempt,
+          maxAttempts:
+            maxBrowserAttempts,
           message,
         }
       );
 
       await safeDestroy();
 
-      // Se duas inicializações falharem antes de gerar QR/ready,
-      // provavelmente o perfil salvo está incompatível/corrompido.
-      // Isolamos o perfil antigo e obrigamos um QR novo.
-      if (
-        allowAuthReset
-        && !sessionWasReset
-        && !qrReceived
-        && attempt >= 2
-      ) {
-        sessionWasReset =
-          resetBrokenSession();
-      }
-
+      // Aguarda o Chrome liberar handles do perfil antes de abrir outro.
       await wait(
-        900 + attempt * 450
+        1800 + attempt * 700
       );
 
       client =
@@ -1328,8 +1360,6 @@ async function initializeWithRecovery(
     finalMessage
   );
 
-  // O processo encerra de verdade, permitindo que o Central use sua
-  // recuperação automática, em vez de ficar parado com exitCode pendente.
   process.exit(1);
 }
 
@@ -1801,9 +1831,7 @@ process.on(
 
 installClientEvents();
 
-initializeWithRecovery(
-  true
-).catch(
+initializeWithRecovery().catch(
   erro => {
     error(
       "FALHA FINAL AO INICIALIZAR:",
