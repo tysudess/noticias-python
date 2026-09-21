@@ -1218,7 +1218,7 @@ class ScreenRecorderPage(QWidget):
         # o efeito de espelho infinito quando a Central captura a própria tela.
 
         self._status_timer = QTimer(self)
-        self._status_timer.setInterval(250)
+        self._status_timer.setInterval(100)
         self._status_timer.timeout.connect(
             self._update_runtime
         )
@@ -1580,7 +1580,7 @@ class ScreenRecorderPage(QWidget):
                 "5 segundos",
             ]
         )
-        self.countdown_combo.setCurrentIndex(1)
+        self.countdown_combo.setCurrentIndex(0)
         config_l.addWidget(
             self._field(
                 "Contagem regressiva",
@@ -2978,7 +2978,7 @@ class ScreenRecorderPage(QWidget):
 
         self._apply_state(
             self.STARTING,
-            "Preparando gravação…",
+            "Iniciando gravação…",
         )
 
         delay = {
@@ -3072,6 +3072,11 @@ class ScreenRecorderPage(QWidget):
             self.RECORDING,
             "Gravando…",
         )
+
+        # Atualiza o relógio e o widget flutuante no mesmo ciclo em que
+        # o FFmpeg foi iniciado, sem esperar o próximo tick do timer.
+        self._update_runtime()
+        QApplication.processEvents()
 
         if self.hide_central.isChecked():
             window = self.window()
@@ -3364,8 +3369,9 @@ class ScreenRecorderPage(QWidget):
             )
             return False
 
-        time.sleep(0.18)
-
+        # Não bloqueia mais a interface esperando 180 ms.
+        # O monitor de runtime verifica o processo a cada 100 ms e informa
+        # imediatamente se o FFmpeg encerrar.
         if self._process.poll() is not None:
             self._stop_audio_engine()
             self._close_log()
