@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import ctypes
+import json
 import os
+import shutil
 from pathlib import Path
 
 from PySide6.QtCore import (
@@ -10,6 +12,8 @@ from PySide6.QtCore import (
     QTimer,
     Qt,
 )
+from PySide6.QtGui import QWindow
+
 from PySide6.QtWidgets import (
     QFrame,
     QHBoxLayout,
@@ -40,6 +44,17 @@ class SpreadsheetAutomationPage(BasePage):
         "AutomacaoPlanilhas-Windows-Portable-v1.0.4.exe"
     )
 
+    DEFAULT_APPS_SCRIPT_URL = (
+        "https://script.google.com/macros/s/"
+        "AKfycbz9zWPX0OgVa7obrmqm5WSu1fImaTiyWz0pR3wuc13xl-uCS5KYTF4rhbRitrv26PBh/exec"
+    )
+
+    DEFAULT_GROUPS = [
+        "556191047689-1555547406@g.us",
+        "120363025807487932@g.us",
+        "556192528699-1447447254@g.us",
+    ]
+
     def __init__(
         self,
         controller: MainUiController,
@@ -66,6 +81,13 @@ class SpreadsheetAutomationPage(BasePage):
 
         self._embedded_hwnd: int | None = None
         self._embedded_original_style: int | None = None
+
+        # Embedding supported by Qt for foreign native windows.
+        # This replaces the old SetParent-only path that displayed the
+        # Electron window but did not reliably transfer keyboard focus.
+        self._native_window: QWindow | None = None
+        self._window_container: QWidget | None = None
+
         self._launch_pid: int = 0
         self._started_once = False
         self._stopping = False
@@ -232,6 +254,8 @@ class SpreadsheetAutomationPage(BasePage):
             0,
             0,
         )
+        host_l.setSpacing(0)
+        self.browser_host_layout = host_l
 
         self.placeholder = QLabel(
             "Automação de Planilhas v1.0.4\n\n"
@@ -476,6 +500,214 @@ class SpreadsheetAutomationPage(BasePage):
 
         return env
 
+    def _ensure_tool_config(self) -> bool:
+        """Garante que o EXE receba um config.json válido e completo.
+
+        O portable usa o config.json ao lado do EXE. Se o arquivo tiver sido
+        apagado, esvaziado ou criado por uma versão antiga, a tela do Electron
+        fica com Apps Script em branco. Corrigimos somente os campos ausentes,
+        preservando qualquer personalização já salva pelo usuário.
+        """
+        config: dict = {}
+        changed = False
+
+        try:
+            if self.config_path.is_file():
+                raw = self.config_path.read_text(
+                    encoding="utf-8-sig",
+                ).strip()
+
+                if raw:
+                    loaded = json.loads(raw)
+
+                    if isinstance(loaded, dict):
+                        config = loaded
+                    else:
+                        changed = True
+                else:
+                    changed = True
+            else:
+                changed = True
+
+        except Exception:
+            # Guarda o arquivo inválido para não perder informação.
+            try:
+                if self.config_path.is_file():
+                    backup = self.config_path.with_suffix(
+                        ".json.invalid.bak"
+                    )
+                    shutil.copy2(
+                        self.config_path,
+                        backup,
+                    )
+            except Exception:
+                pass
+
+            config = {}
+            changed = True
+
+        apps_url = str(
+            config.get("appsScriptUrl")
+            or ""
+        ).strip()
+
+        if not apps_url:
+            config["appsScriptUrl"] = (
+                self.DEFAULT_APPS_SCRIPT_URL
+            )
+            changed = True
+
+        groups = config.get("grupos")
+
+        if (
+            not isinstance(groups, list)
+            or not [
+                str(item).strip()
+                for item in groups
+                if str(item).strip()
+            ]
+        ):
+            config["grupos"] = list(
+                self.DEFAULT_GROUPS
+            )
+            changed = True
+
+        if "diagnosticoGrupos" not in config:
+            config["diagnosticoGrupos"] = False
+            changed = True
+
+        if "chromePath" not in config:
+            config["chromePath"] = ""
+            changed = True
+
+        # O proxy desta integração é gerenciado pelo Central/DPAPI.
+        # Mantemos o bloco somente por compatibilidade visual do standalone.
+        if not isinstance(
+            config.get("proxy"),
+            dict,
+        ):
+            config["proxy"] = {
+                "ativo": False,
+                "host": "proxy-7dn.mb",
+                "porta": 6060,
+                "usuario": "",
+                "senha": "",
+            }
+            changed = True
+
+        try:
+            self.config_path.parent.mkdir(
+                parents=True,
+                exist_ok=True,
+            )
+
+            if changed:
+                self.config_path.write_text(
+                    json.dumps(
+                        config,
+                        ensure_ascii=False,
+                        indent=2,
+                    )
+                    + "\n",
+                    encoding="utf-8",
+                )
+
+            return True
+
+        except Exception as exc:
+            QMessageBox.warning(
+                self,
+                "Automação de Planilhas",
+                "Não foi possível preparar o config.json da Automação.\n\n"
+                f"{exc}",
+            )
+            return False
+
+    def _destroy_window_container(
+        self,
+    ) -> None:
+        container = self._window_container
+        self._window_container = None
+        self._native_window = None
+
+        if container is not None:
+            try:
+                self.browser_host_layout.removeWidget(
+                    container
+                )
+            except Exception:
+                pass
+
+            try:
+                container.hide()
+                container.setParent(None)
+                container.deleteLater()
+            except Exception:
+                pass
+
+    def _focus_embedded_window(
+        self,
+    ) -> None:
+        """Transfere foco de teclado para o Electron incorporado."""
+        hwnd = self._embedded_hwnd
+
+        if (
+            os.name != "nt"
+            or not hwnd
+            or not self._is_window(hwnd)
+        ):
+            return
+
+        try:
+            user32 = ctypes.windll.user32
+            kernel32 = ctypes.windll.kernel32
+
+            user32.EnableWindow(
+                ctypes.c_void_p(hwnd),
+                True,
+            )
+
+            foreign_thread = (
+                user32.GetWindowThreadProcessId(
+                    ctypes.c_void_p(hwnd),
+                    None,
+                )
+            )
+            current_thread = (
+                kernel32.GetCurrentThreadId()
+            )
+
+            attached = False
+
+            if (
+                foreign_thread
+                and current_thread
+                and foreign_thread
+                != current_thread
+            ):
+                attached = bool(
+                    user32.AttachThreadInput(
+                        current_thread,
+                        foreign_thread,
+                        True,
+                    )
+                )
+
+            try:
+                user32.SetFocus(
+                    ctypes.c_void_p(hwnd)
+                )
+            finally:
+                if attached:
+                    user32.AttachThreadInput(
+                        current_thread,
+                        foreign_thread,
+                        False,
+                    )
+
+        except Exception:
+            pass
+
     def start_tool(self) -> None:
         if not self.exe_path.is_file():
             QMessageBox.warning(
@@ -484,6 +716,9 @@ class SpreadsheetAutomationPage(BasePage):
                 "O executável standalone não foi encontrado:\n"
                 f"{self.exe_path}",
             )
+            return
+
+        if not self._ensure_tool_config():
             return
 
         # Se já existir uma janela do aplicativo, apenas incorpora novamente.
@@ -902,107 +1137,85 @@ class SpreadsheetAutomationPage(BasePage):
 
         try:
             user32 = ctypes.windll.user32
-
             GWL_STYLE = -16
-
-            WS_CHILD = 0x40000000
-            WS_VISIBLE = 0x10000000
-            WS_POPUP = 0x80000000
-            WS_CAPTION = 0x00C00000
-            WS_THICKFRAME = 0x00040000
-            WS_MINIMIZEBOX = 0x00020000
-            WS_MAXIMIZEBOX = 0x00010000
-            WS_SYSMENU = 0x00080000
 
             get_style = getattr(
                 user32,
                 "GetWindowLongPtrW",
                 user32.GetWindowLongW,
             )
-            set_style = getattr(
-                user32,
-                "SetWindowLongPtrW",
-                user32.SetWindowLongW,
-            )
 
-            style = int(
+            self._embedded_original_style = int(
                 get_style(
                     ctypes.c_void_p(hwnd),
                     GWL_STYLE,
                 )
             )
 
-            self._embedded_original_style = (
-                style
+            self._destroy_window_container()
+
+            native_window = QWindow.fromWinId(
+                int(hwnd)
             )
 
-            style &= ~(
-                WS_POPUP
-                | WS_CAPTION
-                | WS_THICKFRAME
-                | WS_MINIMIZEBOX
-                | WS_MAXIMIZEBOX
-                | WS_SYSMENU
-            )
-
-            style |= (
-                WS_CHILD
-                | WS_VISIBLE
-            )
-
-            set_style(
-                ctypes.c_void_p(hwnd),
-                GWL_STYLE,
-                style,
-            )
-
-            host_hwnd = int(
-                self.browser_host.winId()
-            )
-
-            result = user32.SetParent(
-                ctypes.c_void_p(hwnd),
-                ctypes.c_void_p(host_hwnd),
-            )
-
-            # SetParent pode retornar 0 tanto em falha quanto quando o parent
-            # anterior era desktop. Confirmamos pelo parent atual.
-            parent_now = user32.GetParent(
-                ctypes.c_void_p(hwnd)
-            )
-
-            if int(parent_now or 0) != host_hwnd:
+            if native_window is None:
                 raise RuntimeError(
-                    "O Windows não aceitou incorporar a janela."
+                    "Qt não conseguiu criar o wrapper da janela Electron."
                 )
 
+            container = QWidget.createWindowContainer(
+                native_window,
+                self.browser_host,
+            )
+
+            container.setObjectName(
+                "sheetStandaloneNativeContainer"
+            )
+            container.setFocusPolicy(
+                Qt.FocusPolicy.StrongFocus
+            )
+            container.setMinimumSize(
+                1,
+                1,
+            )
+
+            self.browser_host_layout.addWidget(
+                container,
+                1,
+            )
+
+            self._native_window = (
+                native_window
+            )
+            self._window_container = (
+                container
+            )
             self._embedded_hwnd = (
                 int(hwnd)
             )
 
             self.placeholder.hide()
+            container.show()
+            container.raise_()
+
             self.status_chip.setText(
                 "Integrado ao Central"
             )
 
-            self._resize_embedded()
-
-            # Electron/Chromium pode recalcular o viewport alguns milissegundos
-            # depois do SetParent. Reaplicamos o tamanho para preencher 100%.
+            # O createWindowContainer gerencia tamanho, posição e foco do
+            # HWND estrangeiro. Ainda fazemos uma ativação inicial para o
+            # primeiro clique/teclado funcionar imediatamente.
             QTimer.singleShot(
-                80,
-                self._resize_embedded,
+                50,
+                self._focus_embedded_window,
             )
             QTimer.singleShot(
-                300,
-                self._resize_embedded,
-            )
-            QTimer.singleShot(
-                900,
-                self._resize_embedded,
+                250,
+                self._focus_embedded_window,
             )
 
         except Exception as exc:
+            self._destroy_window_container()
             self._embedded_hwnd = None
 
             self.status_chip.setText(
@@ -1018,142 +1231,29 @@ class SpreadsheetAutomationPage(BasePage):
             )
 
     def _native_host_size(self) -> tuple[int, int]:
-        """Retorna o tamanho REAL do host em pixels nativos do Windows.
-
-        QWidget.width()/height() usam pixels lógicos. Em Windows com escala
-        125%, 150% etc., passar esses valores direto para MoveWindow deixa o
-        Electron menor que a área do Central e corta a parte inferior/lateral.
-
-        Aqui usamos o HWND nativo do host e, como segurança, comparamos também
-        com o devicePixelRatio do Qt.
-        """
-        logical_w = max(
-            1,
-            int(self.browser_host.width()),
-        )
-        logical_h = max(
-            1,
-            int(self.browser_host.height()),
-        )
-
-        try:
-            dpr = float(
-                self.browser_host.devicePixelRatioF()
-            )
-        except Exception:
-            dpr = 1.0
-
-        if dpr <= 0:
-            dpr = 1.0
-
-        qt_physical_w = max(
-            1,
-            int(round(logical_w * dpr)),
-        )
-        qt_physical_h = max(
-            1,
-            int(round(logical_h * dpr)),
-        )
-
-        if os.name != "nt":
-            return (
-                qt_physical_w,
-                qt_physical_h,
-            )
-
-        try:
-            from ctypes import wintypes
-
-            host_hwnd = int(
-                self.browser_host.winId()
-            )
-
-            rect = wintypes.RECT()
-
-            ok = ctypes.windll.user32.GetClientRect(
-                ctypes.c_void_p(host_hwnd),
-                ctypes.byref(rect),
-            )
-
-            if ok:
-                native_w = max(
-                    1,
-                    int(rect.right - rect.left),
-                )
-                native_h = max(
-                    1,
-                    int(rect.bottom - rect.top),
-                )
-
-                # Dependendo do contexto DPI do processo, GetClientRect pode
-                # vir lógico ou físico. Usamos o maior valor para nunca deixar
-                # a janela incorporada menor que a área visível do Central.
-                return (
-                    max(native_w, qt_physical_w),
-                    max(native_h, qt_physical_h),
-                )
-
-        except Exception:
-            pass
-
         return (
-            qt_physical_w,
-            qt_physical_h,
+            max(
+                1,
+                int(self.browser_host.width()),
+            ),
+            max(
+                1,
+                int(self.browser_host.height()),
+            ),
         )
 
     def _resize_embedded(self) -> None:
-        hwnd = self._embedded_hwnd
-
+        # QWidget.createWindowContainer já acompanha automaticamente o layout.
+        # Mantemos apenas a ativação/foco quando a página é redimensionada.
         if (
-            os.name != "nt"
-            or not hwnd
-            or not self._is_window(hwnd)
+            self._window_container is not None
+            and self._embedded_hwnd
         ):
-            return
-
-        try:
-            user32 = ctypes.windll.user32
-
-            width, height = (
-                self._native_host_size()
-            )
-
-            SWP_NOZORDER = 0x0004
-            SWP_NOACTIVATE = 0x0010
-            SWP_FRAMECHANGED = 0x0020
-            SWP_SHOWWINDOW = 0x0040
-
-            user32.SetWindowPos(
-                ctypes.c_void_p(hwnd),
-                ctypes.c_void_p(0),
-                0,
-                0,
-                width,
-                height,
-                SWP_NOZORDER
-                | SWP_NOACTIVATE
-                | SWP_FRAMECHANGED
-                | SWP_SHOWWINDOW,
-            )
-
-            # Força o Chromium/Electron a recalcular seu viewport interno.
-            WM_SIZE = 0x0005
-            SIZE_RESTORED = 0
-            lparam = (
-                (height & 0xFFFF) << 16
-            ) | (
-                width & 0xFFFF
-            )
-
-            user32.SendMessageW(
-                ctypes.c_void_p(hwnd),
-                WM_SIZE,
-                SIZE_RESTORED,
-                lparam,
-            )
-
-        except Exception:
-            pass
+            try:
+                self._window_container.updateGeometry()
+                self._window_container.show()
+            except Exception:
+                pass
 
     def _detach_window(
         self,
@@ -1170,18 +1270,17 @@ class SpreadsheetAutomationPage(BasePage):
             or not hwnd
             or not self._is_window(hwnd)
         ):
+            self._destroy_window_container()
             self._embedded_hwnd = None
             return
+
+        # Remove primeiro o container Qt; depois devolve o HWND ao desktop.
+        self._destroy_window_container()
 
         try:
             user32 = ctypes.windll.user32
             GWL_STYLE = -16
 
-            get_style = getattr(
-                user32,
-                "GetWindowLongPtrW",
-                user32.GetWindowLongW,
-            )
             set_style = getattr(
                 user32,
                 "SetWindowLongPtrW",
@@ -1204,6 +1303,23 @@ class SpreadsheetAutomationPage(BasePage):
 
             if show:
                 SW_RESTORE = 9
+                SWP_NOMOVE = 0x0002
+                SWP_NOSIZE = 0x0001
+                SWP_NOZORDER = 0x0004
+                SWP_FRAMECHANGED = 0x0020
+
+                user32.SetWindowPos(
+                    ctypes.c_void_p(hwnd),
+                    ctypes.c_void_p(0),
+                    0,
+                    0,
+                    0,
+                    0,
+                    SWP_NOMOVE
+                    | SWP_NOSIZE
+                    | SWP_NOZORDER
+                    | SWP_FRAMECHANGED,
+                )
 
                 user32.ShowWindow(
                     ctypes.c_void_p(hwnd),
@@ -1276,6 +1392,8 @@ class SpreadsheetAutomationPage(BasePage):
             self._embedded_hwnd
             or self._find_tool_window()
         )
+
+        self._destroy_window_container()
 
         if (
             os.name == "nt"
@@ -1362,6 +1480,10 @@ class SpreadsheetAutomationPage(BasePage):
             QTimer.singleShot(
                 0,
                 self._resize_embedded,
+            )
+            QTimer.singleShot(
+                80,
+                self._focus_embedded_window,
             )
 
     def resizeEvent(
