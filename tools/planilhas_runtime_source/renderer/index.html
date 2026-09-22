@@ -49,7 +49,7 @@
         <div class="top-status">
           <span class="dot"></span>
           <span>Chrome em segundo plano</span>
-          <strong>v1.0.4-r3</strong>
+          <strong>v1.0.4-r4</strong>
         </div>
       </header>
 
@@ -98,7 +98,7 @@
               <div class="metric-row"><span>Vídeos processados</span><b id="videoCount">0</b></div>
               <div class="metric-row"><span>Erros</span><b id="errorCount">0</b></div>
               <div class="metric-row"><span>Última linha</span><b id="lastLine">--</b></div>
-              <div class="metric-row"><span>Proxy</span><b id="proxyStatus">--</b></div>
+              <div class="metric-row"><span>Motor</span><b id="summaryMotor">--</b></div>
             </article>
 
             <article class="panel-card news-card">
@@ -121,144 +121,101 @@
           <div class="bottom-status">
             <span class="dot"></span>
             <span id="bottomStatus">Sistema pronto para iniciar.</span>
-            <span class="bottom-version">Versão 1.0.4-r3</span>
+            <span class="bottom-version">Versão 1.0.4-r4</span>
           </div>
         </section>
 
         <section id="config" class="view">
-          <article class="panel-card large-card">
-            <div class="card-title">Configurações</div>
-            <p class="muted">Altere com o motor parado e clique em salvar.</p>
+          <div class="config-scroll">
+            <article class="panel-card large-card config-card">
+              <div class="card-title">Configurações</div>
 
-            <label>
-              Apps Script URL
-              <input
-                id="appsUrl"
-                type="text"
-                autocomplete="off"
-                spellcheck="false"
-                placeholder="Cole aqui a URL publicada do Apps Script"
-              >
-            </label>
+              <p class="muted">
+                As configurações de rede e proxy são controladas exclusivamente
+                pelo Proxy Geral da Central Inteligente de Mídia.
+              </p>
 
-            <div class="proxy-actions">
-              <button
-                id="pasteAppsUrl"
-                class="control primary"
-                type="button"
-              >
-                📋 COLAR DA ÁREA DE TRANSFERÊNCIA
-              </button>
-
-              <span
-                id="appsPasteResult"
-                class="muted"
-              >
-                Você também pode usar Ctrl+V normalmente.
-              </span>
-            </div>
-
-            <div class="form-grid">
               <label>
-                Aba da planilha
+                Apps Script URL
                 <input
-                  id="aba"
+                  id="appsUrl"
                   type="text"
-                  value="Automática pela data da matéria"
-                  disabled
+                  autocomplete="off"
+                  spellcheck="false"
+                  value="https://script.google.com/macros/s/AKfycbz9zWPX0OgVa7obrmqm5WSu1fImaTiyWz0pR3wuc13xl-uCS5KYTF4rhbRitrv26PBh/exec"
                 >
               </label>
+
+              <div class="config-actions">
+                <button
+                  id="pasteAppsUrl"
+                  class="control"
+                  type="button"
+                >
+                  📋 COLAR URL
+                </button>
+
+                <span
+                  id="appsPasteResult"
+                  class="muted"
+                >
+                  A URL padrão já está preenchida.
+                </span>
+              </div>
+
+              <div class="form-grid">
+                <label>
+                  Aba da planilha
+                  <input
+                    id="aba"
+                    type="text"
+                    value="Automática pela data da matéria"
+                    disabled
+                  >
+                </label>
+
+                <label>
+                  Caminho do Chrome (opcional)
+                  <input
+                    id="chrome"
+                    type="text"
+                    placeholder="Deixe vazio para detectar automaticamente"
+                  >
+                </label>
+              </div>
+
+              <p class="muted">
+                A aba é escolhida automaticamente pela data da matéria.
+              </p>
+
+              <div class="card-title config-subtitle">
+                Grupos monitorados
+              </div>
+
+              <p class="muted">
+                Se este campo for apagado e salvo vazio, os três grupos padrão
+                serão restaurados automaticamente.
+              </p>
 
               <label>
-                Caminho do Chrome (opcional)
-                <input
-                  id="chrome"
-                  type="text"
-                  placeholder="Deixe vazio para detectar automaticamente"
-                >
-              </label>
-            </div>
-
-            <p class="muted">
-              A aba é escolhida automaticamente pela data da matéria.
-            </p>
-
-            <div class="card-title config-subtitle">Proxy</div>
-
-            <label class="check">
-              <input id="proxyAtivo" type="checkbox">
-              Usar proxy
-            </label>
-
-            <div class="form-grid">
-              <label>
-                Servidor
-                <input
-                  id="proxyHost"
-                  type="text"
-                  placeholder="proxy-7dn.mb"
-                >
+                IDs dos grupos (um por linha)
+                <textarea id="grupos" rows="8">556191047689-1555547406@g.us
+120363025807487932@g.us
+556192528699-1447447254@g.us</textarea>
               </label>
 
-              <label>
-                Porta
-                <input
-                  id="proxyPorta"
-                  type="number"
-                  placeholder="6060"
-                >
-              </label>
-            </div>
-
-            <div class="form-grid">
-              <label>
-                Usuário
-                <input
-                  id="proxyUsuario"
-                  type="text"
-                  placeholder="Usuário do proxy"
-                >
+              <label class="check">
+                <input id="diag" type="checkbox">
+                Ativar diagnóstico de grupos
               </label>
 
-              <label>
-                Senha
-                <input
-                  id="proxySenha"
-                  type="password"
-                  placeholder="Senha do proxy"
-                >
-              </label>
-            </div>
-
-            <div class="proxy-actions">
-              <button id="testProxy" class="control">
-                TESTAR PROXY
-              </button>
-
-              <span id="proxyTestResult" class="muted">
-                Ainda não testado.
-              </span>
-            </div>
-
-            <p class="muted">
-              Quando aberto pelo Central, o Proxy Geral é controlado pelas
-              Configurações gerais e a senha não é exibida nesta tela.
-            </p>
-
-            <label>
-              IDs dos grupos (um por linha)
-              <textarea id="grupos" rows="7"></textarea>
-            </label>
-
-            <label class="check">
-              <input id="diag" type="checkbox">
-              Ativar diagnóstico de grupos
-            </label>
-
-            <button id="saveCfg" class="control primary">
-              SALVAR CONFIGURAÇÕES
-            </button>
-          </article>
+              <div class="save-row">
+                <button id="saveCfg" class="control primary">
+                  SALVAR CONFIGURAÇÕES
+                </button>
+              </div>
+            </article>
+          </div>
         </section>
 
         <section id="logview" class="view">
@@ -283,11 +240,11 @@
               automaticamente para o Google Planilhas.
             </p>
 
-            <p><strong>Versão 1.0.4-r3</strong></p>
+            <p><strong>Versão 1.0.4-r4</strong></p>
 
             <p class="muted">
-              Autenticação de proxy, teste de conectividade,
-              sessão compartilhada e colagem direta da área de transferência.
+              Proxy gerenciado pela Central, sessão compartilhada e
+              restauração automática da configuração padrão.
             </p>
           </article>
         </section>

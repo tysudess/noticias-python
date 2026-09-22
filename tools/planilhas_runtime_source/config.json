@@ -3,9 +3,9 @@
   "diagnosticoGrupos": false,
   "chromePath": "",
   "proxy": {
-    "ativo": true,
-    "host": "proxy-7dn.mb",
-    "porta": 6060,
+    "ativo": false,
+    "host": "",
+    "porta": 0,
     "usuario": "",
     "senha": ""
   },

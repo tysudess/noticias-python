@@ -4,6 +4,15 @@ const $ = id =>
 const log = $("log");
 let currentConfig = null;
 
+const DEFAULT_APPS_SCRIPT_URL =
+  "https://script.google.com/macros/s/AKfycbz9zWPX0OgVa7obrmqm5WSu1fImaTiyWz0pR3wuc13xl-uCS5KYTF4rhbRitrv26PBh/exec";
+
+const DEFAULT_GROUPS = [
+  "556191047689-1555547406@g.us",
+  "120363025807487932@g.us",
+  "556192528699-1447447254@g.us",
+];
+
 function addLog(
   line,
   isErr = false
@@ -23,6 +32,10 @@ function statusClass(
   el,
   value
 ) {
+  if (!el) {
+    return;
+  }
+
   const v =
     String(
       value || ""
@@ -56,9 +69,6 @@ function showStatus(s) {
   const sheet =
     s.planilha || "-";
 
-  const proxy =
-    s.proxy || "-";
-
   $("statusMotor").textContent =
     motor;
 
@@ -86,9 +96,6 @@ function showStatus(s) {
   $("lastUpdate").textContent =
     s.ultimaAtualizacao || "--";
 
-  $("proxyStatus").textContent =
-    proxy;
-
   $("bottomStatus").textContent =
     motor === "RODANDO"
       ? "Sistema iniciado e monitorando..."
@@ -109,11 +116,6 @@ function showStatus(s) {
   statusClass(
     $("statusSheet"),
     sheet
-  );
-
-  statusClass(
-    $("proxyStatus"),
-    proxy
   );
 
   const n =
@@ -139,6 +141,100 @@ function showStatus(s) {
     n.autor || "--";
 }
 
+function validGroups(groups) {
+  if (!Array.isArray(groups)) {
+    return [];
+  }
+
+  return groups
+    .map(
+      item =>
+        String(item || "")
+          .trim()
+    )
+    .filter(Boolean);
+}
+
+function normalizeConfig(config) {
+  const source =
+    config
+    && typeof config === "object"
+      ? { ...config }
+      : {};
+
+  let changed = false;
+
+  const appsScriptUrl =
+    String(
+      source.appsScriptUrl
+      || ""
+    ).trim();
+
+  if (!appsScriptUrl) {
+    source.appsScriptUrl =
+      DEFAULT_APPS_SCRIPT_URL;
+    changed = true;
+  } else {
+    source.appsScriptUrl =
+      appsScriptUrl;
+  }
+
+  const groups =
+    validGroups(
+      source.grupos
+    );
+
+  if (!groups.length) {
+    source.grupos =
+      [...DEFAULT_GROUPS];
+    changed = true;
+  } else {
+    source.grupos =
+      groups;
+  }
+
+  if (
+    typeof source.diagnosticoGrupos
+    !== "boolean"
+  ) {
+    source.diagnosticoGrupos =
+      false;
+    changed = true;
+  }
+
+  if (
+    typeof source.chromePath
+    !== "string"
+  ) {
+    source.chromePath =
+      "";
+    changed = true;
+  }
+
+  // Mantém o bloco apenas por compatibilidade do runtime.
+  // A interface NÃO exibe nem edita proxy; quando aberto pelo Central,
+  // CENTRAL_PROXY_* continua tendo prioridade no processo principal.
+  if (
+    !source.proxy
+    || typeof source.proxy !== "object"
+    || Array.isArray(source.proxy)
+  ) {
+    source.proxy = {
+      ativo: false,
+      host: "",
+      porta: 0,
+      usuario: "",
+      senha: "",
+    };
+    changed = true;
+  }
+
+  return {
+    config: source,
+    changed,
+  };
+}
+
 function renderGroups(c) {
   const list =
     $("groupList");
@@ -146,7 +242,9 @@ function renderGroups(c) {
   list.innerHTML = "";
 
   const groups =
-    c.grupos || [];
+    validGroups(
+      c.grupos
+    );
 
   groups.forEach(
     (id, idx) => {
@@ -176,12 +274,40 @@ function renderGroups(c) {
 }
 
 async function loadConfig() {
+  const loaded =
+    await window.api
+      .getConfig();
+
+  const normalized =
+    normalizeConfig(
+      loaded
+    );
+
   currentConfig =
-    await window.api.getConfig();
+    normalized.config;
+
+  if (normalized.changed) {
+    const saved =
+      await window.api
+        .saveConfig(
+          currentConfig
+        );
+
+    if (saved?.ok) {
+      addLog(
+        "Configuração padrão restaurada automaticamente: Apps Script e grupos monitorados."
+      );
+    } else {
+      addLog(
+        "Não foi possível salvar automaticamente os padrões da Automação.",
+        true
+      );
+    }
+  }
 
   $("appsUrl").value =
     currentConfig.appsScriptUrl
-    || "";
+    || DEFAULT_APPS_SCRIPT_URL;
 
   $("aba").value =
     "Automática pela data da matéria";
@@ -191,71 +317,12 @@ async function loadConfig() {
     || "";
 
   $("grupos").value =
-    (
+    validGroups(
       currentConfig.grupos
-      || []
     ).join("\n");
 
   $("diag").checked =
     !!currentConfig.diagnosticoGrupos;
-
-  const localProxy =
-    currentConfig.proxy
-    || {};
-
-  const runtimeProxy =
-    currentConfig.runtimeProxy
-    || {};
-
-  const managed =
-    !!runtimeProxy.managedByCentral;
-
-  const p =
-    managed
-      ? runtimeProxy
-      : localProxy;
-
-  $("proxyAtivo").checked =
-    !!p.ativo;
-
-  $("proxyHost").value =
-    p.host || "";
-
-  $("proxyPorta").value =
-    p.porta || "";
-
-  $("proxyUsuario").value =
-    p.usuario || "";
-
-  // Nunca traz a senha do Proxy Geral para o renderer.
-  $("proxySenha").value =
-    managed
-      ? ""
-      : (
-        localProxy.senha
-        || ""
-      );
-
-  for (
-    const id
-    of [
-      "proxyAtivo",
-      "proxyHost",
-      "proxyPorta",
-      "proxyUsuario",
-      "proxySenha",
-    ]
-  ) {
-    $(id).disabled =
-      managed;
-  }
-
-  if (managed) {
-    $("proxyTestResult").textContent =
-      p.ativo
-        ? "Proxy controlado pelas Configurações gerais do Central."
-        : "Proxy Geral do Central está desativado.";
-  }
 
   renderGroups(
     currentConfig
@@ -324,13 +391,23 @@ document
   );
 
 function formConfig() {
+  const groups =
+    $("grupos")
+      .value
+      .split(/\r?\n/)
+      .map(
+        x => x.trim()
+      )
+      .filter(Boolean);
+
   return {
     ...currentConfig,
 
     appsScriptUrl:
       $("appsUrl")
         .value
-        .trim(),
+        .trim()
+      || DEFAULT_APPS_SCRIPT_URL,
 
     chromePath:
       $("chrome")
@@ -341,39 +418,21 @@ function formConfig() {
       $("diag").checked,
 
     grupos:
-      $("grupos")
-        .value
-        .split(/\r?\n/)
-        .map(
-          x => x.trim()
-        )
-        .filter(Boolean),
+      groups.length
+        ? groups
+        : [...DEFAULT_GROUPS],
 
-    proxy: {
-      ativo:
-        $("proxyAtivo")
-          .checked,
-
-      host:
-        $("proxyHost")
-          .value
-          .trim(),
-
-      porta:
-        Number(
-          $("proxyPorta")
-            .value
-        ) || 0,
-
-      usuario:
-        $("proxyUsuario")
-          .value
-          .trim(),
-
-      senha:
-        $("proxySenha")
-          .value,
-    },
+    // O proxy não é editável nesta interface.
+    // Preserva apenas o bloco de compatibilidade já existente.
+    proxy:
+      currentConfig?.proxy
+      || {
+        ativo: false,
+        host: "",
+        porta: 0,
+        usuario: "",
+        senha: "",
+      },
   };
 }
 
@@ -395,7 +454,6 @@ async function pasteAppsScriptUrl() {
     if (!text) {
       feedback.textContent =
         "A área de transferência está vazia.";
-
       field.focus();
       return;
     }
@@ -415,46 +473,11 @@ async function pasteAppsScriptUrl() {
     feedback.textContent =
       "Conteúdo colado com sucesso.";
 
-    addLog(
-      "Apps Script colado a partir da área de transferência."
-    );
-
-  } catch (error) {
+  } catch (_) {
     feedback.textContent =
-      "Não foi possível ler a área de transferência.";
-
-    addLog(
-      `Falha ao colar Apps Script: ${
-        error?.message
-        || error
-      }`,
-      true
-    );
+      "Use Ctrl+V ou mantenha a URL padrão.";
   }
 }
-
-// Mantém Ctrl+V funcionando quando o foco realmente chega ao input.
-// O botão COLAR existe como fallback confiável para o Electron incorporado.
-$("appsUrl").addEventListener(
-  "keydown",
-  event => {
-    if (
-      (
-        event.ctrlKey
-        || event.metaKey
-      )
-      && String(
-        event.key
-      ).toLowerCase()
-        === "v"
-    ) {
-      // Não chama preventDefault:
-      // deixa o Chromium executar o paste nativo.
-      $("appsPasteResult").textContent =
-        "Colando...";
-    }
-  }
-);
 
 $("appsUrl").addEventListener(
   "paste",
@@ -473,20 +496,6 @@ $("pasteAppsUrl")
   .addEventListener(
     "click",
     pasteAppsScriptUrl
-  );
-
-// O click do checkbox agora é tratado explicitamente.
-// Isso evita a sensação de que "não ativou" quando o teste era feito antes
-// de salvar e ainda lia o valor antigo do config.json.
-$("proxyAtivo")
-  .addEventListener(
-    "change",
-    () => {
-      $("proxyTestResult").textContent =
-        $("proxyAtivo").checked
-          ? "Proxy marcado como ativo. Você já pode testar antes de salvar."
-          : "Proxy marcado como desativado.";
-    }
   );
 
 $("start").onclick =
@@ -536,48 +545,10 @@ $("openCfg").onclick =
     window.api
       .openConfigFolder();
 
-$("testProxy").onclick =
-  async () => {
-    const btn =
-      $("testProxy");
-
-    btn.disabled =
-      true;
-
-    $("proxyTestResult").textContent =
-      "Testando proxy...";
-
-    const r =
-      await window.api
-        .testProxy(
-          formConfig()
-        );
-
-    addLog(
-      r.message
-      || "Teste do proxy concluído.",
-      !r.ok
-    );
-
-    $("proxyTestResult").textContent =
-      r.message
-      || "Concluído.";
-
-    btn.disabled =
-      false;
-
-    showStatus(
-      await window.api
-        .getStatus()
-    );
-  };
-
 $("saveCfg").onclick =
   async () => {
     const cfg =
       formConfig();
-
-    delete cfg.aba;
 
     const r =
       await window.api
@@ -587,7 +558,7 @@ $("saveCfg").onclick =
 
     addLog(
       r.ok
-        ? "Configurações salvas. Proxy com autenticação disponível."
+        ? "Configurações salvas."
         : "Falha ao salvar configurações.",
       !r.ok
     );
@@ -595,6 +566,14 @@ $("saveCfg").onclick =
     if (r.ok) {
       currentConfig =
         cfg;
+
+      $("appsUrl").value =
+        cfg.appsScriptUrl;
+
+      $("grupos").value =
+        validGroups(
+          cfg.grupos
+        ).join("\n");
 
       renderGroups(
         cfg
