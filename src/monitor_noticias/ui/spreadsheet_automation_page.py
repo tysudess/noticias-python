@@ -1,50 +1,42 @@
 from __future__ import annotations
 
-import base64
 import ctypes
-import json
 import os
-import shutil
-from datetime import datetime
 from pathlib import Path
 
-from PySide6.QtCore import QProcess, QProcessEnvironment, QTimer, Qt, QUrl
-from PySide6.QtGui import QDesktopServices, QPixmap
+from PySide6.QtCore import (
+    QProcess,
+    QProcessEnvironment,
+    QTimer,
+    Qt,
+)
 from PySide6.QtWidgets import (
-    QCheckBox,
-    QFileDialog,
     QFrame,
     QHBoxLayout,
     QLabel,
-    QLineEdit,
     QMessageBox,
-    QPlainTextEdit,
     QPushButton,
-    QScrollArea,
-    QStackedWidget,
     QVBoxLayout,
     QWidget,
 )
 
-from monitor_noticias.ui.controller import MainUiController, UiState
+from monitor_noticias.ui.controller import (
+    MainUiController,
+)
 from monitor_noticias.ui.pages import BasePage
 
 
-_EVENT_PREFIX = "CENTRAL_EVENT:"
-
-
 class SpreadsheetAutomationPage(BasePage):
-    """Automação WhatsApp -> Google Planilhas integrada ao Central.
+    """Hospeda o AutomacaoPlanilhas Windows Portable v1.0.4.
 
-    A interface é 100% PySide6 e faz parte do mesmo QStackedWidget do programa.
-    Somente o motor Node/whatsapp-web.js roda como processo invisível em segundo
-    plano. A página controla o processo, mostra QR Code, status e logs.
-
-    Regra de rede:
-    - proxy geral do Central DESATIVADO -> conexão direta;
-    - proxy geral do Central ATIVADO -> o motor herda o proxy do Central;
-    - não existe proxy próprio nesta página e nenhuma senha é gravada no JSON.
+    Esta versão remove o motor Node/whatsapp-web.js que foi desenvolvido
+    dentro do Central e usa diretamente o executável standalone fornecido
+    pelo usuário, mantendo o mesmo programa que já funciona separadamente.
     """
+
+    TOOL_EXE = (
+        "AutomacaoPlanilhas-Windows-Portable-v1.0.4.exe"
+    )
 
     def __init__(
         self,
@@ -54,545 +46,575 @@ class SpreadsheetAutomationPage(BasePage):
         super().__init__(controller)
 
         self.app_root = Path(app_root)
-        self.tool_dir = self.app_root / "tools" / "spreadsheet_automation"
-        self.engine_path = self.tool_dir / "engine" / "index.js"
-        self.node_path = self.tool_dir / "node.exe"
-
-        self.runtime_dir = self.app_root / "data" / "spreadsheet_automation"
-        self.runtime_dir.mkdir(parents=True, exist_ok=True)
-        self.config_path = self.runtime_dir / "config.json"
-        self.state_dir = self.runtime_dir / "state"
-        self.auth_dir = self.runtime_dir / "whatsapp-auth"
-        self.log_path = self.app_root / "logs" / "spreadsheet_automation.log"
-        self.log_path.parent.mkdir(parents=True, exist_ok=True)
+        self.tool_dir = (
+            self.app_root
+            / "tools"
+            / "spreadsheet_automation"
+        )
+        self.exe_path = (
+            self.tool_dir
+            / self.TOOL_EXE
+        )
+        self.config_path = (
+            self.tool_dir
+            / "config.json"
+        )
 
         self.process: QProcess | None = None
 
-        # Janela nativa do Chrome/Puppeteer incorporada na aba WhatsApp.
-        self._whatsapp_browser_pid: int | None = None
-        self._whatsapp_browser_hwnd: int | None = None
-        self._whatsapp_embed_attempts = 0
-        self._whatsapp_last_pixmap = None
+        self._embedded_hwnd: int | None = None
+        self._embedded_original_style: int | None = None
+        self._launch_pid: int = 0
+        self._started_once = False
+        self._stopping = False
+        self._poll_count = 0
 
-        self._stdout_buffer = ""
-        self._stderr_buffer = ""
-        self._manual_stop = False
-        self._restart_attempts = 0
-        self._network_signature_at_start: tuple | None = None
+        self._window_timer = QTimer(self)
+        self._window_timer.setInterval(250)
+        self._window_timer.timeout.connect(
+            self._poll_window
+        )
 
-        self.stats = {
-            "motor": "PARADO",
-            "whatsapp": "DESCONHECIDO",
-            "planilha": "AGUARDANDO",
-            "network": "CONEXÃO DIRETA",
-            "processadas": 0,
-            "videos": 0,
-            "erros": 0,
-            "ultima_linha": "--",
-            "ultima_atualizacao": "--",
-        }
-        self.last_news = {
-            "titulo": "Nenhuma notícia processada ainda",
-            "veiculo": "--",
-            "data": "--",
-            "assunto": "--",
-            "analise": "--",
-            "autor": "--",
-            "link": "",
-        }
-
-        self.root.setContentsMargins(0, 0, 0, 0)
+        self.root.setContentsMargins(
+            0,
+            0,
+            0,
+            0,
+        )
         self.root.setSpacing(10)
 
-        self._ensure_config()
         self._build_ui()
-        self._load_config_into_form()
-        self._update_network_preview()
-        self._update_status_ui()
+        self._refresh_availability()
 
-    # ------------------------------------------------------------------
-    # CONFIGURAÇÃO LOCAL (SEM PROXY)
-    # ------------------------------------------------------------------
-
-    @staticmethod
-    def _fallback_config() -> dict:
-        return {
-            "appsScriptUrl": "",
-            "diagnosticoGrupos": False,
-            "chromePath": "",
-            "grupos": [],
-        }
-
-    def _ensure_config(self) -> None:
-        if self.config_path.is_file():
-            return
-
-        default_file = self.tool_dir / "config.default.json"
-
-        if default_file.is_file():
-            try:
-                cfg = json.loads(default_file.read_text(encoding="utf-8"))
-                if isinstance(cfg, dict):
-                    cfg.pop("proxy", None)
-                    self._write_config(cfg)
-                    return
-            except Exception:
-                pass
-
-        self._write_config(self._fallback_config())
-
-    def _read_config(self) -> dict:
-        self._ensure_config()
-
-        try:
-            cfg = json.loads(self.config_path.read_text(encoding="utf-8"))
-            if not isinstance(cfg, dict):
-                raise ValueError("configuração inválida")
-        except Exception:
-            cfg = self._fallback_config()
-
-        # Garante que configurações antigas não mantenham credenciais de proxy.
-        cfg.pop("proxy", None)
-        cfg.setdefault("appsScriptUrl", "")
-        cfg.setdefault("diagnosticoGrupos", False)
-        cfg.setdefault("chromePath", "")
-        cfg.setdefault("grupos", [])
-        return cfg
-
-    def _write_config(self, cfg: dict) -> None:
-        clean = dict(cfg)
-        clean.pop("proxy", None)
-        clean["appsScriptUrl"] = str(clean.get("appsScriptUrl", "")).strip()
-        clean["chromePath"] = str(clean.get("chromePath", "")).strip()
-        clean["diagnosticoGrupos"] = bool(clean.get("diagnosticoGrupos", False))
-        clean["grupos"] = [
-            str(value).strip()
-            for value in (clean.get("grupos", []) or [])
-            if str(value).strip()
-        ]
-
-        self.config_path.parent.mkdir(parents=True, exist_ok=True)
-        temp = self.config_path.with_suffix(".tmp")
-        temp.write_text(
-            json.dumps(clean, ensure_ascii=False, indent=2),
-            encoding="utf-8",
-        )
-        temp.replace(self.config_path)
-
-    # ------------------------------------------------------------------
+    # ----------------------------------------------------------
     # UI
-    # ------------------------------------------------------------------
+    # ----------------------------------------------------------
 
     def _build_ui(self) -> None:
-        nav = QFrame()
-        nav.setObjectName("sheetNav")
-        nav_l = QHBoxLayout(nav)
-        nav_l.setContentsMargins(8, 7, 8, 7)
-        nav_l.setSpacing(7)
-
-        self.nav_buttons: list[QPushButton] = []
-        self.views = QStackedWidget()
-
-        for idx, label in enumerate(("Painel", "WhatsApp", "Configurações", "Log", "Sobre")):
-            btn = QPushButton(label)
-            btn.setObjectName("sheetTab")
-            btn.setCheckable(True)
-            btn.setChecked(idx == 0)
-            btn.clicked.connect(lambda _=False, i=idx: self._set_view(i))
-            nav_l.addWidget(btn)
-            self.nav_buttons.append(btn)
-
-        nav_l.addStretch()
-
-        self.network_chip = QLabel("Rede: conexão direta")
-        self.network_chip.setObjectName("sheetNetworkChip")
-        nav_l.addWidget(self.network_chip)
-
-        self.root.addWidget(nav)
-        self.root.addWidget(self.views, 1)
-
-        self.views.addWidget(self._build_dashboard())
-        self.views.addWidget(self._build_whatsapp())
-        self.views.addWidget(self._build_settings())
-        self.views.addWidget(self._build_log())
-        self.views.addWidget(self._build_about())
-
-        self.setStyleSheet(self._stylesheet())
-
-    def _set_view(self, index: int) -> None:
-        self.views.setCurrentIndex(index)
-        for i, button in enumerate(self.nav_buttons):
-            button.setChecked(i == index)
-
-        # A aba WhatsApp usa a MESMA página controlada pelo whatsapp-web.js.
-        # O motor envia capturas JPEG da página real para dentro do PySide.
-        if index == 1:
-            self._send_engine_command("VIEW_ON")
-            self._send_engine_command("SCREENSHOT")
-        else:
-            self._send_engine_command("VIEW_OFF")
-
-    def _build_dashboard(self) -> QWidget:
-        page = QWidget()
-        layout = QVBoxLayout(page)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(10)
-
-        cards = QHBoxLayout()
-        cards.setSpacing(10)
-
-        self.status_whatsapp = self._status_card(
-            cards,
-            "WhatsApp",
-            "DESCONHECIDO",
-            "Sessão do WhatsApp Web",
-            "◉",
-            "green",
-        )
-        self.status_sheet = self._status_card(
-            cards,
-            "Planilha",
-            "AGUARDANDO",
-            "Conexão com Apps Script",
-            "▦",
-            "blue",
-        )
-        self.status_motor = self._status_card(
-            cards,
-            "Motor",
-            "PARADO",
-            "Monitoramento dos grupos",
-            "▶",
-            "purple",
-        )
-        self.status_network = self._status_card(
-            cards,
-            "Rede",
-            "DIRETA",
-            "Usa o proxy geral do Central quando ativado",
-            "⌁",
-            "orange",
+        top = QFrame()
+        top.setObjectName(
+            "sheetStandaloneHeader"
         )
 
-        layout.addLayout(cards)
-
-        self.qr_frame = QFrame()
-        self.qr_frame.setObjectName("sheetQrCard")
-        qr_l = QHBoxLayout(self.qr_frame)
-        qr_l.setContentsMargins(16, 12, 16, 12)
-        qr_l.setSpacing(18)
-
-        self.qr_image = QLabel("QR")
-        self.qr_image.setObjectName("sheetQrImage")
-        self.qr_image.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.qr_image.setFixedSize(190, 190)
-        qr_l.addWidget(self.qr_image)
-
-        qr_text = QVBoxLayout()
-        qr_title = QLabel("Autenticação do WhatsApp")
-        qr_title.setObjectName("sheetSectionTitle")
-        qr_help = QLabel(
-            "Abra WhatsApp → Aparelhos conectados → Conectar aparelho e leia este QR Code. "
-            "Depois da primeira autenticação, a sessão fica salva dentro do Central."
+        top_l = QHBoxLayout(top)
+        top_l.setContentsMargins(
+            14,
+            10,
+            14,
+            10,
         )
-        qr_help.setObjectName("sheetMuted")
-        qr_help.setWordWrap(True)
-        self.qr_status = QLabel("Aguardando o motor solicitar autenticação.")
-        self.qr_status.setObjectName("sheetInfoStrip")
-        qr_text.addWidget(qr_title)
-        qr_text.addWidget(qr_help)
-        qr_text.addWidget(self.qr_status)
-        qr_text.addStretch()
-        qr_l.addLayout(qr_text, 1)
+        top_l.setSpacing(8)
 
-        self.qr_frame.hide()
-        layout.addWidget(self.qr_frame)
+        text_box = QVBoxLayout()
+        text_box.setSpacing(2)
 
-        content = QHBoxLayout()
-        content.setSpacing(10)
-
-        groups_card = QFrame()
-        groups_card.setObjectName("sheetCard")
-        gl = QVBoxLayout(groups_card)
-        gl.setContentsMargins(14, 12, 14, 12)
-        gl.setSpacing(8)
-        gl.addWidget(self._section_title("Grupos monitorados"))
-
-        self.groups_box = QVBoxLayout()
-        self.groups_box.setSpacing(6)
-        gl.addLayout(self.groups_box)
-        gl.addStretch()
-        self.group_total = QLabel("Total: 0 grupos")
-        self.group_total.setObjectName("sheetGreenText")
-        gl.addWidget(self.group_total)
-        content.addWidget(groups_card, 1)
-
-        summary_card = QFrame()
-        summary_card.setObjectName("sheetCard")
-        sl = QVBoxLayout(summary_card)
-        sl.setContentsMargins(14, 12, 14, 12)
-        sl.setSpacing(4)
-        sl.addWidget(self._section_title("Resumo geral"))
-        self.metric_processadas = self._metric_row(sl, "Mensagens processadas", "0", True)
-        self.metric_update = self._metric_row(sl, "Última atualização", "--")
-        self.metric_videos = self._metric_row(sl, "Vídeos processados", "0")
-        self.metric_errors = self._metric_row(sl, "Erros", "0")
-        self.metric_line = self._metric_row(sl, "Última linha", "--")
-        self.metric_network = self._metric_row(sl, "Rede", "Conexão direta")
-        sl.addStretch()
-        content.addWidget(summary_card, 1)
-
-        news_card = QFrame()
-        news_card.setObjectName("sheetCard")
-        nl = QVBoxLayout(news_card)
-        nl.setContentsMargins(14, 12, 14, 12)
-        nl.setSpacing(5)
-        nl.addWidget(self._section_title("Última notícia processada"))
-
-        self.last_title = self._news_field(nl, "Título", "Nenhuma notícia processada ainda", strong=True)
-        two = QHBoxLayout()
-        self.last_vehicle = self._small_field(two, "Veículo", "--")
-        self.last_date = self._small_field(two, "Data", "--")
-        nl.addLayout(two)
-        two2 = QHBoxLayout()
-        self.last_subject = self._small_field(two2, "Assunto", "--")
-        self.last_analysis = self._small_field(two2, "Análise", "--")
-        nl.addLayout(two2)
-        self.last_author = self._news_field(nl, "Autor", "--")
-        self.last_link = self._news_field(nl, "Link", "--")
-        nl.addStretch()
-        content.addWidget(news_card, 2)
-
-        layout.addLayout(content, 1)
-
-        controls = QFrame()
-        controls.setObjectName("sheetControls")
-        ctl = QHBoxLayout(controls)
-        ctl.setContentsMargins(10, 9, 10, 9)
-        ctl.setSpacing(8)
-
-        self.start_btn = QPushButton("▶  INICIAR")
-        self.start_btn.setObjectName("sheetPrimary")
-        self.start_btn.clicked.connect(self.start_engine)
-        ctl.addWidget(self.start_btn)
-
-        self.stop_btn = QPushButton("■  PARAR")
-        self.stop_btn.setObjectName("sheetDanger")
-        self.stop_btn.clicked.connect(self.stop_engine)
-        self.stop_btn.setEnabled(False)
-        ctl.addWidget(self.stop_btn)
-
-        self.restart_btn = QPushButton("↻  REINICIAR")
-        self.restart_btn.setObjectName("sheetSecondary")
-        self.restart_btn.clicked.connect(self.restart_engine)
-        ctl.addWidget(self.restart_btn)
-
-        log_btn = QPushButton("▤  ABRIR LOG")
-        log_btn.setObjectName("sheetSecondary")
-        log_btn.clicked.connect(lambda: self._set_view(3))
-        ctl.addWidget(log_btn)
-
-        folder_btn = QPushButton("▣  ABRIR PASTA")
-        folder_btn.setObjectName("sheetSecondary")
-        folder_btn.clicked.connect(self._open_runtime_folder)
-        ctl.addWidget(folder_btn)
-
-        layout.addWidget(controls)
-
-        self.dashboard_status = QLabel("Sistema pronto para iniciar.")
-        self.dashboard_status.setObjectName("sheetBottomStatus")
-        layout.addWidget(self.dashboard_status)
-
-        return page
-
-    def _build_whatsapp(self) -> QWidget:
-        page = QWidget()
-        layout = QVBoxLayout(page)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(10)
-
-        card = QFrame()
-        card.setObjectName("sheetCard")
-        cl = QVBoxLayout(card)
-        cl.setContentsMargins(14, 12, 14, 12)
-        cl.setSpacing(10)
-
-        head = QHBoxLayout()
-
-        title_box = QVBoxLayout()
-        title_box.setSpacing(2)
-
-        title = QLabel("WhatsApp Web")
-        title.setObjectName("sheetSectionTitle")
+        title = QLabel(
+            "Automação de Planilhas"
+        )
+        title.setObjectName(
+            "sheetStandaloneTitle"
+        )
 
         subtitle = QLabel(
-            "Visualização da mesma sessão usada pela Automação de Planilhas. "
-            "Se aparecer o QR Code aqui, leia com WhatsApp → Aparelhos conectados."
+            "Executando o AutomacaoPlanilhas "
+            "Windows Portable v1.0.4 original."
         )
-        subtitle.setObjectName("sheetMuted")
-        subtitle.setWordWrap(True)
-
-        title_box.addWidget(title)
-        title_box.addWidget(subtitle)
-        head.addLayout(title_box, 1)
-
-        self.whatsapp_view_status = QLabel("Motor parado")
-        self.whatsapp_view_status.setObjectName("sheetInfoStrip")
-        head.addWidget(self.whatsapp_view_status)
-
-        cl.addLayout(head)
-
-        controls = QHBoxLayout()
-        controls.setSpacing(8)
-
-        self.whatsapp_start_btn = QPushButton("▶  INICIAR WHATSAPP")
-        self.whatsapp_start_btn.setObjectName("sheetPrimary")
-        self.whatsapp_start_btn.clicked.connect(self._open_whatsapp_tab)
-        controls.addWidget(self.whatsapp_start_btn)
-
-        refresh = QPushButton("↻  ATUALIZAR TELA")
-        refresh.setObjectName("sheetSecondary")
-        refresh.clicked.connect(
-            lambda: self._send_engine_command("SCREENSHOT")
+        subtitle.setObjectName(
+            "sheetStandaloneMuted"
         )
-        controls.addWidget(refresh)
 
-        reload_btn = QPushButton("⟳  RECARREGAR WHATSAPP")
-        reload_btn.setObjectName("sheetSecondary")
-        reload_btn.clicked.connect(
-            lambda: self._send_engine_command("RELOAD_WHATSAPP")
+        text_box.addWidget(title)
+        text_box.addWidget(subtitle)
+
+        top_l.addLayout(
+            text_box,
+            1,
         )
-        controls.addWidget(reload_btn)
 
-        self.whatsapp_reset_btn = QPushButton("⚠  RECRIAR SESSÃO / QR")
-        self.whatsapp_reset_btn.setObjectName("sheetDanger")
-        self.whatsapp_reset_btn.setToolTip(
-            "Fecha somente o Chrome da automação, remove a sessão local "
-            "corrompida e cria uma sessão limpa para gerar novo QR."
+        self.status_chip = QLabel(
+            "Preparando..."
         )
-        self.whatsapp_reset_btn.clicked.connect(
-            self._reset_whatsapp_session
+        self.status_chip.setObjectName(
+            "sheetStandaloneStatus"
         )
-        controls.addWidget(self.whatsapp_reset_btn)
-
-        controls.addStretch()
-        cl.addLayout(controls)
-
-        self.whatsapp_browser_stack = QStackedWidget()
-        self.whatsapp_browser_stack.setMinimumHeight(520)
-
-        self.whatsapp_preview = QLabel(
-            "Inicie a Automação de Planilhas.\n"
-            "A janela REAL do Chrome/WhatsApp será incorporada aqui."
+        top_l.addWidget(
+            self.status_chip
         )
-        self.whatsapp_preview.setObjectName("sheetWhatsappPreview")
-        self.whatsapp_preview.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.whatsapp_preview.setWordWrap(True)
 
-        self.whatsapp_browser_host = QFrame()
-        self.whatsapp_browser_host.setObjectName("sheetWhatsappBrowserHost")
-        self.whatsapp_browser_host.setAttribute(
+        self.start_btn = QPushButton(
+            "▶  INICIAR"
+        )
+        self.start_btn.setObjectName(
+            "sheetStandalonePrimary"
+        )
+        self.start_btn.clicked.connect(
+            self.start_tool
+        )
+        top_l.addWidget(
+            self.start_btn
+        )
+
+        self.reembed_btn = QPushButton(
+            "▣  INTEGRAR"
+        )
+        self.reembed_btn.setObjectName(
+            "sheetStandaloneSecondary"
+        )
+        self.reembed_btn.clicked.connect(
+            self._force_reembed
+        )
+        top_l.addWidget(
+            self.reembed_btn
+        )
+
+        self.external_btn = QPushButton(
+            "↗  ABRIR FORA"
+        )
+        self.external_btn.setObjectName(
+            "sheetStandaloneSecondary"
+        )
+        self.external_btn.clicked.connect(
+            self.open_external
+        )
+        top_l.addWidget(
+            self.external_btn
+        )
+
+        self.restart_btn = QPushButton(
+            "↻  REINICIAR"
+        )
+        self.restart_btn.setObjectName(
+            "sheetStandaloneSecondary"
+        )
+        self.restart_btn.clicked.connect(
+            self.restart_tool
+        )
+        top_l.addWidget(
+            self.restart_btn
+        )
+
+        self.stop_btn = QPushButton(
+            "■  ENCERRAR"
+        )
+        self.stop_btn.setObjectName(
+            "sheetStandaloneDanger"
+        )
+        self.stop_btn.clicked.connect(
+            self.stop_tool
+        )
+        top_l.addWidget(
+            self.stop_btn
+        )
+
+        self.root.addWidget(top)
+
+        self.browser_host = QFrame()
+        self.browser_host.setObjectName(
+            "sheetStandaloneHost"
+        )
+        self.browser_host.setAttribute(
             Qt.WidgetAttribute.WA_NativeWindow,
             True,
         )
-        self.whatsapp_browser_host.setMinimumHeight(520)
 
-        self.whatsapp_browser_stack.addWidget(self.whatsapp_preview)
-        self.whatsapp_browser_stack.addWidget(self.whatsapp_browser_host)
-        self.whatsapp_browser_stack.setCurrentWidget(self.whatsapp_preview)
-
-        cl.addWidget(self.whatsapp_browser_stack, 1)
-
-        help_box = QLabel(
-            "O Chrome acima é a MESMA janela usada pelo whatsapp-web.js, "
-            "incorporada dentro do Central. Não é uma segunda sessão e não "
-            "deve abrir como janela separada no desktop."
+        host_l = QVBoxLayout(
+            self.browser_host
         )
-        help_box.setObjectName("sheetMuted")
-        help_box.setWordWrap(True)
-        cl.addWidget(help_box)
-
-        layout.addWidget(card, 1)
-        return page
-
-    def _open_whatsapp_tab(self) -> None:
-        if not self._is_running():
-            self.start_engine()
-
-        self._set_view(1)
-
-        # Dá tempo para o Chromium ser criado antes do primeiro frame.
-        QTimer.singleShot(
-            1000,
-            lambda: self._send_engine_command("SCREENSHOT"),
+        host_l.setContentsMargins(
+            0,
+            0,
+            0,
+            0,
         )
 
-    def _reset_whatsapp_session(self) -> None:
-        answer = QMessageBox.question(
-            self,
-            "Recriar sessão do WhatsApp",
-            "O WhatsApp Web informou erro no banco de dados do navegador.\n\n"
-            "Esta ação encerra somente o Chrome usado pela Automação de "
-            "Planilhas, apaga o perfil local dessa sessão e cria um novo QR.\n\n"
-            "Deseja continuar?",
-            QMessageBox.StandardButton.Yes
-            | QMessageBox.StandardButton.No,
-            QMessageBox.StandardButton.Yes,
+        self.placeholder = QLabel(
+            "Automação de Planilhas v1.0.4\n\n"
+            "Aguardando o aplicativo iniciar..."
+        )
+        self.placeholder.setObjectName(
+            "sheetStandalonePlaceholder"
+        )
+        self.placeholder.setAlignment(
+            Qt.AlignmentFlag.AlignCenter
+        )
+        self.placeholder.setWordWrap(
+            True
+        )
+        host_l.addWidget(
+            self.placeholder,
+            1,
         )
 
-        if answer != QMessageBox.StandardButton.Yes:
+        self.root.addWidget(
+            self.browser_host,
+            1,
+        )
+
+        note = QLabel(
+            "Esta aba usa exatamente o executável standalone enviado, "
+            "sem o motor Node/WhatsApp desenvolvido anteriormente no Central. "
+            "Se a incorporação da janela não funcionar em algum computador, "
+            "use “ABRIR FORA”: o aplicativo continua sendo o mesmo."
+        )
+        note.setObjectName(
+            "sheetStandaloneMuted"
+        )
+        note.setWordWrap(True)
+        self.root.addWidget(note)
+
+        self.setStyleSheet(
+            """
+            QFrame#sheetStandaloneHeader {
+                background:#FFFFFF;
+                border:1px solid #C9DDF2;
+                border-radius:10px;
+            }
+
+            QLabel#sheetStandaloneTitle {
+                color:#08245F;
+                font-size:18px;
+                font-weight:900;
+            }
+
+            QLabel#sheetStandaloneMuted {
+                color:#6079A5;
+                font-size:10px;
+                font-weight:600;
+            }
+
+            QLabel#sheetStandaloneStatus {
+                background:#EAF9F2;
+                color:#087D59;
+                border:1px solid #BFE8D4;
+                border-radius:8px;
+                padding:8px 11px;
+                font-size:10px;
+                font-weight:900;
+            }
+
+            QPushButton#sheetStandalonePrimary {
+                background:#0A7DF8;
+                color:#FFFFFF;
+                border:0;
+                border-radius:8px;
+                padding:9px 14px;
+                font-weight:900;
+            }
+
+            QPushButton#sheetStandaloneSecondary {
+                background:#FFFFFF;
+                color:#0C3974;
+                border:1px solid #C9DDF2;
+                border-radius:8px;
+                padding:9px 12px;
+                font-weight:800;
+            }
+
+            QPushButton#sheetStandaloneDanger {
+                background:#FFF0F3;
+                color:#D92F55;
+                border:1px solid #FFB4C4;
+                border-radius:8px;
+                padding:9px 12px;
+                font-weight:900;
+            }
+
+            QFrame#sheetStandaloneHost {
+                background:#F4F8FD;
+                border:1px solid #C9DDF2;
+                border-radius:10px;
+            }
+
+            QLabel#sheetStandalonePlaceholder {
+                background:#F4F8FD;
+                color:#6079A5;
+                font-size:14px;
+                font-weight:800;
+                padding:30px;
+            }
+
+            QPushButton:disabled {
+                color:#9DABBC;
+                background:#F1F4F8;
+            }
+            """
+        )
+
+    # ----------------------------------------------------------
+    # Ciclo do aplicativo standalone
+    # ----------------------------------------------------------
+
+    def _refresh_availability(self) -> None:
+        available = (
+            self.exe_path.is_file()
+            and self.config_path.is_file()
+        )
+
+        self.start_btn.setEnabled(
+            available
+        )
+
+        if available:
+            if self._embedded_hwnd:
+                self.status_chip.setText(
+                    "Integrado ao Central"
+                )
+            elif self._is_tool_window_alive():
+                self.status_chip.setText(
+                    "Executando"
+                )
+            else:
+                self.status_chip.setText(
+                    "Pronto"
+                )
+        else:
+            self.status_chip.setText(
+                "Arquivos ausentes"
+            )
+            self.placeholder.setText(
+                "O AutomacaoPlanilhas v1.0.4 não foi encontrado.\n\n"
+                "Esperado em:\n"
+                f"{self.exe_path}"
+            )
+
+    def start_tool(self) -> None:
+        if not self.exe_path.is_file():
+            QMessageBox.warning(
+                self,
+                "Automação de Planilhas",
+                "O executável standalone não foi encontrado:\n"
+                f"{self.exe_path}",
+            )
             return
 
-        self._detach_embedded_browser()
+        # Se já existir uma janela do aplicativo, apenas incorpora novamente.
+        existing = self._find_tool_window()
 
-        self.whatsapp_view_status.setText(
-            "Recriando sessão limpa do WhatsApp..."
-        )
-        self.whatsapp_browser_stack.setCurrentWidget(
-            self.whatsapp_preview
-        )
-        self.whatsapp_preview.clear()
-        self.whatsapp_preview.setText(
-            "Limpando o banco local do WhatsApp Web...\n"
-            "Um novo QR Code será criado automaticamente."
-        )
-
-        self._send_engine_command("RESET_AUTH")
-
-    def _detach_embedded_browser(self) -> None:
-        hwnd = self._whatsapp_browser_hwnd
-        self._whatsapp_browser_hwnd = None
-        self._whatsapp_browser_pid = None
-        self._whatsapp_embed_attempts = 0
+        if existing:
+            self._embed_window(existing)
+            return
 
         if (
-            os.name != "nt"
-            or not hwnd
+            self.process is not None
+            and self.process.state()
+            != QProcess.ProcessState.NotRunning
         ):
+            self._start_window_poll()
             return
 
+        self._stopping = False
+        self._poll_count = 0
+
+        self.placeholder.show()
+        self.placeholder.setText(
+            "Iniciando AutomacaoPlanilhas v1.0.4...\n\n"
+            "A primeira abertura pode levar alguns segundos."
+        )
+
+        process = QProcess(self)
+        process.setWorkingDirectory(
+            str(self.tool_dir)
+        )
+        process.setProcessEnvironment(
+            QProcessEnvironment.systemEnvironment()
+        )
+
+        process.started.connect(
+            self._process_started
+        )
+        process.errorOccurred.connect(
+            self._process_error
+        )
+        process.finished.connect(
+            self._process_finished
+        )
+
+        self.process = process
+
+        process.start(
+            str(self.exe_path),
+            [],
+        )
+
+        self.status_chip.setText(
+            "Iniciando..."
+        )
+
+    def _process_started(self) -> None:
+        if self.process is not None:
+            self._launch_pid = int(
+                self.process.processId()
+                or 0
+            )
+
+        self.status_chip.setText(
+            "Localizando janela..."
+        )
+        self._start_window_poll()
+
+    def _process_error(
+        self,
+        _error,
+    ) -> None:
+        if self._stopping:
+            return
+
+        message = (
+            self.process.errorString()
+            if self.process is not None
+            else "Erro desconhecido."
+        )
+
+        self.status_chip.setText(
+            "Erro ao iniciar"
+        )
+        self.placeholder.setText(
+            "Não foi possível iniciar a Automação de Planilhas.\n\n"
+            + message
+        )
+
+    def _process_finished(
+        self,
+        _exit_code: int,
+        _exit_status,
+    ) -> None:
+        # O Electron Portable/NSIS pode encerrar o processo lançador e manter
+        # o processo real aberto. Por isso não consideramos o aplicativo
+        # encerrado até confirmar que a janela desapareceu.
+        self.process = None
+
+        if self._stopping:
+            return
+
+        QTimer.singleShot(
+            500,
+            self._poll_window,
+        )
+
+    def _start_window_poll(self) -> None:
+        if not self._window_timer.isActive():
+            self._window_timer.start()
+
+        self._poll_window()
+
+    def _poll_window(self) -> None:
+        hwnd = self._embedded_hwnd
+
+        if hwnd and self._is_window(hwnd):
+            self._resize_embedded()
+            return
+
+        if hwnd:
+            self._embedded_hwnd = None
+            self._embedded_original_style = None
+
+        candidate = self._find_tool_window()
+
+        if candidate:
+            self._embed_window(candidate)
+            self._window_timer.stop()
+            return
+
+        self._poll_count += 1
+
+        if self._poll_count > 240:
+            self._window_timer.stop()
+            self.status_chip.setText(
+                "Janela não localizada"
+            )
+            self.placeholder.setText(
+                "O aplicativo foi iniciado, mas a janela não pôde ser "
+                "incorporada automaticamente.\n\n"
+                "Clique em “ABRIR FORA” para usá-lo como janela normal."
+            )
+
+    # ----------------------------------------------------------
+    # Win32: encontra e incorpora o Electron inteiro
+    # ----------------------------------------------------------
+
+    @staticmethod
+    def _is_window(hwnd: int) -> bool:
+        if os.name != "nt" or not hwnd:
+            return False
+
         try:
-            user32 = ctypes.windll.user32
-            if user32.IsWindow(hwnd):
-                # O processo Node normalmente destruirá esta janela logo em
-                # seguida. Reparent para o desktop antes, evitando prender um
-                # HWND antigo ao widget Qt.
-                user32.SetParent(
-                    ctypes.c_void_p(hwnd),
-                    ctypes.c_void_p(0),
+            return bool(
+                ctypes.windll.user32.IsWindow(
+                    ctypes.c_void_p(hwnd)
                 )
+            )
+        except Exception:
+            return False
+
+    @staticmethod
+    def _normalize(text: str) -> str:
+        return (
+            str(text)
+            .lower()
+            .replace("ç", "c")
+            .replace("ã", "a")
+            .replace("á", "a")
+            .replace("à", "a")
+            .replace("â", "a")
+            .replace("é", "e")
+            .replace("ê", "e")
+            .replace("í", "i")
+            .replace("ó", "o")
+            .replace("ô", "o")
+            .replace("õ", "o")
+            .replace("ú", "u")
+        )
+
+    def _process_image_path(
+        self,
+        pid: int,
+    ) -> str:
+        if os.name != "nt" or pid <= 0:
+            return ""
+
+        PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+
+        try:
+            kernel32 = ctypes.windll.kernel32
+
+            handle = kernel32.OpenProcess(
+                PROCESS_QUERY_LIMITED_INFORMATION,
+                False,
+                int(pid),
+            )
+
+            if not handle:
+                return ""
+
+            try:
+                size = ctypes.c_ulong(32768)
+                buffer = ctypes.create_unicode_buffer(
+                    size.value
+                )
+
+                if kernel32.QueryFullProcessImageNameW(
+                    handle,
+                    0,
+                    buffer,
+                    ctypes.byref(size),
+                ):
+                    return buffer.value
+            finally:
+                kernel32.CloseHandle(handle)
+
         except Exception:
             pass
 
-    def _find_chrome_hwnd(
-        self,
-        pid: int,
-    ) -> int | None:
-        if os.name != "nt" or pid <= 0:
+        return ""
+
+    def _find_tool_window(self) -> int | None:
+        if os.name != "nt":
             return None
 
         user32 = ctypes.windll.user32
-        matches: list[int] = []
+        candidates: list[
+            tuple[int, int, int]
+        ] = []
 
         EnumWindowsProc = ctypes.WINFUNCTYPE(
             ctypes.c_bool,
@@ -602,82 +624,181 @@ class SpreadsheetAutomationPage(BasePage):
 
         @EnumWindowsProc
         def callback(hwnd, _lparam):
-            process_id = ctypes.c_ulong(0)
+            try:
+                if not user32.IsWindowVisible(hwnd):
+                    return True
 
-            user32.GetWindowThreadProcessId(
-                hwnd,
-                ctypes.byref(process_id),
-            )
+                title_len = user32.GetWindowTextLengthW(
+                    hwnd
+                )
 
-            if int(process_id.value) != int(pid):
-                return True
+                title_buffer = ctypes.create_unicode_buffer(
+                    max(2, title_len + 1)
+                )
 
-            class_buffer = ctypes.create_unicode_buffer(256)
-            user32.GetClassNameW(
-                hwnd,
-                class_buffer,
-                256,
-            )
-            class_name = class_buffer.value
+                user32.GetWindowTextW(
+                    hwnd,
+                    title_buffer,
+                    len(title_buffer),
+                )
 
-            # A janela principal do Chrome/Edge baseada em Chromium.
-            if class_name.startswith("Chrome_WidgetWin"):
-                matches.append(int(hwnd))
-                return False
+                title = title_buffer.value.strip()
+
+                class_buffer = ctypes.create_unicode_buffer(
+                    256
+                )
+
+                user32.GetClassNameW(
+                    hwnd,
+                    class_buffer,
+                    256,
+                )
+
+                class_name = (
+                    class_buffer.value
+                )
+
+                pid = ctypes.c_ulong(0)
+
+                user32.GetWindowThreadProcessId(
+                    hwnd,
+                    ctypes.byref(pid),
+                )
+
+                pid_value = int(
+                    pid.value
+                )
+
+                image = (
+                    self._process_image_path(
+                        pid_value
+                    )
+                )
+
+                normalized_title = (
+                    self._normalize(title)
+                )
+                normalized_image = (
+                    self._normalize(image)
+                )
+
+                # Nunca captura a própria janela do Central.
+                if (
+                    "central inteligente de midia"
+                    in normalized_title
+                ):
+                    return True
+
+                score = 0
+
+                if (
+                    "automacao planilhas"
+                    in normalized_title
+                ):
+                    score += 220
+
+                if (
+                    "automacao"
+                    in normalized_title
+                    and "planilha"
+                    in normalized_title
+                ):
+                    score += 180
+
+                if (
+                    "whatsapp"
+                    in normalized_title
+                    and "planilha"
+                    in normalized_title
+                ):
+                    score += 150
+
+                if (
+                    "automacao"
+                    in normalized_image
+                    and "planilha"
+                    in normalized_image
+                ):
+                    score += 200
+
+                if class_name.startswith(
+                    "Chrome_WidgetWin"
+                ):
+                    score += 25
+
+                if (
+                    self._launch_pid
+                    and pid_value
+                    == self._launch_pid
+                ):
+                    score += 80
+
+                if score < 150:
+                    return True
+
+                rect = ctypes.wintypes.RECT()
+
+                area = 0
+
+                if user32.GetWindowRect(
+                    hwnd,
+                    ctypes.byref(rect),
+                ):
+                    area = max(
+                        0,
+                        (
+                            rect.right
+                            - rect.left
+                        )
+                        * (
+                            rect.bottom
+                            - rect.top
+                        ),
+                    )
+
+                candidates.append(
+                    (
+                        score,
+                        area,
+                        int(hwnd),
+                    )
+                )
+
+            except Exception:
+                pass
 
             return True
+
+        # wintypes nem sempre vem anexado automaticamente ao ctypes.
+        from ctypes import wintypes
+        ctypes.wintypes = wintypes
 
         user32.EnumWindows(
             callback,
             0,
         )
 
-        return matches[0] if matches else None
+        if not candidates:
+            return None
 
-    def _embed_browser_pid(
+        candidates.sort(
+            reverse=True
+        )
+
+        return candidates[0][2]
+
+    def _embed_window(
         self,
-        pid: int,
+        hwnd: int,
     ) -> None:
         if os.name != "nt":
-            self.whatsapp_view_status.setText(
-                "A incorporação do Chrome é exclusiva do Windows."
-            )
-            return
-
-        self._whatsapp_browser_pid = int(pid)
-        self._whatsapp_embed_attempts = 0
-
-        self._try_embed_browser()
-
-    def _try_embed_browser(self) -> None:
-        pid = self._whatsapp_browser_pid
-
-        if not pid:
-            return
-
-        hwnd = self._find_chrome_hwnd(pid)
-
-        if not hwnd:
-            self._whatsapp_embed_attempts += 1
-
-            if self._whatsapp_embed_attempts <= 40:
-                QTimer.singleShot(
-                    250,
-                    self._try_embed_browser,
-                )
-            else:
-                self.whatsapp_view_status.setText(
-                    "Chrome iniciado, mas a janela não pôde ser incorporada."
-                )
             return
 
         try:
             user32 = ctypes.windll.user32
 
-            # GWL_STYLE
             GWL_STYLE = -16
 
-            # Win32 styles.
             WS_CHILD = 0x40000000
             WS_VISIBLE = 0x10000000
             WS_POPUP = 0x80000000
@@ -686,15 +807,6 @@ class SpreadsheetAutomationPage(BasePage):
             WS_MINIMIZEBOX = 0x00020000
             WS_MAXIMIZEBOX = 0x00010000
             WS_SYSMENU = 0x00080000
-
-            SWP_NOZORDER = 0x0004
-            SWP_NOACTIVATE = 0x0010
-            SWP_FRAMECHANGED = 0x0020
-            SW_SHOW = 5
-
-            host_hwnd = int(
-                self.whatsapp_browser_host.winId()
-            )
 
             get_style = getattr(
                 user32,
@@ -714,6 +826,10 @@ class SpreadsheetAutomationPage(BasePage):
                 )
             )
 
+            self._embedded_original_style = (
+                style
+            )
+
             style &= ~(
                 WS_POPUP
                 | WS_CAPTION
@@ -722,6 +838,7 @@ class SpreadsheetAutomationPage(BasePage):
                 | WS_MAXIMIZEBOX
                 | WS_SYSMENU
             )
+
             style |= (
                 WS_CHILD
                 | WS_VISIBLE
@@ -733,1182 +850,312 @@ class SpreadsheetAutomationPage(BasePage):
                 style,
             )
 
-            ctypes.set_last_error(0)
-            user32.SetParent(
+            host_hwnd = int(
+                self.browser_host.winId()
+            )
+
+            result = user32.SetParent(
                 ctypes.c_void_p(hwnd),
                 ctypes.c_void_p(host_hwnd),
             )
 
-            user32.SetWindowPos(
-                ctypes.c_void_p(hwnd),
-                ctypes.c_void_p(0),
-                0,
-                0,
-                max(
-                    1,
-                    self.whatsapp_browser_host.width(),
-                ),
-                max(
-                    1,
-                    self.whatsapp_browser_host.height(),
-                ),
-                SWP_NOZORDER
-                | SWP_NOACTIVATE
-                | SWP_FRAMECHANGED,
+            # SetParent pode retornar 0 tanto em falha quanto quando o parent
+            # anterior era desktop. Confirmamos pelo parent atual.
+            parent_now = user32.GetParent(
+                ctypes.c_void_p(hwnd)
             )
 
-            user32.ShowWindow(
-                ctypes.c_void_p(hwnd),
-                SW_SHOW,
+            if int(parent_now or 0) != host_hwnd:
+                raise RuntimeError(
+                    "O Windows não aceitou incorporar a janela."
+                )
+
+            self._embedded_hwnd = (
+                int(hwnd)
             )
 
-            self._whatsapp_browser_hwnd = hwnd
-            self.whatsapp_browser_stack.setCurrentWidget(
-                self.whatsapp_browser_host
-            )
-            self.whatsapp_view_status.setText(
-                "WhatsApp Web incorporado ao Central"
+            self.placeholder.hide()
+            self.status_chip.setText(
+                "Integrado ao Central"
             )
 
-            self._resize_embedded_browser()
+            self._resize_embedded()
 
         except Exception as exc:
-            self.whatsapp_view_status.setText(
-                f"Falha ao incorporar Chrome: {exc}"
-            )
-            self._append_log(
-                f"Falha ao incorporar Chrome dentro do Central: {exc}",
-                True,
+            self._embedded_hwnd = None
+
+            self.status_chip.setText(
+                "Executando fora"
             )
 
-    def _resize_embedded_browser(self) -> None:
-        hwnd = self._whatsapp_browser_hwnd
+            self.placeholder.show()
+            self.placeholder.setText(
+                "A Automação de Planilhas está funcionando, mas o Windows "
+                "não permitiu incorporar a janela.\n\n"
+                f"Detalhe: {exc}\n\n"
+                "Use “ABRIR FORA”."
+            )
+
+    def _resize_embedded(self) -> None:
+        hwnd = self._embedded_hwnd
 
         if (
             os.name != "nt"
             or not hwnd
+            or not self._is_window(hwnd)
         ):
             return
 
         try:
-            user32 = ctypes.windll.user32
-
-            if not user32.IsWindow(
-                ctypes.c_void_p(hwnd)
-            ):
-                self._whatsapp_browser_hwnd = None
-                return
-
-            user32.MoveWindow(
+            ctypes.windll.user32.MoveWindow(
                 ctypes.c_void_p(hwnd),
                 0,
                 0,
                 max(
                     1,
-                    self.whatsapp_browser_host.width(),
+                    self.browser_host.width()
                 ),
                 max(
                     1,
-                    self.whatsapp_browser_host.height(),
+                    self.browser_host.height()
                 ),
                 True,
             )
         except Exception:
             pass
 
-    def _send_engine_command(self, command: str) -> None:
-        if not self._is_running() or self.process is None:
+    def _detach_window(
+        self,
+        *,
+        show: bool,
+    ) -> None:
+        hwnd = (
+            self._embedded_hwnd
+            or self._find_tool_window()
+        )
+
+        if (
+            os.name != "nt"
+            or not hwnd
+            or not self._is_window(hwnd)
+        ):
+            self._embedded_hwnd = None
             return
 
         try:
-            self.process.write(
-                (str(command).strip() + "\\n").encode("utf-8")
-            )
-        except Exception as exc:
-            self._append_log(
-                f"Falha ao enviar comando ao WhatsApp: {exc}",
-                True,
-            )
+            user32 = ctypes.windll.user32
+            GWL_STYLE = -16
 
-    def _show_whatsapp_frame(self, data_url: str) -> None:
-        try:
-            marker = "base64,"
-            if marker not in data_url:
-                raise ValueError("imagem inválida")
-
-            raw = base64.b64decode(
-                data_url.split(marker, 1)[1]
+            get_style = getattr(
+                user32,
+                "GetWindowLongPtrW",
+                user32.GetWindowLongW,
+            )
+            set_style = getattr(
+                user32,
+                "SetWindowLongPtrW",
+                user32.SetWindowLongW,
             )
 
-            pixmap = QPixmap()
-            if not pixmap.loadFromData(raw):
-                raise ValueError("não foi possível carregar a imagem")
-
-            self._whatsapp_last_pixmap = pixmap
-            self._render_whatsapp_pixmap()
-
-        except Exception as exc:
-            self._append_log(
-                f"Falha ao mostrar WhatsApp Web: {exc}",
-                True,
+            user32.SetParent(
+                ctypes.c_void_p(hwnd),
+                ctypes.c_void_p(0),
             )
 
-    def _render_whatsapp_pixmap(self) -> None:
-        pixmap = getattr(
-            self,
-            "_whatsapp_last_pixmap",
-            None,
-        )
-
-        if pixmap is None or pixmap.isNull():
-            return
-
-        size = self.whatsapp_preview.size()
-
-        self.whatsapp_preview.setPixmap(
-            pixmap.scaled(
-                max(320, size.width() - 8),
-                max(300, size.height() - 8),
-                Qt.AspectRatioMode.KeepAspectRatio,
-                Qt.TransformationMode.SmoothTransformation,
-            )
-        )
-
-    def resizeEvent(self, event) -> None:
-        super().resizeEvent(event)
-
-        if hasattr(self, "whatsapp_preview"):
-            self._render_whatsapp_pixmap()
-
-        if hasattr(self, "whatsapp_browser_host"):
-            self._resize_embedded_browser()
-
-    def _build_settings(self) -> QWidget:
-        outer = QWidget()
-        layout = QVBoxLayout(outer)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(10)
-
-        card = QFrame()
-        card.setObjectName("sheetCard")
-        form = QVBoxLayout(card)
-        form.setContentsMargins(18, 14, 18, 14)
-        form.setSpacing(10)
-
-        form.addWidget(self._section_title("Configurações da automação"))
-        info = QLabel(
-            "As configurações abaixo pertencem somente à automação de Planilhas. "
-            "A rede é controlada exclusivamente pelo proxy geral do Central Inteligente de Mídia."
-        )
-        info.setObjectName("sheetMuted")
-        info.setWordWrap(True)
-        form.addWidget(info)
-
-        form.addWidget(self._field_label("Apps Script URL"))
-        self.apps_url = QLineEdit()
-        self.apps_url.setPlaceholderText("https://script.google.com/macros/s/.../exec")
-        form.addWidget(self.apps_url)
-
-        row = QHBoxLayout()
-        left = QVBoxLayout()
-        left.addWidget(self._field_label("Aba da planilha"))
-        auto_tab = QLineEdit("Automática pela data da matéria")
-        auto_tab.setReadOnly(True)
-        left.addWidget(auto_tab)
-        row.addLayout(left, 1)
-
-        right = QVBoxLayout()
-        right.addWidget(self._field_label("Caminho do Chrome/Edge (opcional)"))
-        self.chrome_path = QLineEdit()
-        self.chrome_path.setPlaceholderText("Deixe vazio para detectar automaticamente")
-        right.addWidget(self.chrome_path)
-        row.addLayout(right, 1)
-        form.addLayout(row)
-
-        network_card = QFrame()
-        network_card.setObjectName("sheetNetworkInfo")
-        network_l = QHBoxLayout(network_card)
-        network_l.setContentsMargins(12, 9, 12, 9)
-        network_l.addWidget(QLabel("⌁"))
-        self.settings_network = QLabel("Rede do motor: conexão direta")
-        self.settings_network.setObjectName("sheetGreenText")
-        network_l.addWidget(self.settings_network)
-        network_l.addStretch()
-        network_hint = QLabel("Altere em Configurações → Proxy do Central")
-        network_hint.setObjectName("sheetMuted")
-        network_l.addWidget(network_hint)
-        form.addWidget(network_card)
-
-        form.addWidget(self._field_label("IDs dos grupos — um por linha"))
-        self.groups_edit = QPlainTextEdit()
-        self.groups_edit.setPlaceholderText("120363...@g.us")
-        self.groups_edit.setMinimumHeight(180)
-        form.addWidget(self.groups_edit)
-
-        self.diagnostic = QCheckBox("Ativar diagnóstico de grupos")
-        form.addWidget(self.diagnostic)
-
-        actions = QHBoxLayout()
-        save = QPushButton("✓  SALVAR CONFIGURAÇÕES")
-        save.setObjectName("sheetPrimary")
-        save.clicked.connect(self._save_config_from_form)
-        actions.addWidget(save)
-
-        import_old = QPushButton("⇩  IMPORTAR CONFIG.JSON ANTIGO")
-        import_old.setObjectName("sheetSecondary")
-        import_old.clicked.connect(self._import_old_config)
-        actions.addWidget(import_old)
-
-        actions.addStretch()
-        form.addLayout(actions)
-
-        self.settings_status = QLabel("Configuração local pronta.")
-        self.settings_status.setObjectName("sheetInfoStrip")
-        form.addWidget(self.settings_status)
-
-        layout.addWidget(card)
-        layout.addStretch()
-        return outer
-
-    def _build_log(self) -> QWidget:
-        page = QWidget()
-        layout = QVBoxLayout(page)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(8)
-
-        card = QFrame()
-        card.setObjectName("sheetCard")
-        cl = QVBoxLayout(card)
-        cl.setContentsMargins(14, 12, 14, 12)
-        cl.setSpacing(8)
-
-        head = QHBoxLayout()
-        head.addWidget(self._section_title("Log do sistema"))
-        head.addStretch()
-        clear = QPushButton("LIMPAR TELA")
-        clear.setObjectName("sheetSecondary")
-        clear.clicked.connect(lambda: self.log_edit.clear())
-        head.addWidget(clear)
-        open_file = QPushButton("ABRIR ARQUIVO")
-        open_file.setObjectName("sheetSecondary")
-        open_file.clicked.connect(self._open_log_file)
-        head.addWidget(open_file)
-        cl.addLayout(head)
-
-        self.log_edit = QPlainTextEdit()
-        self.log_edit.setObjectName("sheetLog")
-        self.log_edit.setReadOnly(True)
-        self.log_edit.setPlainText("Pronto para iniciar.")
-        cl.addWidget(self.log_edit, 1)
-
-        layout.addWidget(card, 1)
-        return page
-
-    def _build_about(self) -> QWidget:
-        page = QWidget()
-        layout = QVBoxLayout(page)
-        layout.setContentsMargins(0, 0, 0, 0)
-
-        card = QFrame()
-        card.setObjectName("sheetCard")
-        cl = QVBoxLayout(card)
-        cl.setContentsMargins(30, 28, 30, 28)
-        cl.setSpacing(10)
-        cl.setAlignment(Qt.AlignmentFlag.AlignCenter)
-
-        icon = QLabel("▦")
-        icon.setObjectName("sheetAboutIcon")
-        icon.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        icon.setFixedSize(92, 92)
-        cl.addWidget(icon, 0, Qt.AlignmentFlag.AlignCenter)
-
-        title = QLabel("Automação de Planilhas")
-        title.setObjectName("sheetAboutTitle")
-        title.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        cl.addWidget(title)
-
-        text = QLabel(
-            "Módulo integrado ao Central Inteligente de Mídia para monitorar grupos do WhatsApp, "
-            "interpretar notícias e vídeos e enviar os dados para o Google Planilhas."
-        )
-        text.setObjectName("sheetMuted")
-        text.setWordWrap(True)
-        text.setMaximumWidth(760)
-        text.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        cl.addWidget(text)
-
-        version = QLabel("Motor integrado v1.2.0")
-        version.setObjectName("sheetGreenText")
-        cl.addWidget(version, 0, Qt.AlignmentFlag.AlignCenter)
-
-        note = QLabel(
-            "Proxy próprio removido. Conexão direta por padrão; quando o proxy geral do Central "
-            "estiver ativado, o motor herda a mesma configuração somente em memória."
-        )
-        note.setObjectName("sheetMuted")
-        note.setWordWrap(True)
-        note.setMaximumWidth(760)
-        note.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        cl.addWidget(note)
-
-        layout.addWidget(card, 1)
-        return page
-
-    def _status_card(self, layout, title, value, subtitle, icon_text, tone):
-        card = QFrame()
-        card.setObjectName("sheetStatusCard")
-        row = QHBoxLayout(card)
-        row.setContentsMargins(14, 12, 14, 12)
-        row.setSpacing(9)
-        text = QVBoxLayout()
-        cap = QLabel(title)
-        cap.setObjectName("sheetStatusCaption")
-        val = QLabel(value)
-        val.setObjectName("sheetStatusValue")
-        sub = QLabel(subtitle)
-        sub.setObjectName("sheetMuted")
-        sub.setWordWrap(True)
-        text.addWidget(cap)
-        text.addWidget(val)
-        text.addWidget(sub)
-        row.addLayout(text, 1)
-        icon = QLabel(icon_text)
-        icon.setObjectName("sheetStatusIcon")
-        icon.setProperty("tone", tone)
-        icon.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        icon.setFixedSize(48, 48)
-        row.addWidget(icon)
-        layout.addWidget(card, 1)
-        return val
-
-    @staticmethod
-    def _section_title(text: str) -> QLabel:
-        label = QLabel(text)
-        label.setObjectName("sheetSectionTitle")
-        return label
-
-    @staticmethod
-    def _field_label(text: str) -> QLabel:
-        label = QLabel(text)
-        label.setObjectName("sheetFieldLabel")
-        return label
-
-    @staticmethod
-    def _metric_row(layout: QVBoxLayout, title: str, value: str, big: bool = False) -> QLabel:
-        row = QFrame()
-        row.setObjectName("sheetMetricRow")
-        rl = QHBoxLayout(row)
-        rl.setContentsMargins(2, 7, 2, 7)
-        cap = QLabel(title)
-        cap.setObjectName("sheetMuted")
-        val = QLabel(value)
-        val.setObjectName("sheetMetricBig" if big else "sheetMetricValue")
-        val.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-        rl.addWidget(cap, 1)
-        rl.addWidget(val)
-        layout.addWidget(row)
-        return val
-
-    @staticmethod
-    def _news_field(layout: QVBoxLayout, title: str, value: str, strong: bool = False) -> QLabel:
-        cap = QLabel(title)
-        cap.setObjectName("sheetMuted")
-        layout.addWidget(cap)
-        val = QLabel(value)
-        val.setObjectName("sheetNewsStrong" if strong else "sheetNewsValue")
-        val.setWordWrap(True)
-        layout.addWidget(val)
-        return val
-
-    @staticmethod
-    def _small_field(layout: QHBoxLayout, title: str, value: str) -> QLabel:
-        frame = QFrame()
-        fl = QVBoxLayout(frame)
-        fl.setContentsMargins(0, 0, 0, 0)
-        cap = QLabel(title)
-        cap.setObjectName("sheetMuted")
-        val = QLabel(value)
-        val.setObjectName("sheetNewsValue")
-        fl.addWidget(cap)
-        fl.addWidget(val)
-        layout.addWidget(frame, 1)
-        return val
-
-    # ------------------------------------------------------------------
-    # CONFIG FORM
-    # ------------------------------------------------------------------
-
-    def _load_config_into_form(self) -> None:
-        cfg = self._read_config()
-        self.apps_url.setText(cfg.get("appsScriptUrl", ""))
-        self.chrome_path.setText(cfg.get("chromePath", ""))
-        self.groups_edit.setPlainText("\n".join(cfg.get("grupos", [])))
-        self.diagnostic.setChecked(bool(cfg.get("diagnosticoGrupos", False)))
-        self._render_groups(cfg.get("grupos", []))
-
-    def _save_config_from_form(self) -> None:
-        cfg = {
-            "appsScriptUrl": self.apps_url.text().strip(),
-            "chromePath": self.chrome_path.text().strip(),
-            "diagnosticoGrupos": self.diagnostic.isChecked(),
-            "grupos": [
-                line.strip()
-                for line in self.groups_edit.toPlainText().splitlines()
-                if line.strip()
-            ],
-        }
-        self._write_config(cfg)
-        self._render_groups(cfg["grupos"])
-
-        if self._is_running():
-            self.settings_status.setText(
-                "Configurações salvas. Reinicie o motor para aplicar as alterações."
-            )
-        else:
-            self.settings_status.setText("Configurações salvas com sucesso.")
-
-        self._append_log("Configurações da Automação de Planilhas salvas.")
-
-    def _import_old_config(self) -> None:
-        file_name, _ = QFileDialog.getOpenFileName(
-            self,
-            "Importar config.json da Automação de Planilhas",
-            str(self.app_root),
-            "Configuração JSON (*.json);;Todos os arquivos (*.*)",
-        )
-        if not file_name:
-            return
-
-        try:
-            cfg = json.loads(Path(file_name).read_text(encoding="utf-8"))
-            if not isinstance(cfg, dict):
-                raise ValueError("arquivo JSON inválido")
-            cfg.pop("proxy", None)
-            self._write_config(cfg)
-            self._load_config_into_form()
-            self.settings_status.setText(
-                "Configuração importada. O proxy antigo foi descartado; a rede usa o Central."
-            )
-            self._append_log(f"Configuração importada de: {file_name}")
-        except Exception as exc:
-            QMessageBox.warning(
-                self,
-                "Importação",
-                f"Não foi possível importar a configuração:\n{exc}",
-            )
-
-    def _render_groups(self, groups: list[str]) -> None:
-        while self.groups_box.count():
-            item = self.groups_box.takeAt(0)
-            widget = item.widget()
-            if widget is not None:
-                widget.deleteLater()
-
-        for index, group_id in enumerate(groups, start=1):
-            frame = QFrame()
-            frame.setObjectName("sheetGroupItem")
-            row = QHBoxLayout(frame)
-            row.setContentsMargins(8, 7, 8, 7)
-            row.setSpacing(8)
-            badge = QLabel("♟")
-            badge.setObjectName("sheetGroupBadge")
-            badge.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            badge.setFixedSize(30, 30)
-            row.addWidget(badge)
-            text = QVBoxLayout()
-            title = QLabel(f"Grupo {index}")
-            title.setObjectName("sheetGroupTitle")
-            gid = QLabel(group_id)
-            gid.setObjectName("sheetMuted")
-            gid.setWordWrap(True)
-            text.addWidget(title)
-            text.addWidget(gid)
-            row.addLayout(text, 1)
-            active = QLabel("ATIVO")
-            active.setObjectName("sheetPill")
-            row.addWidget(active)
-            self.groups_box.addWidget(frame)
-
-        self.group_total.setText(
-            f"Total: {len(groups)} grupo{'s' if len(groups) != 1 else ''}"
-        )
-
-    # ------------------------------------------------------------------
-    # PROCESSO NODE
-    # ------------------------------------------------------------------
-
-    def _resolve_node(self) -> str | None:
-        if self.node_path.is_file():
-            return str(self.node_path)
-        return shutil.which("node")
-
-    def _network_signature(self) -> tuple:
-        cfg = self.controller.proxy_config
-        return (
-            bool(cfg.enabled),
-            str(cfg.host or ""),
-            int(cfg.port or 0),
-            str(cfg.username or ""),
-            str(cfg.password or ""),
-        )
-
-    def _network_label(self) -> str:
-        cfg = self.controller.proxy_config
-        if cfg.enabled:
-            return "Proxy geral do Central"
-        return "Conexão direta"
-
-    def _build_process_environment(self) -> QProcessEnvironment:
-        env = QProcessEnvironment.systemEnvironment()
-        env.insert("CONFIG_PATH", str(self.config_path))
-        env.insert("CENTRAL_STATE_DIR", str(self.state_dir))
-        env.insert("CENTRAL_AUTH_DIR", str(self.auth_dir))
-
-        cfg = self.controller.proxy_config
-        if cfg.enabled:
-            env.insert("CENTRAL_PROXY_ENABLED", "1")
-            env.insert("CENTRAL_PROXY_HOST", str(cfg.host))
-            env.insert("CENTRAL_PROXY_PORT", str(cfg.port))
-            env.insert("CENTRAL_PROXY_USERNAME", str(cfg.username or ""))
-            env.insert("CENTRAL_PROXY_PASSWORD", str(cfg.password or ""))
-        else:
-            env.insert("CENTRAL_PROXY_ENABLED", "0")
-            env.insert("CENTRAL_PROXY_HOST", "")
-            env.insert("CENTRAL_PROXY_PORT", "")
-            env.insert("CENTRAL_PROXY_USERNAME", "")
-            env.insert("CENTRAL_PROXY_PASSWORD", "")
-
-        return env
-
-    def _is_running(self) -> bool:
-        return (
-            self.process is not None
-            and self.process.state() != QProcess.ProcessState.NotRunning
-        )
-
-    def start_engine(self) -> None:
-        if self._is_running():
-            self.dashboard_status.setText("O motor já está em execução.")
-            return
-
-        node = self._resolve_node()
-        if not node:
-            self.stats["motor"] = "ERRO"
-            self.dashboard_status.setText(
-                "node.exe não encontrado em tools/spreadsheet_automation."
-            )
-            self._append_log("ERRO: node.exe não encontrado.", True)
-            self._update_status_ui()
-            return
-
-        if not self.engine_path.is_file():
-            self.stats["motor"] = "ERRO"
-            self.dashboard_status.setText(
-                "Motor da Automação de Planilhas não encontrado."
-            )
-            self._append_log(f"ERRO: arquivo ausente: {self.engine_path}", True)
-            self._update_status_ui()
-            return
-
-        self._save_config_from_form()
-        self.state_dir.mkdir(parents=True, exist_ok=True)
-        self.auth_dir.mkdir(parents=True, exist_ok=True)
-
-        self._manual_stop = False
-        self._stdout_buffer = ""
-        self._stderr_buffer = ""
-        self._network_signature_at_start = self._network_signature()
-
-        process = QProcess(self)
-        process.setProcessEnvironment(self._build_process_environment())
-        process.setWorkingDirectory(str(self.tool_dir))
-        process.setProgram(node)
-        process.setArguments([str(self.engine_path)])
-        process.setProcessChannelMode(QProcess.ProcessChannelMode.SeparateChannels)
-        process.readyReadStandardOutput.connect(self._read_stdout)
-        process.readyReadStandardError.connect(self._read_stderr)
-        process.finished.connect(self._process_finished)
-        process.errorOccurred.connect(self._process_error)
-        process.started.connect(self._process_started)
-        self.process = process
-
-        self.stats["motor"] = "INICIANDO"
-        self.stats["whatsapp"] = "CONECTANDO"
-        self.stats["planilha"] = "AGUARDANDO"
-        self.stats["network"] = self._network_label().upper()
-        self.dashboard_status.setText("Iniciando motor de Planilhas...")
-        self._append_log("Iniciando Automação de Planilhas...")
-        self._update_status_ui()
-        process.start()
-
-    def _process_started(self) -> None:
-        # Se a aba WhatsApp estiver aberta, ativa o stream visual assim que o
-        # processo Node estiver pronto para receber comandos.
-        if self.views.currentIndex() == 1:
-            self._send_engine_command("VIEW_ON")
-            QTimer.singleShot(
-                700,
-                lambda: self._send_engine_command("SCREENSHOT"),
-            )
-
-    def stop_engine(self) -> None:
-        self._manual_stop = True
-        self._restart_attempts = 0
-
-        if not self._is_running():
-            self.stats["motor"] = "PARADO"
-            self.stats["whatsapp"] = "DESCONECTADO"
-            self.dashboard_status.setText("Motor já está parado.")
-            self._update_status_ui()
-            return
-
-        assert self.process is not None
-        self.dashboard_status.setText("Encerrando motor com segurança...")
-        self._append_log("Solicitando encerramento do motor...")
-        self.process.write(b"STOP\n")
-        QTimer.singleShot(4000, self._force_stop_if_needed)
-
-    def _force_stop_if_needed(self) -> None:
-        if not self._is_running():
-            return
-        assert self.process is not None
-        self._append_log("Motor não encerrou no prazo; finalizando processo.", True)
-        self.process.kill()
-
-    def restart_engine(self) -> None:
-        if self._is_running():
-            self._manual_stop = True
-            assert self.process is not None
-            self.process.write(b"STOP\n")
-            QTimer.singleShot(1800, self._restart_after_stop)
-        else:
-            self.start_engine()
-
-    def _restart_after_stop(self) -> None:
-        if self._is_running():
-            assert self.process is not None
-            self.process.kill()
-            QTimer.singleShot(500, self.start_engine)
-        else:
-            self.start_engine()
-
-    def _read_stdout(self) -> None:
-        if self.process is None:
-            return
-        chunk = bytes(self.process.readAllStandardOutput()).decode("utf-8", "replace")
-        self._stdout_buffer = self._consume_buffer(self._stdout_buffer + chunk, False)
-
-    def _read_stderr(self) -> None:
-        if self.process is None:
-            return
-        chunk = bytes(self.process.readAllStandardError()).decode("utf-8", "replace")
-        self._stderr_buffer = self._consume_buffer(self._stderr_buffer + chunk, True)
-
-    def _consume_buffer(self, data: str, is_error: bool) -> str:
-        pieces = data.split("\n")
-        tail = pieces.pop() if pieces else ""
-        for raw in pieces:
-            line = raw.rstrip("\r")
-            if line:
-                self._handle_line(line, is_error)
-        return tail
-
-    def _handle_line(self, line: str, is_error: bool) -> None:
-        if line.startswith(_EVENT_PREFIX):
-            try:
-                event = json.loads(line[len(_EVENT_PREFIX):])
-                if isinstance(event, dict):
-                    self._handle_event(event)
-                    return
-            except Exception:
-                pass
-
-        self._append_log(line, is_error)
-        if is_error:
-            self.stats["erros"] = int(self.stats["erros"]) + 1
-            self._update_status_ui()
-
-    def _handle_event(self, event: dict) -> None:
-        kind = str(event.get("type", ""))
-
-        if kind == "engine_start":
-            self.stats["motor"] = "INICIANDO"
-            self.dashboard_status.setText("Motor iniciado. Conectando ao WhatsApp...")
-
-        elif kind == "network":
-            mode = str(event.get("mode", "DIRECT"))
-            self.stats["network"] = (
-                "PROXY GERAL"
-                if mode == "PROXY"
-                else "CONEXÃO DIRETA"
-            )
-
-        elif kind == "browser":
-            browser = str(event.get("path", ""))
-            if browser:
-                self._append_log(f"Navegador detectado: {browser}")
-
-        elif kind == "browser_process":
-            try:
-                pid = int(event.get("pid", 0) or 0)
-            except Exception:
-                pid = 0
-
-            if pid > 0:
-                self._embed_browser_pid(pid)
-
-        elif kind == "browser_db_error":
-            self.stats["whatsapp"] = "BANCO LOCAL CORROMPIDO"
-            self.whatsapp_view_status.setText(
-                "Banco local corrompido — recriando sessão automaticamente"
-            )
-            self.dashboard_status.setText(
-                "O WhatsApp Web detectou erro no banco de dados local. "
-                "A sessão será recriada para gerar novo QR."
-            )
-            self._append_log(
-                "WhatsApp Web detectou erro no banco de dados do navegador. "
-                "Recriando sessão local.",
-                True,
-            )
-
-        elif kind == "auth_reset_started":
-            self._detach_embedded_browser()
-            self.whatsapp_browser_stack.setCurrentWidget(
-                self.whatsapp_preview
-            )
-            self.whatsapp_preview.clear()
-            self.whatsapp_preview.setText(
-                "Recriando a sessão local do WhatsApp Web...\n"
-                "Aguarde o novo QR Code."
-            )
-            self.whatsapp_view_status.setText(
-                "Limpando banco local e preparando novo QR..."
-            )
-
-        elif kind == "auth_reset_done":
-            self.stats["whatsapp"] = "AGUARDANDO QR"
-            self.whatsapp_view_status.setText(
-                "Sessão limpa criada. Aguardando QR Code..."
-            )
-
-        elif kind == "auth_reset_error":
-            message = str(
-                event.get(
-                    "message",
-                    "Falha ao recriar sessão do WhatsApp.",
+            if self._embedded_original_style is not None:
+                set_style(
+                    ctypes.c_void_p(hwnd),
+                    GWL_STYLE,
+                    int(
+                        self._embedded_original_style
+                    ),
                 )
-            )
-            self.stats["whatsapp"] = "ERRO"
-            self.whatsapp_view_status.setText(message)
-            self._append_log(message, True)
 
-        elif kind == "browser_frame":
-            self._show_whatsapp_frame(
-                str(event.get("dataUrl", ""))
-            )
-            url = str(event.get("url", ""))
-            title = str(event.get("title", ""))
-            label = title or url or "WhatsApp Web"
-            self.whatsapp_view_status.setText(label)
+            if show:
+                SW_RESTORE = 9
 
-        elif kind == "browser_view_status":
-            message = str(event.get("message", "WhatsApp Web"))
-            self.whatsapp_view_status.setText(message)
-
-        elif kind == "browser_window":
-            message = str(event.get("message", "Janela do Chrome atualizada."))
-            self.whatsapp_view_status.setText(message)
-
-        elif kind == "qr":
-            self.stats["motor"] = "AGUARDANDO QR"
-            self.stats["whatsapp"] = "AGUARDANDO AUTENTICAÇÃO"
-            self.qr_status.setText("QR Code pronto. Faça a leitura pelo WhatsApp.")
-            self.whatsapp_view_status.setText("QR Code pronto para leitura")
-            self._show_qr(str(event.get("dataUrl", "")))
-
-            # Leva diretamente à aba que contém a janela REAL incorporada.
-            self._set_view(1)
-            self._send_engine_command("VIEW_ON")
-
-        elif kind == "authenticated":
-            self.stats["whatsapp"] = "AUTENTICADO"
-            self.qr_status.setText("WhatsApp autenticado. Finalizando conexão...")
-            self.whatsapp_view_status.setText("WhatsApp autenticado")
-
-        elif kind == "loading":
-            percent = event.get("percent", 0)
-            self.stats["whatsapp"] = f"CARREGANDO {percent}%"
-
-        elif kind == "ready":
-            self.stats["motor"] = "RODANDO"
-            self.stats["whatsapp"] = "CONECTADO"
-            self._restart_attempts = 0
-            self.qr_frame.hide()
-            self.dashboard_status.setText("Automação ativa e monitorando os grupos.")
-            self.whatsapp_view_status.setText("WhatsApp conectado")
-            self._send_engine_command("SCREENSHOT")
-
-        elif kind == "reconnecting":
-            self.stats["whatsapp"] = "RECONECTANDO"
-            self.dashboard_status.setText("WhatsApp desconectou; tentando reconectar...")
-
-        elif kind == "disconnected":
-            self.stats["whatsapp"] = "DESCONECTADO"
-
-        elif kind == "auth_failure":
-            self.stats["whatsapp"] = "ERRO"
-            self.stats["erros"] = int(self.stats["erros"]) + 1
-            self.dashboard_status.setText("Falha na autenticação do WhatsApp.")
-
-        elif kind == "news_identified":
-            data = event.get("data") or {}
-            for key in self.last_news:
-                if key in data:
-                    self.last_news[key] = str(data.get(key) or "--")
-            self._update_last_news_ui()
-
-        elif kind == "sheet_success":
-            self.stats["planilha"] = "OK"
-            self.stats["processadas"] = int(self.stats["processadas"]) + 1
-            if str(event.get("kind", "")) == "video":
-                self.stats["videos"] = int(self.stats["videos"]) + 1
-            self.stats["ultima_linha"] = str(event.get("line", "--") or "--")
-            self.stats["ultima_atualizacao"] = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
-
-        elif kind == "sheet_error":
-            self.stats["planilha"] = "ERRO"
-            self.stats["erros"] = int(self.stats["erros"]) + 1
-            self.dashboard_status.setText(str(event.get("message", "Erro ao enviar para planilha.")))
-
-        elif kind == "engine_error":
-            self.stats["motor"] = "ERRO"
-            self.stats["erros"] = int(self.stats["erros"]) + 1
-
-        elif kind == "log":
-            self._append_log(str(event.get("message", "")), bool(event.get("error", False)))
-
-        self._update_status_ui()
-
-    def _show_qr(self, data_url: str) -> None:
-        try:
-            marker = "base64,"
-            if marker not in data_url:
-                raise ValueError("QR inválido")
-            raw = base64.b64decode(data_url.split(marker, 1)[1])
-            pixmap = QPixmap()
-            if not pixmap.loadFromData(raw):
-                raise ValueError("não foi possível carregar o QR")
-            self.qr_image.setPixmap(
-                pixmap.scaled(
-                    180,
-                    180,
-                    Qt.AspectRatioMode.KeepAspectRatio,
-                    Qt.TransformationMode.SmoothTransformation,
+                user32.ShowWindow(
+                    ctypes.c_void_p(hwnd),
+                    SW_RESTORE,
                 )
-            )
-            self.qr_frame.show()
-        except Exception as exc:
-            self.qr_image.setText("QR")
-            self.qr_frame.show()
-            self._append_log(f"Falha ao exibir QR Code: {exc}", True)
 
-    def _process_error(self, error) -> None:
-        self.stats["motor"] = "ERRO"
-        self.stats["erros"] = int(self.stats["erros"]) + 1
-        self.dashboard_status.setText(f"Falha no processo Node: {error}")
-        self._append_log(f"Erro de QProcess: {error}", True)
-        self._update_status_ui()
+                user32.SetForegroundWindow(
+                    ctypes.c_void_p(hwnd)
+                )
 
-    def _process_finished(self, exit_code: int, _exit_status) -> None:
-        if self._stdout_buffer.strip():
-            self._handle_line(self._stdout_buffer.strip(), False)
-        if self._stderr_buffer.strip():
-            self._handle_line(self._stderr_buffer.strip(), True)
-        self._stdout_buffer = ""
-        self._stderr_buffer = ""
-
-        was_manual = self._manual_stop
-        self._detach_embedded_browser()
-        self.process = None
-        if hasattr(self, "whatsapp_view_status"):
-            self.whatsapp_view_status.setText("Motor parado")
-        self.stats["motor"] = "PARADO" if was_manual or exit_code == 0 else "ERRO"
-        if self.stats["whatsapp"] != "ERRO":
-            self.stats["whatsapp"] = "DESCONECTADO"
-        self._update_status_ui()
-
-        if was_manual:
-            self.dashboard_status.setText("Motor parado.")
-            return
-
-        if exit_code != 0 and self._restart_attempts < 5:
-            self._restart_attempts += 1
-            self.stats["motor"] = "RECUPERANDO"
-            self.dashboard_status.setText(
-                f"Motor encerrou inesperadamente. Nova tentativa em 5s "
-                f"({self._restart_attempts}/5)."
-            )
-            self._update_status_ui()
-            QTimer.singleShot(5000, self.start_engine)
-        elif exit_code != 0:
-            self.dashboard_status.setText(
-                "Motor encerrou com erro após 5 tentativas automáticas."
-            )
-
-    # ------------------------------------------------------------------
-    # STATUS / LOG / REFRESH
-    # ------------------------------------------------------------------
-
-    def _append_log(self, message: str, is_error: bool = False) -> None:
-        message = str(message or "").strip()
-        if not message:
-            return
-        stamp = datetime.now().strftime("%H:%M:%S")
-        visible = f"[{stamp}] {'ERRO: ' if is_error else ''}{message}"
-        self.log_edit.appendPlainText(visible)
-        try:
-            with self.log_path.open("a", encoding="utf-8") as fh:
-                fh.write(visible + "\n")
         except Exception:
             pass
 
-    def _update_status_ui(self) -> None:
-        self.status_whatsapp.setText(str(self.stats["whatsapp"]))
-        self.status_sheet.setText(str(self.stats["planilha"]))
-        self.status_motor.setText(str(self.stats["motor"]))
-        self.status_network.setText(str(self.stats["network"]))
-        self.metric_processadas.setText(str(self.stats["processadas"]))
-        self.metric_update.setText(str(self.stats["ultima_atualizacao"]))
-        self.metric_videos.setText(str(self.stats["videos"]))
-        self.metric_errors.setText(str(self.stats["erros"]))
-        self.metric_line.setText(str(self.stats["ultima_linha"]))
-        self.metric_network.setText(self._network_label())
-        self.start_btn.setEnabled(not self._is_running())
-        self.stop_btn.setEnabled(self._is_running())
+        self._embedded_hwnd = None
 
-    def _update_last_news_ui(self) -> None:
-        self.last_title.setText(self.last_news["titulo"])
-        self.last_vehicle.setText(self.last_news["veiculo"])
-        self.last_date.setText(self.last_news["data"])
-        self.last_subject.setText(self.last_news["assunto"])
-        self.last_analysis.setText(self.last_news["analise"])
-        self.last_author.setText(self.last_news["autor"])
-        self.last_link.setText(self.last_news["link"] or "--")
+        if show:
+            self.placeholder.show()
+            self.placeholder.setText(
+                "A Automação de Planilhas está aberta em uma janela própria.\n\n"
+                "Clique em “INTEGRAR” para trazê-la novamente para esta aba."
+            )
+            self.status_chip.setText(
+                "Executando fora"
+            )
 
-    def _update_network_preview(self) -> None:
-        label = self._network_label()
-        self.network_chip.setText(f"Rede: {label.lower()}")
-        self.settings_network.setText(f"Rede do motor: {label}")
-        self.metric_network.setText(label)
+    def _force_reembed(self) -> None:
+        hwnd = (
+            self._embedded_hwnd
+            or self._find_tool_window()
+        )
 
-    def refresh(self, _state: UiState) -> None:
-        self._update_network_preview()
+        if hwnd:
+            self._embed_window(hwnd)
+            return
 
-        if self._is_running() and self._network_signature_at_start is not None:
-            current = self._network_signature()
-            if current != self._network_signature_at_start:
-                self.settings_status.setText(
-                    "A configuração geral de rede mudou. Reinicie o motor de Planilhas para aplicar."
-                )
+        self.start_tool()
 
-    def _open_runtime_folder(self) -> None:
-        self.runtime_dir.mkdir(parents=True, exist_ok=True)
-        QDesktopServices.openUrl(QUrl.fromLocalFile(str(self.runtime_dir)))
+    def open_external(self) -> None:
+        hwnd = (
+            self._embedded_hwnd
+            or self._find_tool_window()
+        )
 
-    def _open_log_file(self) -> None:
-        if not self.log_path.exists():
-            self.log_path.write_text("", encoding="utf-8")
-        QDesktopServices.openUrl(QUrl.fromLocalFile(str(self.log_path)))
+        if not hwnd:
+            self.start_tool()
 
-    def shutdown(self) -> bool:
-        self._manual_stop = True
-        if self.process is None:
-            return True
-        try:
-            if self.process.state() != QProcess.ProcessState.NotRunning:
-                self.process.write(b"STOP\n")
-                if not self.process.waitForFinished(2500):
-                    self.process.kill()
-                    self.process.waitForFinished(1000)
-        except Exception:
+            QTimer.singleShot(
+                1500,
+                self.open_external,
+            )
+            return
+
+        self._detach_window(
+            show=True
+        )
+
+    def restart_tool(self) -> None:
+        self.stop_tool()
+
+        QTimer.singleShot(
+            1300,
+            self.start_tool,
+        )
+
+    def stop_tool(self) -> None:
+        self._stopping = True
+        self._window_timer.stop()
+
+        hwnd = (
+            self._embedded_hwnd
+            or self._find_tool_window()
+        )
+
+        if (
+            os.name == "nt"
+            and hwnd
+            and self._is_window(hwnd)
+        ):
             try:
-                self.process.kill()
+                WM_CLOSE = 0x0010
+
+                ctypes.windll.user32.PostMessageW(
+                    ctypes.c_void_p(hwnd),
+                    WM_CLOSE,
+                    0,
+                    0,
+                )
             except Exception:
                 pass
+
+        self._embedded_hwnd = None
+        self._embedded_original_style = None
+
+        process = self.process
+
+        if (
+            process is not None
+            and process.state()
+            != QProcess.ProcessState.NotRunning
+        ):
+            process.terminate()
+
+            if not process.waitForFinished(
+                1800
+            ):
+                process.kill()
+                process.waitForFinished(
+                    1200
+                )
+
         self.process = None
-        return True
+        self._launch_pid = 0
 
-    # ------------------------------------------------------------------
-    # STYLE
-    # ------------------------------------------------------------------
+        self.placeholder.show()
+        self.placeholder.setText(
+            "Automação de Planilhas v1.0.4 encerrada.\n\n"
+            "Clique em INICIAR para abrir novamente."
+        )
 
-    def _stylesheet(self) -> str:
-        return """
-        QFrame#sheetNav, QFrame#sheetCard, QFrame#sheetStatusCard, QFrame#sheetControls {
-            background:#FFFFFF;
-            border:1px solid #D5E5F5;
-            border-radius:12px;
-        }
-        QPushButton#sheetTab {
-            background:#F7FAFE;
-            color:#214875;
-            border:1px solid #D2E2F4;
-            border-radius:8px;
-            padding:8px 16px;
-            font-weight:800;
-        }
-        QPushButton#sheetTab:checked {
-            background:#087AF7;
-            color:#FFFFFF;
-            border-color:#087AF7;
-        }
-        QLabel#sheetNetworkChip {
-            background:#EAF9F2;
-            color:#078B5F;
-            border:1px solid #C4ECD9;
-            border-radius:8px;
-            padding:7px 11px;
-            font-weight:800;
-        }
-        QLabel#sheetStatusCaption { color:#6079A5; font-size:10px; }
-        QLabel#sheetStatusValue { color:#08245F; font-size:18px; font-weight:900; }
-        QLabel#sheetMuted { color:#6A80A5; font-size:10px; }
-        QLabel#sheetStatusIcon { border-radius:24px; font-size:20px; font-weight:900; }
-        QLabel#sheetStatusIcon[tone='green'] { background:#DDF8EC; color:#078B5F; }
-        QLabel#sheetStatusIcon[tone='blue'] { background:#E5F1FF; color:#087AF7; }
-        QLabel#sheetStatusIcon[tone='purple'] { background:#F0E4FF; color:#8244F5; }
-        QLabel#sheetStatusIcon[tone='orange'] { background:#FFF0CC; color:#EA9900; }
-        QLabel#sheetSectionTitle { color:#08245F; font-size:16px; font-weight:900; }
-        QFrame#sheetQrCard {
-            background:#F5FAFF;
-            border:1px solid #CFE3F7;
-            border-radius:12px;
-        }
-        QLabel#sheetQrImage {
-            background:#FFFFFF;
-            border:1px solid #D1E1F1;
-            border-radius:10px;
-            color:#5B759B;
-            font-size:22px;
-            font-weight:900;
-        }
-        QLabel#sheetInfoStrip {
-            background:#EAF9F2;
-            color:#078B5F;
-            border:1px solid #C4ECD9;
-            border-radius:8px;
-            padding:8px 10px;
-        }
-        QFrame#sheetGroupItem {
-            background:#F8FBFF;
-            border:1px solid #DCE9F6;
-            border-radius:8px;
-        }
-        QLabel#sheetGroupBadge {
-            background:#DDF8EC;
-            color:#078B5F;
-            border-radius:8px;
-        }
-        QLabel#sheetGroupTitle { color:#08245F; font-weight:800; }
-        QLabel#sheetPill {
-            background:#EAF9F2;
-            color:#078B5F;
-            border:1px solid #C4ECD9;
-            border-radius:6px;
-            padding:4px 7px;
-            font-size:9px;
-            font-weight:800;
-        }
-        QLabel#sheetGreenText { color:#078B5F; font-weight:800; }
-        QFrame#sheetMetricRow { border:0; border-bottom:1px solid #E5EEF7; }
-        QLabel#sheetMetricBig { color:#08A66B; font-size:24px; font-weight:900; }
-        QLabel#sheetMetricValue { color:#08245F; font-size:11px; font-weight:800; }
-        QLabel#sheetNewsStrong { color:#08245F; font-size:13px; font-weight:900; }
-        QLabel#sheetNewsValue { color:#153E75; font-size:10px; font-weight:700; }
-        QLabel#sheetFieldLabel { color:#244B7B; font-size:10px; font-weight:800; }
-        QLineEdit, QPlainTextEdit {
-            background:#FFFFFF;
-            color:#0B2A63;
-            border:1px solid #C8DDF2;
-            border-radius:8px;
-            padding:7px 9px;
-        }
-        QLineEdit:focus, QPlainTextEdit:focus { border-color:#087AF7; }
-        QFrame#sheetNetworkInfo {
-            background:#EAF9F2;
-            border:1px solid #C4ECD9;
-            border-radius:8px;
-        }
-        QPushButton#sheetPrimary {
-            background:#0A7DF8;
-            color:#FFFFFF;
-            border:0;
-            border-radius:8px;
-            padding:9px 14px;
-            font-weight:900;
-        }
-        QPushButton#sheetDanger {
-            background:#FFF0F3;
-            color:#D92F55;
-            border:1px solid #FFB4C4;
-            border-radius:8px;
-            padding:9px 14px;
-            font-weight:900;
-        }
-        QPushButton#sheetSecondary {
-            background:#FFFFFF;
-            color:#0C3974;
-            border:1px solid #C9DDF2;
-            border-radius:8px;
-            padding:9px 13px;
-            font-weight:800;
-        }
-        QPushButton:disabled { color:#9DABBC; background:#F1F4F8; }
-        QLabel#sheetBottomStatus {
-            color:#6079A5;
-            padding:4px 6px;
-        }
-        QPlainTextEdit#sheetLog {
-            background:#071522;
-            color:#D7E8F4;
-            border:1px solid #1C3B55;
-            border-radius:9px;
-            font-family:Consolas;
-            font-size:10px;
-        }
-        QLabel#sheetAboutIcon {
-            background:#EAF9F2;
-            color:#078B5F;
-            border-radius:22px;
-            font-size:40px;
-            font-weight:900;
-        }
-        QFrame#sheetWhatsappBrowserHost {
-            background:#0B141A;
-            border:1px solid #24404F;
-            border-radius:10px;
-        }
-        QPushButton#sheetDanger {
-            background:#FFF0F2;
-            color:#C8203F;
-            border:1px solid #F2A6B5;
-            border-radius:8px;
-            padding:8px 11px;
-            font-weight:900;
-        }
-        QPushButton#sheetDanger:hover {
-            background:#FFE2E8;
-            border-color:#E67B90;
-        }
-        QLabel#sheetWhatsappPreview {
-            background:#0B141A;
-            color:#C9D7DF;
-            border:1px solid #24404F;
-            border-radius:10px;
-            padding:8px;
-            font-size:13px;
-            font-weight:700;
-        }
-        QLabel#sheetAboutTitle { color:#08245F; font-size:25px; font-weight:900; }
-        """
+        self.status_chip.setText(
+            "Parado"
+        )
+
+        self._stopping = False
+
+    def _is_tool_window_alive(self) -> bool:
+        return bool(
+            self._find_tool_window()
+        )
+
+    # ----------------------------------------------------------
+    # BasePage / MainWindow integration
+    # ----------------------------------------------------------
+
+    def showEvent(
+        self,
+        event,
+    ) -> None:
+        super().showEvent(event)
+
+        self._refresh_availability()
+
+        # Abre automaticamente na primeira vez que a aba Planilhas é exibida.
+        if (
+            not self._started_once
+            and self.exe_path.is_file()
+        ):
+            self._started_once = True
+
+            QTimer.singleShot(
+                150,
+                self.start_tool,
+            )
+
+        elif self._embedded_hwnd:
+            QTimer.singleShot(
+                0,
+                self._resize_embedded,
+            )
+
+    def resizeEvent(
+        self,
+        event,
+    ) -> None:
+        super().resizeEvent(event)
+
+        QTimer.singleShot(
+            0,
+            self._resize_embedded,
+        )
+
+    def refresh(
+        self,
+        _state=None,
+    ) -> None:
+        if self._embedded_hwnd:
+            self._resize_embedded()
+
+    def shutdown(
+        self,
+    ) -> bool:
+        try:
+            self.stop_tool()
+            return True
+        except Exception:
+            return False
