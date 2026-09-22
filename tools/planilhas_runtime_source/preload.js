@@ -4,7 +4,7 @@ contextBridge.exposeInMainWorld("api", {
   start: () => ipcRenderer.invoke("motor:start"),
   stop: () => ipcRenderer.invoke("motor:stop"),
   getStatus: () => ipcRenderer.invoke("status:get"),
-  testProxy: () => ipcRenderer.invoke("proxy:test"),
+  testProxy: cfg => ipcRenderer.invoke("proxy:test", cfg),
   getConfig: () => ipcRenderer.invoke("config:get"),
   saveConfig: cfg => ipcRenderer.invoke("config:save", cfg),
   openConfigFolder: () => ipcRenderer.invoke("config:open-folder"),

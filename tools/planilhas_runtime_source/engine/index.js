@@ -13,6 +13,17 @@ const GRUPOS_ID = Array.isArray(CONFIG.grupos) ? CONFIG.grupos : [];
 const APPS_SCRIPT_URL = String(CONFIG.appsScriptUrl || "").trim();
 const DIAGNOSTICO_GRUPOS = Boolean(CONFIG.diagnosticoGrupos);
 
+const AUTH_ROOT = path.join(
+  path.dirname(CONFIG_PATH),
+  ".wwebjs_auth"
+);
+
+const AUTH_SESSION_DIR = path.join(
+  AUTH_ROOT,
+  "session-monitor-planilha"
+);
+
+
 // ---------------------------------------------------------------------
 // REDE / PROXY
 // ---------------------------------------------------------------------
@@ -242,10 +253,8 @@ if (proxyArg) {
 const clientOptions = {
   authStrategy: new LocalAuth({
     clientId: "monitor-planilha",
-    dataPath: path.join(
-      path.dirname(CONFIG_PATH),
-      ".wwebjs_auth",
-    ),
+    dataPath: AUTH_ROOT,
+    rmMaxRetries: 12,
   }),
   puppeteer: {
     headless: true,
@@ -277,17 +286,91 @@ client.on("ready", () => {
   if (PROXY_ATIVO && PROXY_USUARIO) console.log("Autenticação do proxy aplicada ao WhatsApp Web.");
 });
 
-let reconectando = false;
-client.on("disconnected", async motivo => {
+let encerrandoSessao = false;
+
+async function limparSessaoWhatsApp() {
+  try {
+    await client.destroy().catch(() => {});
+  } catch (_) {}
+
+  // Fecha o Chromium antes de apagar o profile para evitar arquivos bloqueados.
+  for (let tentativa = 1; tentativa <= 8; tentativa += 1) {
+    try {
+      fs.rmSync(
+        AUTH_SESSION_DIR,
+        {
+          recursive: true,
+          force: true,
+          maxRetries: 10,
+          retryDelay: 250,
+        }
+      );
+
+      if (!fs.existsSync(AUTH_SESSION_DIR)) {
+        console.log("SESSÃO LOCAL LIMPA: novo QR Code será solicitado.");
+        return true;
+      }
+    } catch (erro) {
+      if (tentativa >= 8) {
+        console.error(
+          "Não foi possível limpar a sessão local do WhatsApp:",
+          erro?.message || erro
+        );
+        return false;
+      }
+    }
+
+    await new Promise(
+      resolve => setTimeout(resolve, 450)
+    );
+  }
+
+  return !fs.existsSync(AUTH_SESSION_DIR);
+}
+
+async function reiniciarComNovaSessao(motivo) {
+  if (encerrandoSessao) return;
+  encerrandoSessao = true;
+
+  console.log(
+    "RECUPERAÇÃO DE SESSÃO:",
+    motivo,
+    "— limpando autenticação local e preparando novo QR Code."
+  );
+
+  // O whatsapp-web.js dispara LOGOUT antes de terminar o próprio cleanup.
+  // Aguarda esse ciclo para não disputar os arquivos do profile.
+  await new Promise(
+    resolve => setTimeout(resolve, 1800)
+  );
+
+  await limparSessaoWhatsApp();
+
+  // Código especial: o processo Electron principal reinicia o motor limpo.
+  process.exit(12);
+}
+
+client.on("disconnected", motivo => {
+  const reason = String(motivo || "").toUpperCase();
+
   console.log("WhatsApp desconectado:", motivo);
-  if (reconectando) return;
-  reconectando = true;
-  console.log("RECONEXÃO: tentativa em 5 segundos...");
-  setTimeout(async () => {
-    try { await client.destroy().catch(() => {}); await client.initialize(); }
-    catch (e) { console.error("Falha na reconexão:", e.message); }
-    finally { reconectando = false; }
-  }, 5000);
+
+  if (reason.includes("LOGOUT")) {
+    reiniciarComNovaSessao("LOGOUT");
+    return;
+  }
+
+  // Não reinicializa o MESMO Client/Puppeteer.
+  // Isso era a origem de corridas entre destroy()/initialize() e gerava
+  // auth timeout. Reiniciamos o processo inteiro.
+  if (!encerrandoSessao) {
+    encerrandoSessao = true;
+    console.log("RECONEXÃO: reiniciando o motor em um processo limpo...");
+    setTimeout(
+      () => process.exit(13),
+      1500
+    );
+  }
 });
 
 async function postar(dados) {
@@ -393,6 +476,23 @@ async function iniciarWhatsApp() {
           + "do Central."
         );
       }
+    }
+
+    if (
+      message.toLowerCase().includes("auth timeout")
+    ) {
+      console.error(
+        "DIAGNÓSTICO: a sessão local ficou inválida ou presa. "
+        + "Ela será limpa para gerar um novo QR Code."
+      );
+
+      await limparSessaoWhatsApp();
+
+      setTimeout(
+        () => process.exit(12),
+        250
+      );
+      return;
     }
 
     console.error(

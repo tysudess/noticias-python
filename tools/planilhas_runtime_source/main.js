@@ -46,6 +46,49 @@ function proxyFromConfig(cfg){
   if(String(p.usuario || "").trim()) proxy.auth = { username:String(p.usuario).trim(), password:String(p.senha || "") };
   return proxy;
 }
+
+function centralProxyPresent(){
+  return Object.prototype.hasOwnProperty.call(
+    process.env,
+    "CENTRAL_PROXY_ENABLED"
+  );
+}
+
+function effectiveProxyConfig(localCfg){
+  if(!centralProxyPresent()) return localCfg?.proxy || {};
+
+  return {
+    ativo: process.env.CENTRAL_PROXY_ENABLED === "1",
+    host: String(process.env.CENTRAL_PROXY_HOST || "").trim(),
+    porta: Number(process.env.CENTRAL_PROXY_PORT || 0),
+    usuario: String(process.env.CENTRAL_PROXY_USERNAME || "").trim(),
+    senha: String(process.env.CENTRAL_PROXY_PASSWORD || ""),
+    managedByCentral: true
+  };
+}
+
+function publicConfig(){
+  const cfg = readConfig();
+  const p = effectiveProxyConfig(cfg);
+
+  return {
+    ...cfg,
+    runtimeProxy: {
+      managedByCentral: centralProxyPresent(),
+      ativo: Boolean(p.ativo),
+      host: String(p.host || ""),
+      porta: Number(p.porta || 0),
+      usuario: String(p.usuario || ""),
+      ready: Boolean(
+        p.ativo &&
+        p.host &&
+        Number(p.porta) &&
+        p.usuario &&
+        p.senha
+      )
+    }
+  };
+}
 function send(channel,data){ if(win && !win.isDestroyed()) win.webContents.send(channel,data); }
 function stamp(){ return new Date().toLocaleString("pt-BR"); }
 
@@ -86,7 +129,8 @@ function iniciarMotor(){
   if(motor) return {ok:false,message:"Motor já está em execução."};
   ensureConfig();
   encerramentoManual=false;
-  stats.status="INICIANDO"; stats.whatsapp="CONECTANDO"; stats.planilha="AGUARDANDO"; stats.proxy=readConfig().proxy?.ativo ? "CONFIGURADO" : "DESATIVADO";
+  const p = effectiveProxyConfig(readConfig());
+  stats.status="INICIANDO"; stats.whatsapp="CONECTANDO"; stats.planilha="AGUARDANDO"; stats.proxy=p?.ativo ? "CONFIGURADO" : "DESATIVADO";
   send("status",stats);
   const env={...process.env,CONFIG_PATH:configPath()};
   if(app.isPackaged) env.ELECTRON_RUN_AS_NODE="1";
@@ -99,9 +143,18 @@ function iniciarMotor(){
     if(!encerramentoManual && code!==0){
       reiniciosAutomaticos++;
       if(reinicioTimer) clearTimeout(reinicioTimer);
+
+      if(code===12){
+        parseLine("Sessão do WhatsApp limpa. Reiniciando para gerar novo QR Code.",false);
+        stats.status="AGUARDANDO NOVO QR";
+        stats.whatsapp="AGUARDANDO AUTENTICAÇÃO";
+      }
+
       if(reinicioAutomaticoPermitido()){
-        stats.status="RECUPERANDO"; send("status",stats);
-        reinicioTimer=setTimeout(()=>{reinicioTimer=null;iniciarMotor();},5000);
+        stats.status=code===12 ? "AGUARDANDO NOVO QR" : "RECUPERANDO";
+        send("status",stats);
+        const delay = code===12 ? 2500 : 5000;
+        reinicioTimer=setTimeout(()=>{reinicioTimer=null;iniciarMotor();},delay);
         return;
       }
       stats.status="ERRO";
@@ -119,22 +172,58 @@ function pararMotor(){
   try{motor.kill();}catch(_){} motor=null; stats.status="PARADO"; stats.whatsapp="DESCONECTADO"; send("status",stats); return {ok:true};
 }
 
-async function testarProxy(){
+async function testarProxy(formCfg){
   try{
-    const cfg=readConfig();
-    if(!cfg.proxy?.ativo) return {ok:false,message:"Proxy está desativado."};
-    const proxy=proxyFromConfig(cfg);
+    const cfg = readConfig();
+
+    // Dentro do Central, o Proxy Geral tem prioridade absoluta.
+    // Fora do Central, o teste pode usar o estado atual do formulário,
+    // mesmo antes de clicar em SALVAR.
+    const localCfg = formCfg && typeof formCfg === "object"
+      ? { ...cfg, proxy: formCfg.proxy || cfg.proxy }
+      : cfg;
+
+    const p = effectiveProxyConfig(localCfg);
+
+    if(!p?.ativo) return {ok:false,message:"Proxy está desativado."};
+
+    const proxy = proxyFromConfig({proxy:p});
+
     if(!proxy) return {ok:false,message:"Servidor e porta do proxy não estão configurados."};
-    stats.proxy="TESTANDO"; send("status",stats);
-    const r=await axios.get("https://web.whatsapp.com/",{proxy,timeout:10000,validateStatus:()=>true});
-    if(r.status>=200 && r.status<500){ stats.proxy=proxy.auth?"OK COM AUTENTICAÇÃO":"OK SEM AUTENTICAÇÃO"; return {ok:true,message:`Proxy respondeu HTTP ${r.status}.`}; }
-    stats.proxy=`ERRO HTTP ${r.status}`; return {ok:false,message:`Proxy respondeu HTTP ${r.status}.`};
+
+    stats.proxy="TESTANDO";
+    send("status",stats);
+
+    const r=await axios.get(
+      "https://web.whatsapp.com/",
+      {
+        proxy,
+        timeout:15000,
+        validateStatus:()=>true
+      }
+    );
+
+    if(r.status>=200 && r.status<500){
+      stats.proxy=proxy.auth?"OK COM AUTENTICAÇÃO":"OK SEM AUTENTICAÇÃO";
+      return {
+        ok:true,
+        message:`Proxy respondeu HTTP ${r.status}.`
+      };
+    }
+
+    stats.proxy=`ERRO HTTP ${r.status}`;
+    return {ok:false,message:`Proxy respondeu HTTP ${r.status}.`};
+
   }catch(err){
     const code=err?.response?.status || "";
     stats.proxy=code===407?"AUTENTICAÇÃO REJEITADA":"ERRO";
-    const detail=err?.response?.status ? `HTTP ${err.response.status}` : (err?.code || err?.message || "erro desconhecido");
+    const detail=err?.response?.status
+      ? `HTTP ${err.response.status}`
+      : (err?.code || err?.message || "erro desconhecido");
     return {ok:false,message:`Falha no teste do proxy: ${detail}`};
-  } finally { send("status",stats); }
+  } finally {
+    send("status",stats);
+  }
 }
 
 function createWindow(){
@@ -147,8 +236,8 @@ app.whenReady().then(()=>{
   ipcMain.handle("motor:start",()=>iniciarMotor());
   ipcMain.handle("motor:stop",()=>pararMotor());
   ipcMain.handle("status:get",()=>stats);
-  ipcMain.handle("proxy:test",()=>testarProxy());
-  ipcMain.handle("config:get",()=>readConfig());
+  ipcMain.handle("proxy:test",(_,cfg)=>testarProxy(cfg));
+  ipcMain.handle("config:get",()=>publicConfig());
   ipcMain.handle("config:save",(_,cfg)=>{fs.writeFileSync(ensureConfig(),JSON.stringify(cfg,null,2),"utf8");return {ok:true,path:configPath()};});
   ipcMain.handle("config:open-folder",()=>{shell.openPath(baseDir());return {ok:true};});
 });

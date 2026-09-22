@@ -26,18 +26,74 @@ function renderGroups(c){
 }
 async function loadConfig(){
   currentConfig=await window.api.getConfig();
-  $("appsUrl").value=currentConfig.appsScriptUrl||""; $("aba").value="Automática pela data da matéria"; $("chrome").value=currentConfig.chromePath||""; $("grupos").value=(currentConfig.grupos||[]).join("\n"); $("diag").checked=!!currentConfig.diagnosticoGrupos;
-  const proxy=currentConfig.proxy||{}; $("proxyAtivo").checked=proxy.ativo!==false; $("proxyHost").value=proxy.host||""; $("proxyPorta").value=proxy.porta||""; $("proxyUsuario").value=proxy.usuario||""; $("proxySenha").value=proxy.senha||"";
+
+  $("appsUrl").value=currentConfig.appsScriptUrl||"";
+  $("aba").value="Automática pela data da matéria";
+  $("chrome").value=currentConfig.chromePath||"";
+  $("grupos").value=(currentConfig.grupos||[]).join("\n");
+  $("diag").checked=!!currentConfig.diagnosticoGrupos;
+
+  const localProxy=currentConfig.proxy||{};
+  const runtimeProxy=currentConfig.runtimeProxy||{};
+  const managed=!!runtimeProxy.managedByCentral;
+
+  const p=managed ? runtimeProxy : localProxy;
+
+  $("proxyAtivo").checked=!!p.ativo;
+  $("proxyHost").value=p.host||"";
+  $("proxyPorta").value=p.porta||"";
+  $("proxyUsuario").value=p.usuario||"";
+
+  // Nunca traz a senha do Proxy Geral para o renderer.
+  $("proxySenha").value=managed ? "" : (localProxy.senha||"");
+
+  for(const id of ["proxyAtivo","proxyHost","proxyPorta","proxyUsuario","proxySenha"]){
+    $(id).disabled=managed;
+  }
+
+  if(managed){
+    $("proxyTestResult").textContent = p.ativo
+      ? "Proxy controlado pelas Configurações gerais do Central."
+      : "Proxy Geral do Central está desativado.";
+  }
+
   renderGroups(currentConfig);
 }
+
 function switchView(viewId){ document.querySelectorAll(".view").forEach(v=>v.classList.remove("active-view")); document.querySelectorAll(".nav-btn").forEach(b=>b.classList.remove("active")); const view=document.getElementById(viewId); if(view)view.classList.add("active-view"); const btn=document.querySelector(`.nav-btn[data-view="${viewId}"]`); if(btn)btn.classList.add("active"); }
 document.querySelectorAll(".nav-btn").forEach(btn=>btn.addEventListener("click",()=>switchView(btn.dataset.view)));
+
+function formConfig(){
+  return {
+    ...currentConfig,
+    appsScriptUrl:$("appsUrl").value.trim(),
+    chromePath:$("chrome").value.trim(),
+    diagnosticoGrupos:$("diag").checked,
+    grupos:$("grupos").value.split(/\r?\n/).map(x=>x.trim()).filter(Boolean),
+    proxy:{
+      ativo:$("proxyAtivo").checked,
+      host:$("proxyHost").value.trim(),
+      porta:Number($("proxyPorta").value)||0,
+      usuario:$("proxyUsuario").value.trim(),
+      senha:$("proxySenha").value
+    }
+  };
+}
+
+// O click do checkbox agora é tratado explicitamente.
+// Isso evita a sensação de que "não ativou" quando o teste era feito antes
+// de salvar e ainda lia o valor antigo do config.json.
+$("proxyAtivo").addEventListener("change",()=>{
+  $("proxyTestResult").textContent=$("proxyAtivo").checked
+    ? "Proxy marcado como ativo. Você já pode testar antes de salvar."
+    : "Proxy marcado como desativado.";
+});
 $("start").onclick=async()=>{const r=await window.api.start(); if(r.message)addLog(r.message);};
 $("stop").onclick=async()=>{const r=await window.api.stop(); if(r.message)addLog(r.message);};
 $("openLog").onclick=()=>switchView("logview"); $("openCfg").onclick=()=>window.api.openConfigFolder();
-$("testProxy").onclick=async()=>{ const btn=$("testProxy"); btn.disabled=true; $("proxyTestResult").textContent="Testando proxy..."; const r=await window.api.testProxy(); addLog(r.message||"Teste do proxy concluído.",!r.ok); $("proxyTestResult").textContent=r.message||"Concluído."; btn.disabled=false; showStatus(await window.api.getStatus()); };
+$("testProxy").onclick=async()=>{ const btn=$("testProxy"); btn.disabled=true; $("proxyTestResult").textContent="Testando proxy..."; const r=await window.api.testProxy(formConfig()); addLog(r.message||"Teste do proxy concluído.",!r.ok); $("proxyTestResult").textContent=r.message||"Concluído."; btn.disabled=false; showStatus(await window.api.getStatus()); };
 $("saveCfg").onclick=async()=>{
-  const cfg={...currentConfig,appsScriptUrl:$("appsUrl").value.trim(),chromePath:$("chrome").value.trim(),diagnosticoGrupos:$("diag").checked,grupos:$("grupos").value.split(/\r?\n/).map(x=>x.trim()).filter(Boolean),proxy:{ativo:$("proxyAtivo").checked,host:$("proxyHost").value.trim(),porta:Number($("proxyPorta").value)||0,usuario:$("proxyUsuario").value.trim(),senha:$("proxySenha").value}};
+  const cfg=formConfig();
   delete cfg.aba;
   const r=await window.api.saveConfig(cfg); addLog(r.ok?"Configurações salvas. Proxy com autenticação disponível.":"Falha ao salvar configurações.",!r.ok); if(r.ok){currentConfig=cfg;renderGroups(cfg);}
 };
