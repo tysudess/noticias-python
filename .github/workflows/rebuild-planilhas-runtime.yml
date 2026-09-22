@@ -1,0 +1,138 @@
+name: Rebuild Planilhas Runtime
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: planilhas-runtime-v1.0.4
+  cancel-in-progress: true
+
+env:
+  RUNTIME_DIR: tools/planilhas_runtime_source
+  RELEASE_TAG: planilhas-runtime-v1.0.4
+  ASSET_NAME: AutomacaoPlanilhas-Windows-Portable-v1.0.4.exe
+
+jobs:
+  build-runtime:
+    runs-on: windows-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configurar Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: tools/planilhas_runtime_source/package.json
+
+      - name: Instalar dependências
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          Push-Location "$env:RUNTIME_DIR"
+          try {
+            npm install --no-audit --no-fund
+            node -e "console.log('whatsapp-web.js:', require('whatsapp-web.js/package.json').version)"
+          }
+          finally {
+            Pop-Location
+          }
+
+      - name: Aplicar hotfix de navegação do WhatsApp Web
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          Push-Location "$env:RUNTIME_DIR"
+          try {
+            npm run patch:wwebjs
+
+            $client = "node_modules/whatsapp-web.js/src/Client.js"
+
+            Select-String `
+              -Path $client `
+              -Pattern "waitForFunction" `
+              -SimpleMatch
+
+            if ($LASTEXITCODE -ne 0) {
+              throw "Hotfix do whatsapp-web.js não foi confirmado."
+            }
+          }
+          finally {
+            Pop-Location
+          }
+
+      - name: Gerar AutomacaoPlanilhas Portable
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          Push-Location "$env:RUNTIME_DIR"
+          try {
+            npm run dist
+
+            $exe = Join-Path "dist" $env:ASSET_NAME
+
+            if (-not (Test-Path $exe)) {
+              throw "Executável não foi gerado: $exe"
+            }
+
+            $sizeMB = [math]::Round((Get-Item $exe).Length / 1MB, 2)
+
+            if ((Get-Item $exe).Length -lt 50MB) {
+              throw "Executável parece incompleto: $sizeMB MB"
+            }
+
+            Write-Host "Runtime corrigido: $exe ($sizeMB MB)"
+          }
+          finally {
+            Pop-Location
+          }
+
+      - name: Guardar artefato de teste
+        uses: actions/upload-artifact@v4
+        with:
+          name: planilhas-runtime-hotfix
+          path: tools/planilhas_runtime_source/dist/AutomacaoPlanilhas-Windows-Portable-v1.0.4.exe
+          compression-level: 0
+          retention-days: 3
+
+      - name: Substituir asset da Release fixa
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          $file = Join-Path `
+            "$env:RUNTIME_DIR" `
+            ("dist\" + $env:ASSET_NAME)
+
+          gh release view `
+            $env:RELEASE_TAG `
+            --repo $env:GITHUB_REPOSITORY `
+            | Out-Null
+
+          gh release upload `
+            $env:RELEASE_TAG `
+            $file `
+            --repo $env:GITHUB_REPOSITORY `
+            --clobber
+
+          if ($LASTEXITCODE -ne 0) {
+            throw "Falha ao substituir o asset da Release."
+          }
+
+          Write-Host "Asset atualizado:"
+          gh release view `
+            $env:RELEASE_TAG `
+            --repo $env:GITHUB_REPOSITORY `
+            --json assets `
+            --jq '.assets[] | [.name, .size] | @tsv'
