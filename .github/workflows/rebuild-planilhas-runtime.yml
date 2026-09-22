@@ -17,19 +17,45 @@ env:
 
 jobs:
   build-runtime:
-    runs-on: windows-latest
+    # IMPORTANTE:
+    # O projeto original foi validado em Windows Server 2022.
+    # windows-latest migrou para Windows Server 2025 e o app-builder.exe
+    # pode falhar com ERR_ELECTRON_BUILDER_CANNOT_EXECUTE nesse ambiente.
+    runs-on: windows-2022
     timeout-minutes: 45
+
+    env:
+      # Evita tentativa automática de assinatura/certificado inexistente.
+      CSC_IDENTITY_AUTO_DISCOVERY: "false"
+
+      # Cache em caminho curto e ASCII para os binários do electron-builder.
+      ELECTRON_BUILDER_CACHE: ${{ runner.temp }}\electron-builder-cache
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Configurar Node 20
+      - name: Configurar Node 22
         uses: actions/setup-node@v4
         with:
-          node-version: "20"
-          cache: "npm"
-          cache-dependency-path: tools/planilhas_runtime_source/package.json
+          node-version: "22"
+
+      - name: Mostrar ambiente de build
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          Write-Host "Windows:"
+          Get-ComputerInfo |
+            Select-Object WindowsProductName, WindowsVersion, OsBuildNumber
+
+          Write-Host ""
+          Write-Host "Node:"
+          node --version
+
+          Write-Host ""
+          Write-Host "NPM:"
+          npm --version
 
       - name: Instalar dependências
         shell: pwsh
@@ -37,9 +63,43 @@ jobs:
           $ErrorActionPreference = "Stop"
 
           Push-Location "$env:RUNTIME_DIR"
+
           try {
+            if (Test-Path "node_modules") {
+              Remove-Item "node_modules" -Recurse -Force
+            }
+
+            if (Test-Path "dist") {
+              Remove-Item "dist" -Recurse -Force
+            }
+
             npm install --no-audit --no-fund
+
+            if ($LASTEXITCODE -ne 0) {
+              throw "npm install falhou."
+            }
+
+            node -e "console.log('electron:', require('electron/package.json').version)"
+            node -e "console.log('electron-builder:', require('electron-builder/package.json').version)"
             node -e "console.log('whatsapp-web.js:', require('whatsapp-web.js/package.json').version)"
+          }
+          finally {
+            Pop-Location
+          }
+
+      - name: Validar fontes JavaScript
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          Push-Location "$env:RUNTIME_DIR"
+
+          try {
+            node --check "main.js"
+            node --check "preload.js"
+            node --check "renderer/renderer.js"
+            node --check "engine/index.js"
+            node --check "scripts/patch-whatsapp-web.js"
           }
           finally {
             Pop-Location
@@ -51,19 +111,26 @@ jobs:
           $ErrorActionPreference = "Stop"
 
           Push-Location "$env:RUNTIME_DIR"
+
           try {
             npm run patch:wwebjs
 
+            if ($LASTEXITCODE -ne 0) {
+              throw "Hotfix do whatsapp-web.js falhou."
+            }
+
             $client = "node_modules/whatsapp-web.js/src/Client.js"
 
-            Select-String `
+            $matches = Select-String `
               -Path $client `
               -Pattern "waitForFunction" `
               -SimpleMatch
 
-            if ($LASTEXITCODE -ne 0) {
+            if (-not $matches) {
               throw "Hotfix do whatsapp-web.js não foi confirmado."
             }
+
+            Write-Host "Hotfix confirmado no Client.js."
           }
           finally {
             Pop-Location
@@ -75,8 +142,18 @@ jobs:
           $ErrorActionPreference = "Stop"
 
           Push-Location "$env:RUNTIME_DIR"
+
           try {
+            if (Test-Path "dist") {
+              Remove-Item "dist" -Recurse -Force
+            }
+
+            # Mesma forma de build definida no programa original.
             npm run dist
+
+            if ($LASTEXITCODE -ne 0) {
+              throw "electron-builder falhou com código $LASTEXITCODE."
+            }
 
             $exe = Join-Path "dist" $env:ASSET_NAME
 
@@ -84,13 +161,16 @@ jobs:
               throw "Executável não foi gerado: $exe"
             }
 
-            $sizeMB = [math]::Round((Get-Item $exe).Length / 1MB, 2)
+            $size = (Get-Item $exe).Length
+            $sizeMB = [math]::Round($size / 1MB, 2)
 
-            if ((Get-Item $exe).Length -lt 50MB) {
+            # O original só rejeita artefatos claramente incompletos.
+            if ($size -lt 10000000) {
               throw "Executável parece incompleto: $sizeMB MB"
             }
 
-            Write-Host "Runtime corrigido: $exe ($sizeMB MB)"
+            Write-Host "Runtime corrigido gerado:"
+            Write-Host "$exe ($sizeMB MB)"
           }
           finally {
             Pop-Location
@@ -103,6 +183,7 @@ jobs:
           path: tools/planilhas_runtime_source/dist/AutomacaoPlanilhas-Windows-Portable-v1.0.4.exe
           compression-level: 0
           retention-days: 3
+          if-no-files-found: error
 
       - name: Substituir asset da Release fixa
         shell: pwsh
@@ -115,10 +196,18 @@ jobs:
             "$env:RUNTIME_DIR" `
             ("dist\" + $env:ASSET_NAME)
 
+          if (-not (Test-Path $file)) {
+            throw "Arquivo da Release não existe: $file"
+          }
+
           gh release view `
             $env:RELEASE_TAG `
             --repo $env:GITHUB_REPOSITORY `
             | Out-Null
+
+          if ($LASTEXITCODE -ne 0) {
+            throw "A Release $env:RELEASE_TAG não foi encontrada."
+          }
 
           gh release upload `
             $env:RELEASE_TAG `
@@ -130,7 +219,7 @@ jobs:
             throw "Falha ao substituir o asset da Release."
           }
 
-          Write-Host "Asset atualizado:"
+          Write-Host "Asset atualizado com sucesso:"
           gh release view `
             $env:RELEASE_TAG `
             --repo $env:GITHUB_REPOSITORY `
