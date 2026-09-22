@@ -41,6 +41,15 @@ class Application:
 
         from PySide6.QtWidgets import QApplication
         from monitor_noticias.app.composition import AppContainer
+
+        # O patch precisa ser instalado ANTES de MainWindow importar
+        # ExtractorPage/ReferenceExtractorPage.
+        from monitor_noticias.ui.extractor_proxy_patch import (
+            install_extractor_proxy_patch,
+        )
+
+        install_extractor_proxy_patch()
+
         from monitor_noticias.ui.main_window import MainWindow
         from monitor_noticias.ui.screen_recorder_integration import (
             install_screen_recorder,
