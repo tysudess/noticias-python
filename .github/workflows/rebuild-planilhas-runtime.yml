@@ -28,8 +28,6 @@ jobs:
       # Evita tentativa automática de assinatura/certificado inexistente.
       CSC_IDENTITY_AUTO_DISCOVERY: "false"
 
-      # Cache em caminho curto e ASCII para os binários do electron-builder.
-      ELECTRON_BUILDER_CACHE: ${{ runner.temp }}\electron-builder-cache
 
     steps:
       - name: Checkout
@@ -61,6 +59,20 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
+
+          # runner.temp não pode ser usado no env do job.
+          # RUNNER_TEMP já é disponibilizado pelo GitHub Actions dentro do step.
+          $env:ELECTRON_BUILDER_CACHE = Join-Path `
+            $env:RUNNER_TEMP `
+            "electron-builder-cache"
+
+          New-Item `
+            -ItemType Directory `
+            -Force `
+            -Path $env:ELECTRON_BUILDER_CACHE `
+            | Out-Null
+
+          Write-Host "Electron Builder cache: $env:ELECTRON_BUILDER_CACHE"
 
           Push-Location "$env:RUNTIME_DIR"
 
@@ -140,6 +152,12 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
+
+          # Reaplica o mesmo cache nesta etapa, porque variáveis criadas em
+          # um step anterior não são persistidas automaticamente.
+          $env:ELECTRON_BUILDER_CACHE = Join-Path `
+            $env:RUNNER_TEMP `
+            "electron-builder-cache"
 
           Push-Location "$env:RUNTIME_DIR"
 
