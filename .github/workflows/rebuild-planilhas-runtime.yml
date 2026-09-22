@@ -99,6 +99,73 @@ jobs:
             Pop-Location
           }
 
+      - name: Baixar Chrome portátil para o WhatsApp
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          $runtime = "$env:RUNTIME_DIR"
+          $target = Join-Path $runtime "chrome-portable"
+          $zip = Join-Path $env:RUNNER_TEMP "chrome-win64.zip"
+          $extract = Join-Path $env:RUNNER_TEMP "chrome-win64-extract"
+
+          if (Test-Path $target) {
+            Remove-Item $target -Recurse -Force
+          }
+
+          if (Test-Path $extract) {
+            Remove-Item $extract -Recurse -Force
+          }
+
+          $meta = Invoke-RestMethod `
+            -Uri "https://googlechromelabs.github.io/chrome-for-testing/last-known-good-versions-with-downloads.json"
+
+          $download = $meta.channels.Stable.downloads.chrome |
+            Where-Object { $_.platform -eq "win64" } |
+            Select-Object -First 1
+
+          if (-not $download.url) {
+            throw "URL do Chrome for Testing win64 não encontrada."
+          }
+
+          Write-Host "Chrome Stable: $($meta.channels.Stable.version)"
+          Write-Host "Baixando: $($download.url)"
+
+          Invoke-WebRequest `
+            -Uri $download.url `
+            -OutFile $zip `
+            -UseBasicParsing
+
+          Expand-Archive `
+            -Path $zip `
+            -DestinationPath $extract `
+            -Force
+
+          $source = Join-Path $extract "chrome-win64"
+
+          if (-not (Test-Path (Join-Path $source "chrome.exe"))) {
+            throw "chrome.exe não encontrado após extrair o Chrome portátil."
+          }
+
+          Move-Item `
+            -Path $source `
+            -Destination $target `
+            -Force
+
+          $chromeExe = Join-Path $target "chrome.exe"
+
+          if (-not (Test-Path $chromeExe)) {
+            throw "Chrome portátil não foi preparado."
+          }
+
+          $sizeMB = [math]::Round(
+            (Get-ChildItem $target -Recurse -File | Measure-Object Length -Sum).Sum / 1MB,
+            2
+          )
+
+          Write-Host "Chrome portátil preparado: $chromeExe"
+          Write-Host "Tamanho total: $sizeMB MB"
+
       - name: Validar fontes JavaScript
         shell: pwsh
         run: |
@@ -162,6 +229,12 @@ jobs:
           Push-Location "$env:RUNTIME_DIR"
 
           try {
+            $chromeExe = Join-Path "chrome-portable" "chrome.exe"
+
+            if (-not (Test-Path $chromeExe)) {
+              throw "Chrome portátil ausente antes do electron-builder."
+            }
+
             if (Test-Path "dist") {
               Remove-Item "dist" -Recurse -Force
             }
