@@ -3,6 +3,7 @@ const axios = require("axios");
 const fs = require("fs");
 const path = require("path");
 const readline = require("readline");
+const { spawnSync } = require("child_process");
 
 const { Client, LocalAuth } = require("whatsapp-web.js");
 
@@ -1001,6 +1002,10 @@ function wait(ms) {
 let browserViewEnabled = false;
 let browserFrameTimer = null;
 let browserFrameBusy = false;
+let lastBrowserPid = 0;
+let browserPidTimer = null;
+let dbRecoveryAttempted = false;
+let authResetInProgress = false;
 
 async function browserPage() {
   const page = client?.pupPage;
@@ -1016,6 +1021,8 @@ async function browserPage() {
 }
 
 async function emitBrowserFrame(force = false) {
+  emitBrowserProcess();
+
   if (
     browserFrameBusy
     || (!browserViewEnabled && !force)
@@ -1041,24 +1048,54 @@ async function emitBrowserFrame(force = false) {
   browserFrameBusy = true;
 
   try {
-    try {
-      const viewport =
-        page.viewport();
+    let bodyText = "";
 
-      if (
-        !viewport
-        || viewport.width < 1000
-        || viewport.height < 650
-      ) {
-        await page.setViewport(
-          {
-            width: 1200,
-            height: 760,
-            deviceScaleFactor: 1,
-          }
+    try {
+      bodyText =
+        await page.evaluate(
+          () => document.body?.innerText || ""
         );
-      }
     } catch (_) {}
+
+    const normalized =
+      String(bodyText || "")
+        .normalize("NFD")
+        .replace(/[\u0300-\u036f]/g, "")
+        .toLowerCase();
+
+    const databaseError =
+      normalized.includes(
+        "erro no banco de dados do seu navegador"
+      )
+      || normalized.includes(
+        "erro no banco de dados do navegador"
+      );
+
+    if (
+      databaseError
+      && !dbRecoveryAttempted
+      && !authResetInProgress
+      && !initialized
+    ) {
+      dbRecoveryAttempted = true;
+
+      emit(
+        "browser_db_error",
+        {
+          message:
+            "WhatsApp Web detectou banco local corrompido.",
+        }
+      );
+
+      setTimeout(
+        () => {
+          resetWhatsAppAuth(
+            "recuperação automática do banco local"
+          );
+        },
+        250
+      );
+    }
 
     const base64 =
       await page.screenshot(
@@ -1107,6 +1144,7 @@ async function emitBrowserFrame(force = false) {
   }
 }
 
+
 function ensureBrowserFrameTimer() {
   if (browserFrameTimer) {
     return;
@@ -1120,6 +1158,52 @@ function ensureBrowserFrameTimer() {
       1500
     );
 }
+
+function currentBrowserPid() {
+  try {
+    const proc =
+      client?.pupBrowser?.process?.();
+
+    return Number(
+      proc?.pid || 0
+    );
+  } catch (_) {
+    return 0;
+  }
+}
+
+function emitBrowserProcess() {
+  const pid =
+    currentBrowserPid();
+
+  if (
+    pid > 0
+    && pid !== lastBrowserPid
+  ) {
+    lastBrowserPid = pid;
+
+    emit(
+      "browser_process",
+      {
+        pid,
+      }
+    );
+  }
+}
+
+function ensureBrowserPidTimer() {
+  if (browserPidTimer) {
+    return;
+  }
+
+  browserPidTimer =
+    setInterval(
+      emitBrowserProcess,
+      300
+    );
+}
+
+ensureBrowserPidTimer();
 
 async function browserWindowBounds() {
   const page =
@@ -1147,46 +1231,15 @@ async function browserWindowBounds() {
 }
 
 async function showBrowserWindow() {
-  try {
-    const {
-      session,
-      windowId,
-    } =
-      await browserWindowBounds();
-
-    await session.send(
-      "Browser.setWindowBounds",
-      {
-        windowId,
-        bounds: {
-          windowState: "normal",
-          left: 90,
-          top: 70,
-          width: 1200,
-          height: 820,
-        },
-      }
-    );
-
-    emit(
-      "browser_window",
-      {
-        message:
-          "Janela real do WhatsApp Web aberta.",
-      }
-    );
-
-  } catch (e) {
-    emit(
-      "browser_view_status",
-      {
-        message:
-          `Chrome ainda não está disponível: `
-          + `${e.message}`,
-      }
-    );
-  }
+  emit(
+    "browser_view_status",
+    {
+      message:
+        "A janela do Chrome é incorporada diretamente na aba WhatsApp.",
+    }
+  );
 }
+
 
 async function hideBrowserWindow() {
   try {
@@ -1226,6 +1279,169 @@ async function hideBrowserWindow() {
       {
         message:
           `Não foi possível ocultar a janela: `
+          + `${e.message}`,
+      }
+    );
+  }
+}
+
+function activeSessionDir() {
+  return path.join(
+    AUTH_DIR,
+    "session-monitor-planilha"
+  );
+}
+
+async function removeSessionDirWithRetries(
+  sessionDir
+) {
+  let lastError = null;
+
+  for (
+    let attempt = 1;
+    attempt <= 12;
+    attempt += 1
+  ) {
+    try {
+      fs.rmSync(
+        sessionDir,
+        {
+          recursive: true,
+          force: true,
+          maxRetries: 3,
+          retryDelay: 300,
+        }
+      );
+
+      return true;
+
+    } catch (e) {
+      lastError = e;
+      await wait(
+        350 + attempt * 180
+      );
+    }
+  }
+
+  throw lastError;
+}
+
+async function resetWhatsAppAuth(
+  reason = "solicitação do usuário"
+) {
+  if (
+    authResetInProgress
+    || shuttingDown
+  ) {
+    return;
+  }
+
+  authResetInProgress = true;
+  initialized = false;
+  qrReceived = false;
+
+  emit(
+    "auth_reset_started",
+    {
+      reason,
+    }
+  );
+
+  log(
+    "RECRIANDO SESSÃO DO WHATSAPP:",
+    reason
+  );
+
+  const oldPid =
+    currentBrowserPid();
+
+  try {
+    await safeDestroy();
+  } catch (_) {}
+
+  await wait(900);
+
+  // Em Windows, Chromium pode manter LevelDB/IndexedDB aberto por alguns
+  // instantes após browser.close(). Mata SOMENTE a árvore do Chrome iniciado
+  // por este Puppeteer, nunca o Chrome pessoal do usuário.
+  if (
+    process.platform === "win32"
+    && oldPid > 0
+  ) {
+    try {
+      spawnSync(
+        "taskkill",
+        [
+          "/PID",
+          String(oldPid),
+          "/T",
+          "/F",
+        ],
+        {
+          windowsHide: true,
+          stdio: "ignore",
+        }
+      );
+    } catch (_) {}
+  }
+
+  await wait(700);
+
+  const sessionDir =
+    activeSessionDir();
+
+  try {
+    if (fs.existsSync(sessionDir)) {
+      await removeSessionDirWithRetries(
+        sessionDir
+      );
+    }
+  } catch (e) {
+    authResetInProgress = false;
+
+    emit(
+      "auth_reset_error",
+      {
+        message:
+          `Não foi possível limpar a sessão local: `
+          + `${e.message}`,
+      }
+    );
+
+    error(
+      "Falha ao limpar sessão local:",
+      e
+    );
+    return;
+  }
+
+  client =
+    new Client(
+      clientOptions
+    );
+
+  installClientEvents();
+
+  lastBrowserPid = 0;
+  authResetInProgress = false;
+
+  emit(
+    "auth_reset_done"
+  );
+
+  log(
+    "Sessão local limpa. "
+    + "Inicializando WhatsApp para gerar novo QR..."
+  );
+
+  try {
+    await initializeWithRecovery();
+  } catch (e) {
+    emit(
+      "auth_reset_error",
+      {
+        message:
+          `Falha ao reiniciar WhatsApp: `
           + `${e.message}`,
       }
     );
@@ -1574,6 +1790,7 @@ async function initializeWithRecovery() {
       );
 
       browserViewEnabled = true;
+      emitBrowserProcess();
 
       // O preview começa ANTES de initialize() resolver. Isso é intencional:
       // mesmo se o evento "qr" falhar por uma navegação do WhatsApp Web,
@@ -1588,6 +1805,10 @@ async function initializeWithRecovery() {
       return;
 
     } catch (e) {
+      if (authResetInProgress) {
+        return;
+      }
+
       lastError = e;
 
       const message =
@@ -2083,6 +2304,11 @@ async function shutdown(
     browserFrameTimer = null;
   }
 
+  if (browserPidTimer) {
+    clearInterval(browserPidTimer);
+    browserPidTimer = null;
+  }
+
   log(
     "Encerrando motor:",
     reason
@@ -2150,6 +2376,13 @@ input.on(
 
     if (cmd === "RELOAD_WHATSAPP") {
       reloadWhatsApp();
+      return;
+    }
+
+    if (cmd === "RESET_AUTH") {
+      resetWhatsAppAuth(
+        "solicitação do Central"
+      );
       return;
     }
   }

@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import base64
+import ctypes
 import json
+import os
 import shutil
 from datetime import datetime
 from pathlib import Path
@@ -65,6 +67,13 @@ class SpreadsheetAutomationPage(BasePage):
         self.log_path.parent.mkdir(parents=True, exist_ok=True)
 
         self.process: QProcess | None = None
+
+        # Janela nativa do Chrome/Puppeteer incorporada na aba WhatsApp.
+        self._whatsapp_browser_pid: int | None = None
+        self._whatsapp_browser_hwnd: int | None = None
+        self._whatsapp_embed_attempts = 0
+        self._whatsapp_last_pixmap = None
+
         self._stdout_buffer = ""
         self._stderr_buffer = ""
         self._manual_stop = False
@@ -455,41 +464,49 @@ class SpreadsheetAutomationPage(BasePage):
         )
         controls.addWidget(reload_btn)
 
-        show_browser = QPushButton("▣  ABRIR JANELA REAL")
-        show_browser.setObjectName("sheetSecondary")
-        show_browser.setToolTip(
-            "Mostra a mesma janela do Chrome controlada pela automação. "
-            "Não abre uma segunda sessão."
+        self.whatsapp_reset_btn = QPushButton("⚠  RECRIAR SESSÃO / QR")
+        self.whatsapp_reset_btn.setObjectName("sheetDanger")
+        self.whatsapp_reset_btn.setToolTip(
+            "Fecha somente o Chrome da automação, remove a sessão local "
+            "corrompida e cria uma sessão limpa para gerar novo QR."
         )
-        show_browser.clicked.connect(
-            lambda: self._send_engine_command("SHOW_BROWSER")
+        self.whatsapp_reset_btn.clicked.connect(
+            self._reset_whatsapp_session
         )
-        controls.addWidget(show_browser)
-
-        hide_browser = QPushButton("—  OCULTAR JANELA")
-        hide_browser.setObjectName("sheetSecondary")
-        hide_browser.clicked.connect(
-            lambda: self._send_engine_command("HIDE_BROWSER")
-        )
-        controls.addWidget(hide_browser)
+        controls.addWidget(self.whatsapp_reset_btn)
 
         controls.addStretch()
         cl.addLayout(controls)
 
+        self.whatsapp_browser_stack = QStackedWidget()
+        self.whatsapp_browser_stack.setMinimumHeight(520)
+
         self.whatsapp_preview = QLabel(
             "Inicie a Automação de Planilhas.\n"
-            "A tela real do WhatsApp Web aparecerá aqui."
+            "A janela REAL do Chrome/WhatsApp será incorporada aqui."
         )
         self.whatsapp_preview.setObjectName("sheetWhatsappPreview")
         self.whatsapp_preview.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.whatsapp_preview.setMinimumHeight(520)
         self.whatsapp_preview.setWordWrap(True)
-        cl.addWidget(self.whatsapp_preview, 1)
+
+        self.whatsapp_browser_host = QFrame()
+        self.whatsapp_browser_host.setObjectName("sheetWhatsappBrowserHost")
+        self.whatsapp_browser_host.setAttribute(
+            Qt.WidgetAttribute.WA_NativeWindow,
+            True,
+        )
+        self.whatsapp_browser_host.setMinimumHeight(520)
+
+        self.whatsapp_browser_stack.addWidget(self.whatsapp_preview)
+        self.whatsapp_browser_stack.addWidget(self.whatsapp_browser_host)
+        self.whatsapp_browser_stack.setCurrentWidget(self.whatsapp_preview)
+
+        cl.addWidget(self.whatsapp_browser_stack, 1)
 
         help_box = QLabel(
-            "Esta visualização não cria outro login: ela é uma imagem atualizada "
-            "da própria página do Chrome/Puppeteer usada pelo motor. "
-            "Se precisar interagir diretamente, use “ABRIR JANELA REAL”."
+            "O Chrome acima é a MESMA janela usada pelo whatsapp-web.js, "
+            "incorporada dentro do Central. Não é uma segunda sessão e não "
+            "deve abrir como janela separada no desktop."
         )
         help_box.setObjectName("sheetMuted")
         help_box.setWordWrap(True)
@@ -509,6 +526,295 @@ class SpreadsheetAutomationPage(BasePage):
             1000,
             lambda: self._send_engine_command("SCREENSHOT"),
         )
+
+    def _reset_whatsapp_session(self) -> None:
+        answer = QMessageBox.question(
+            self,
+            "Recriar sessão do WhatsApp",
+            "O WhatsApp Web informou erro no banco de dados do navegador.\n\n"
+            "Esta ação encerra somente o Chrome usado pela Automação de "
+            "Planilhas, apaga o perfil local dessa sessão e cria um novo QR.\n\n"
+            "Deseja continuar?",
+            QMessageBox.StandardButton.Yes
+            | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.Yes,
+        )
+
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+
+        self._detach_embedded_browser()
+
+        self.whatsapp_view_status.setText(
+            "Recriando sessão limpa do WhatsApp..."
+        )
+        self.whatsapp_browser_stack.setCurrentWidget(
+            self.whatsapp_preview
+        )
+        self.whatsapp_preview.clear()
+        self.whatsapp_preview.setText(
+            "Limpando o banco local do WhatsApp Web...\n"
+            "Um novo QR Code será criado automaticamente."
+        )
+
+        self._send_engine_command("RESET_AUTH")
+
+    def _detach_embedded_browser(self) -> None:
+        hwnd = self._whatsapp_browser_hwnd
+        self._whatsapp_browser_hwnd = None
+        self._whatsapp_browser_pid = None
+        self._whatsapp_embed_attempts = 0
+
+        if (
+            os.name != "nt"
+            or not hwnd
+        ):
+            return
+
+        try:
+            user32 = ctypes.windll.user32
+            if user32.IsWindow(hwnd):
+                # O processo Node normalmente destruirá esta janela logo em
+                # seguida. Reparent para o desktop antes, evitando prender um
+                # HWND antigo ao widget Qt.
+                user32.SetParent(
+                    ctypes.c_void_p(hwnd),
+                    ctypes.c_void_p(0),
+                )
+        except Exception:
+            pass
+
+    def _find_chrome_hwnd(
+        self,
+        pid: int,
+    ) -> int | None:
+        if os.name != "nt" or pid <= 0:
+            return None
+
+        user32 = ctypes.windll.user32
+        matches: list[int] = []
+
+        EnumWindowsProc = ctypes.WINFUNCTYPE(
+            ctypes.c_bool,
+            ctypes.c_void_p,
+            ctypes.c_void_p,
+        )
+
+        @EnumWindowsProc
+        def callback(hwnd, _lparam):
+            process_id = ctypes.c_ulong(0)
+
+            user32.GetWindowThreadProcessId(
+                hwnd,
+                ctypes.byref(process_id),
+            )
+
+            if int(process_id.value) != int(pid):
+                return True
+
+            class_buffer = ctypes.create_unicode_buffer(256)
+            user32.GetClassNameW(
+                hwnd,
+                class_buffer,
+                256,
+            )
+            class_name = class_buffer.value
+
+            # A janela principal do Chrome/Edge baseada em Chromium.
+            if class_name.startswith("Chrome_WidgetWin"):
+                matches.append(int(hwnd))
+                return False
+
+            return True
+
+        user32.EnumWindows(
+            callback,
+            0,
+        )
+
+        return matches[0] if matches else None
+
+    def _embed_browser_pid(
+        self,
+        pid: int,
+    ) -> None:
+        if os.name != "nt":
+            self.whatsapp_view_status.setText(
+                "A incorporação do Chrome é exclusiva do Windows."
+            )
+            return
+
+        self._whatsapp_browser_pid = int(pid)
+        self._whatsapp_embed_attempts = 0
+
+        self._try_embed_browser()
+
+    def _try_embed_browser(self) -> None:
+        pid = self._whatsapp_browser_pid
+
+        if not pid:
+            return
+
+        hwnd = self._find_chrome_hwnd(pid)
+
+        if not hwnd:
+            self._whatsapp_embed_attempts += 1
+
+            if self._whatsapp_embed_attempts <= 40:
+                QTimer.singleShot(
+                    250,
+                    self._try_embed_browser,
+                )
+            else:
+                self.whatsapp_view_status.setText(
+                    "Chrome iniciado, mas a janela não pôde ser incorporada."
+                )
+            return
+
+        try:
+            user32 = ctypes.windll.user32
+
+            # GWL_STYLE
+            GWL_STYLE = -16
+
+            # Win32 styles.
+            WS_CHILD = 0x40000000
+            WS_VISIBLE = 0x10000000
+            WS_POPUP = 0x80000000
+            WS_CAPTION = 0x00C00000
+            WS_THICKFRAME = 0x00040000
+            WS_MINIMIZEBOX = 0x00020000
+            WS_MAXIMIZEBOX = 0x00010000
+            WS_SYSMENU = 0x00080000
+
+            SWP_NOZORDER = 0x0004
+            SWP_NOACTIVATE = 0x0010
+            SWP_FRAMECHANGED = 0x0020
+            SW_SHOW = 5
+
+            host_hwnd = int(
+                self.whatsapp_browser_host.winId()
+            )
+
+            get_style = getattr(
+                user32,
+                "GetWindowLongPtrW",
+                user32.GetWindowLongW,
+            )
+            set_style = getattr(
+                user32,
+                "SetWindowLongPtrW",
+                user32.SetWindowLongW,
+            )
+
+            style = int(
+                get_style(
+                    ctypes.c_void_p(hwnd),
+                    GWL_STYLE,
+                )
+            )
+
+            style &= ~(
+                WS_POPUP
+                | WS_CAPTION
+                | WS_THICKFRAME
+                | WS_MINIMIZEBOX
+                | WS_MAXIMIZEBOX
+                | WS_SYSMENU
+            )
+            style |= (
+                WS_CHILD
+                | WS_VISIBLE
+            )
+
+            set_style(
+                ctypes.c_void_p(hwnd),
+                GWL_STYLE,
+                style,
+            )
+
+            ctypes.set_last_error(0)
+            user32.SetParent(
+                ctypes.c_void_p(hwnd),
+                ctypes.c_void_p(host_hwnd),
+            )
+
+            user32.SetWindowPos(
+                ctypes.c_void_p(hwnd),
+                ctypes.c_void_p(0),
+                0,
+                0,
+                max(
+                    1,
+                    self.whatsapp_browser_host.width(),
+                ),
+                max(
+                    1,
+                    self.whatsapp_browser_host.height(),
+                ),
+                SWP_NOZORDER
+                | SWP_NOACTIVATE
+                | SWP_FRAMECHANGED,
+            )
+
+            user32.ShowWindow(
+                ctypes.c_void_p(hwnd),
+                SW_SHOW,
+            )
+
+            self._whatsapp_browser_hwnd = hwnd
+            self.whatsapp_browser_stack.setCurrentWidget(
+                self.whatsapp_browser_host
+            )
+            self.whatsapp_view_status.setText(
+                "WhatsApp Web incorporado ao Central"
+            )
+
+            self._resize_embedded_browser()
+
+        except Exception as exc:
+            self.whatsapp_view_status.setText(
+                f"Falha ao incorporar Chrome: {exc}"
+            )
+            self._append_log(
+                f"Falha ao incorporar Chrome dentro do Central: {exc}",
+                True,
+            )
+
+    def _resize_embedded_browser(self) -> None:
+        hwnd = self._whatsapp_browser_hwnd
+
+        if (
+            os.name != "nt"
+            or not hwnd
+        ):
+            return
+
+        try:
+            user32 = ctypes.windll.user32
+
+            if not user32.IsWindow(
+                ctypes.c_void_p(hwnd)
+            ):
+                self._whatsapp_browser_hwnd = None
+                return
+
+            user32.MoveWindow(
+                ctypes.c_void_p(hwnd),
+                0,
+                0,
+                max(
+                    1,
+                    self.whatsapp_browser_host.width(),
+                ),
+                max(
+                    1,
+                    self.whatsapp_browser_host.height(),
+                ),
+                True,
+            )
+        except Exception:
+            pass
 
     def _send_engine_command(self, command: str) -> None:
         if not self._is_running() or self.process is None:
@@ -573,6 +879,9 @@ class SpreadsheetAutomationPage(BasePage):
 
         if hasattr(self, "whatsapp_preview"):
             self._render_whatsapp_pixmap()
+
+        if hasattr(self, "whatsapp_browser_host"):
+            self._resize_embedded_browser()
 
     def _build_settings(self) -> QWidget:
         outer = QWidget()
@@ -1139,6 +1448,61 @@ class SpreadsheetAutomationPage(BasePage):
             if browser:
                 self._append_log(f"Navegador detectado: {browser}")
 
+        elif kind == "browser_process":
+            try:
+                pid = int(event.get("pid", 0) or 0)
+            except Exception:
+                pid = 0
+
+            if pid > 0:
+                self._embed_browser_pid(pid)
+
+        elif kind == "browser_db_error":
+            self.stats["whatsapp"] = "BANCO LOCAL CORROMPIDO"
+            self.whatsapp_view_status.setText(
+                "Banco local corrompido — recriando sessão automaticamente"
+            )
+            self.dashboard_status.setText(
+                "O WhatsApp Web detectou erro no banco de dados local. "
+                "A sessão será recriada para gerar novo QR."
+            )
+            self._append_log(
+                "WhatsApp Web detectou erro no banco de dados do navegador. "
+                "Recriando sessão local.",
+                True,
+            )
+
+        elif kind == "auth_reset_started":
+            self._detach_embedded_browser()
+            self.whatsapp_browser_stack.setCurrentWidget(
+                self.whatsapp_preview
+            )
+            self.whatsapp_preview.clear()
+            self.whatsapp_preview.setText(
+                "Recriando a sessão local do WhatsApp Web...\n"
+                "Aguarde o novo QR Code."
+            )
+            self.whatsapp_view_status.setText(
+                "Limpando banco local e preparando novo QR..."
+            )
+
+        elif kind == "auth_reset_done":
+            self.stats["whatsapp"] = "AGUARDANDO QR"
+            self.whatsapp_view_status.setText(
+                "Sessão limpa criada. Aguardando QR Code..."
+            )
+
+        elif kind == "auth_reset_error":
+            message = str(
+                event.get(
+                    "message",
+                    "Falha ao recriar sessão do WhatsApp.",
+                )
+            )
+            self.stats["whatsapp"] = "ERRO"
+            self.whatsapp_view_status.setText(message)
+            self._append_log(message, True)
+
         elif kind == "browser_frame":
             self._show_whatsapp_frame(
                 str(event.get("dataUrl", ""))
@@ -1161,8 +1525,11 @@ class SpreadsheetAutomationPage(BasePage):
             self.stats["whatsapp"] = "AGUARDANDO AUTENTICAÇÃO"
             self.qr_status.setText("QR Code pronto. Faça a leitura pelo WhatsApp.")
             self.whatsapp_view_status.setText("QR Code pronto para leitura")
-            self._send_engine_command("SCREENSHOT")
             self._show_qr(str(event.get("dataUrl", "")))
+
+            # Leva diretamente à aba que contém a janela REAL incorporada.
+            self._set_view(1)
+            self._send_engine_command("VIEW_ON")
 
         elif kind == "authenticated":
             self.stats["whatsapp"] = "AUTENTICADO"
@@ -1262,6 +1629,7 @@ class SpreadsheetAutomationPage(BasePage):
         self._stderr_buffer = ""
 
         was_manual = self._manual_stop
+        self._detach_embedded_browser()
         self.process = None
         if hasattr(self, "whatsapp_view_status"):
             self.whatsapp_view_status.setText("Motor parado")
@@ -1515,6 +1883,23 @@ class SpreadsheetAutomationPage(BasePage):
             border-radius:22px;
             font-size:40px;
             font-weight:900;
+        }
+        QFrame#sheetWhatsappBrowserHost {
+            background:#0B141A;
+            border:1px solid #24404F;
+            border-radius:10px;
+        }
+        QPushButton#sheetDanger {
+            background:#FFF0F2;
+            color:#C8203F;
+            border:1px solid #F2A6B5;
+            border-radius:8px;
+            padding:8px 11px;
+            font-weight:900;
+        }
+        QPushButton#sheetDanger:hover {
+            background:#FFE2E8;
+            border-color:#E67B90;
         }
         QLabel#sheetWhatsappPreview {
             background:#0B141A;
