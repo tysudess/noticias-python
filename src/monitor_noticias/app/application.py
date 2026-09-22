@@ -10,22 +10,37 @@ from .paths import AppPaths
 
 
 class Application:
-    def __init__(self, paths: AppPaths | None = None) -> None:
-        self.paths = paths or AppPaths.discover()
+    def __init__(
+        self,
+        paths: AppPaths | None = None,
+    ) -> None:
+        self.paths = (
+            paths
+            or AppPaths.discover()
+        )
 
     def run(self) -> int:
         self.paths.ensure_runtime_dirs()
         configure_logging(self.paths)
         install_global_exception_hooks()
 
-        log = logging.getLogger("monitor_noticias.application")
-        log.info("Inicializando Central Inteligente de Mídia PySide6")
+        log = logging.getLogger(
+            "monitor_noticias.application"
+        )
+        log.info(
+            "Inicializando Central Inteligente de Mídia PySide6"
+        )
 
         # Correção da pré-visualização de alguns MP4 no Windows.
         # Estas variáveis precisam ser definidas ANTES de importar os módulos
         # Qt Multimedia usados pelo Editor de Vídeo.
-        if sys.platform.startswith("win"):
-            os.environ.setdefault("QT_MEDIA_BACKEND", "ffmpeg")
+        if sys.platform.startswith(
+            "win"
+        ):
+            os.environ.setdefault(
+                "QT_MEDIA_BACKEND",
+                "ffmpeg",
+            )
 
             # Prioriza decodificação por software. Alguns drivers/GPUs exibiam
             # somente uma tela preta, embora duração, áudio e miniaturas fossem
@@ -39,11 +54,15 @@ class Application:
                 "1",
             )
 
-        from PySide6.QtWidgets import QApplication
-        from monitor_noticias.app.composition import AppContainer
+        from PySide6.QtWidgets import (
+            QApplication,
+        )
+        from monitor_noticias.app.composition import (
+            AppContainer,
+        )
 
-        # O patch precisa ser instalado ANTES de MainWindow importar
-        # ExtractorPage/ReferenceExtractorPage.
+        # Estes patches precisam ser instalados ANTES de MainWindow importar
+        # as páginas correspondentes.
         from monitor_noticias.ui.extractor_proxy_patch import (
             install_extractor_proxy_patch,
         )
@@ -53,30 +72,55 @@ class Application:
         from monitor_noticias.ui.covers_web_proxy_patch import (
             install_covers_web_proxy_patch,
         )
+        from monitor_noticias.ui.spreadsheet_shared_whatsapp_patch import (
+            install_spreadsheet_shared_whatsapp_patch,
+        )
 
         install_extractor_proxy_patch()
         install_settings_proxy_toggle_patch()
         install_covers_web_proxy_patch()
+        install_spreadsheet_shared_whatsapp_patch()
 
-        from monitor_noticias.ui.main_window import MainWindow
+        from monitor_noticias.ui.main_window import (
+            MainWindow,
+        )
         from monitor_noticias.ui.screen_recorder_integration import (
             install_screen_recorder,
         )
+        from monitor_noticias.ui.whatsapp_browser_integration import (
+            install_whatsapp_browser,
+        )
 
-        qt_app = QApplication.instance() or QApplication(sys.argv)
-        qt_app.setApplicationName("Central Inteligente de Mídia")
-        qt_app.setApplicationDisplayName("Central Inteligente de Mídia")
-        qt_app.setOrganizationName("Central Inteligente de Mídia")
+        qt_app = (
+            QApplication.instance()
+            or QApplication(sys.argv)
+        )
+        qt_app.setApplicationName(
+            "Central Inteligente de Mídia"
+        )
+        qt_app.setApplicationDisplayName(
+            "Central Inteligente de Mídia"
+        )
+        qt_app.setOrganizationName(
+            "Central Inteligente de Mídia"
+        )
 
-        container = AppContainer.build(self.paths)
+        container = AppContainer.build(
+            self.paths
+        )
         window = MainWindow(
             controller=container.controller,
             paths=self.paths,
         )
 
-        # Nova aba nativa: Gravador de Tela.
-        # É instalada depois que o MainWindow monta sidebar, stack e tray.
-        install_screen_recorder(window)
+        # Abas nativas adicionadas depois que MainWindow monta sidebar,
+        # stack e tray. Assim evitamos reescrever o arquivo principal.
+        install_screen_recorder(
+            window
+        )
+        install_whatsapp_browser(
+            window
+        )
 
         window.show()
 

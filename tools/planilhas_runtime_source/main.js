@@ -1,4 +1,10 @@
-const { app, BrowserWindow, ipcMain, shell } = require("electron");
+const {
+  app,
+  BrowserWindow,
+  ipcMain,
+  shell,
+} = require("electron");
+
 const path = require("path");
 const fs = require("fs");
 const axios = require("axios");
@@ -24,250 +30,1469 @@ let stats = {
   ultimaLinha: "",
   ultimaMensagem: "",
   ultimaAtualizacao: "--",
-  ultimaNoticia: { titulo:"Nenhuma notícia processada ainda", veiculo:"--", grupo:"--", data:"--", assunto:"--", analise:"--", autor:"--", link:"" }
+  ultimaNoticia: {
+    titulo: "Nenhuma notícia processada ainda",
+    veiculo: "--",
+    grupo: "--",
+    data: "--",
+    assunto: "--",
+    analise: "--",
+    autor: "--",
+    link: "",
+  },
 };
 
-function baseDir(){ return process.env.PORTABLE_EXECUTABLE_DIR || (app.isPackaged ? path.dirname(process.execPath) : __dirname); }
-function configPath(){ return path.join(baseDir(), "config.json"); }
-function enginePath(){ return app.isPackaged ? path.join(app.getAppPath(), "engine", "index.js") : path.join(__dirname, "engine", "index.js"); }
-function appIcon(){ return path.join(__dirname, "build", "icon.png"); }
-function portableChromePath(){
-  const candidate = app.isPackaged
-    ? path.join(process.resourcesPath, "chrome-portable", "chrome.exe")
-    : path.join(__dirname, "chrome-portable", "chrome.exe");
-
-  return fs.existsSync(candidate) ? candidate : "";
-}
-function ensureConfig(){
-  const target = configPath();
-  if(!fs.existsSync(target)){
-    const source = app.isPackaged ? path.join(process.resourcesPath, "config.default.json") : path.join(__dirname, "config.json");
-    fs.copyFileSync(source, target);
-  }
-  return target;
-}
-function readConfig(){ return JSON.parse(fs.readFileSync(ensureConfig(), "utf8")); }
-function proxyFromConfig(cfg){
-  const p = cfg?.proxy || {};
-  if(!p.ativo || !p.host || !Number(p.porta)) return undefined;
-  const proxy = { protocol:"http", host:String(p.host).trim(), port:Number(p.porta) };
-  if(String(p.usuario || "").trim()) proxy.auth = { username:String(p.usuario).trim(), password:String(p.senha || "") };
-  return proxy;
-}
-
-function centralProxyPresent(){
-  return Object.prototype.hasOwnProperty.call(
-    process.env,
-    "CENTRAL_PROXY_ENABLED"
+function baseDir() {
+  return (
+    process.env.PORTABLE_EXECUTABLE_DIR
+    || (
+      app.isPackaged
+        ? path.dirname(process.execPath)
+        : __dirname
+    )
   );
 }
 
-function effectiveProxyConfig(localCfg){
-  if(!centralProxyPresent()) return localCfg?.proxy || {};
+function configPath() {
+  return path.join(
+    baseDir(),
+    "config.json"
+  );
+}
+
+function enginePath() {
+  return app.isPackaged
+    ? path.join(
+      app.getAppPath(),
+      "engine",
+      "index.js"
+    )
+    : path.join(
+      __dirname,
+      "engine",
+      "index.js"
+    );
+}
+
+function appIcon() {
+  return path.join(
+    __dirname,
+    "build",
+    "icon.png"
+  );
+}
+
+function portableChromePath() {
+  const candidate =
+    app.isPackaged
+      ? path.join(
+        process.resourcesPath,
+        "chrome-portable",
+        "chrome.exe"
+      )
+      : path.join(
+        __dirname,
+        "chrome-portable",
+        "chrome.exe"
+      );
+
+  return fs.existsSync(candidate)
+    ? candidate
+    : "";
+}
+
+function ensureConfig() {
+  const target =
+    configPath();
+
+  if (
+    !fs.existsSync(target)
+  ) {
+    const source =
+      app.isPackaged
+        ? path.join(
+          process.resourcesPath,
+          "config.default.json"
+        )
+        : path.join(
+          __dirname,
+          "config.json"
+        );
+
+    fs.copyFileSync(
+      source,
+      target
+    );
+  }
+
+  return target;
+}
+
+function readConfig() {
+  return JSON.parse(
+    fs.readFileSync(
+      ensureConfig(),
+      "utf8"
+    )
+  );
+}
+
+function proxyFromConfig(cfg) {
+  const p =
+    cfg?.proxy || {};
+
+  if (
+    !p.ativo
+    || !p.host
+    || !Number(p.porta)
+  ) {
+    return undefined;
+  }
+
+  const proxy = {
+    protocol: "http",
+    host:
+      String(p.host)
+        .trim(),
+    port:
+      Number(p.porta),
+  };
+
+  if (
+    String(
+      p.usuario || ""
+    ).trim()
+  ) {
+    proxy.auth = {
+      username:
+        String(
+          p.usuario
+        ).trim(),
+      password:
+        String(
+          p.senha || ""
+        ),
+    };
+  }
+
+  return proxy;
+}
+
+function centralProxyPresent() {
+  return Object.prototype
+    .hasOwnProperty.call(
+      process.env,
+      "CENTRAL_PROXY_ENABLED"
+    );
+}
+
+function effectiveProxyConfig(
+  localCfg
+) {
+  if (
+    !centralProxyPresent()
+  ) {
+    return (
+      localCfg?.proxy
+      || {}
+    );
+  }
 
   return {
-    ativo: process.env.CENTRAL_PROXY_ENABLED === "1",
-    host: String(process.env.CENTRAL_PROXY_HOST || "").trim(),
-    porta: Number(process.env.CENTRAL_PROXY_PORT || 0),
-    usuario: String(process.env.CENTRAL_PROXY_USERNAME || "").trim(),
-    senha: String(process.env.CENTRAL_PROXY_PASSWORD || ""),
-    managedByCentral: true
+    ativo:
+      process.env.CENTRAL_PROXY_ENABLED
+      === "1",
+    host:
+      String(
+        process.env.CENTRAL_PROXY_HOST
+        || ""
+      ).trim(),
+    porta:
+      Number(
+        process.env.CENTRAL_PROXY_PORT
+        || 0
+      ),
+    usuario:
+      String(
+        process.env.CENTRAL_PROXY_USERNAME
+        || ""
+      ).trim(),
+    senha:
+      String(
+        process.env.CENTRAL_PROXY_PASSWORD
+        || ""
+      ),
+    managedByCentral:
+      true,
   };
 }
 
-function publicConfig(){
-  const cfg = readConfig();
-  const p = effectiveProxyConfig(cfg);
+function publicConfig() {
+  const cfg =
+    readConfig();
+  const p =
+    effectiveProxyConfig(
+      cfg
+    );
 
   return {
     ...cfg,
     runtimeProxy: {
-      managedByCentral: centralProxyPresent(),
-      ativo: Boolean(p.ativo),
-      host: String(p.host || ""),
-      porta: Number(p.porta || 0),
-      usuario: String(p.usuario || ""),
-      ready: Boolean(
-        p.ativo &&
-        p.host &&
-        Number(p.porta) &&
-        p.usuario &&
-        p.senha
-      )
-    }
+      managedByCentral:
+        centralProxyPresent(),
+      ativo:
+        Boolean(p.ativo),
+      host:
+        String(p.host || ""),
+      porta:
+        Number(p.porta || 0),
+      usuario:
+        String(
+          p.usuario || ""
+        ),
+      ready:
+        Boolean(
+          p.ativo
+          && p.host
+          && Number(p.porta)
+          && p.usuario
+          && p.senha
+        ),
+    },
   };
 }
-function send(channel,data){ if(win && !win.isDestroyed()) win.webContents.send(channel,data); }
-function stamp(){ return new Date().toLocaleString("pt-BR"); }
 
-function parseLine(line,isErr=false){
-  if(!line) return;
-  stats.ultimaMensagem=line;
-  if(line.includes("SISTEMA ATIVO")){ stats.status="RODANDO"; stats.whatsapp="CONECTADO"; reiniciosAutomaticos=0; }
-  if(line.includes("Leia o QR Code")){ stats.status="AGUARDANDO QR"; stats.whatsapp="AGUARDANDO AUTENTICAÇÃO"; }
-  if(line.includes("[LOGIN] QR DISPONÍVEL")){ stats.status="AGUARDANDO QR"; stats.whatsapp="AGUARDANDO AUTENTICAÇÃO"; }
-  if(line.includes("[LOGIN] AUTENTICADO")){ stats.whatsapp="AUTENTICADO"; }
-  if(line.includes("[LOGIN] PRONTO")){ stats.whatsapp="CONECTADO"; stats.status="RODANDO"; }
-  if(line.includes("PROXY ATIVO")) stats.proxy="ATIVO";
-  if(line.includes("PROXY: DESATIVADO")) stats.proxy="DESATIVADO";
-  if(line.includes("PROXY COM AUTENTICAÇÃO CONFIGURADA")) stats.proxy="AUTENTICADO/CONFIGURADO";
-  if(line.includes("RECONEXÃO")) stats.whatsapp="RECONECTANDO";
-  if(line.includes("NOTÍCIA IDENTIFICADA")){ capturandoNoticia=true; capturandoVideo=false; stats.ultimaNoticia={titulo:"--",veiculo:"--",grupo:"--",data:"--",assunto:"--",analise:"--",autor:"--",link:""}; }
-  if(line.includes("VÍDEO IDENTIFICADO")){ capturandoVideo=true; capturandoNoticia=false; }
-  if(capturandoNoticia){
-    if(line.startsWith("Data:")) stats.ultimaNoticia.data=line.slice(5).trim();
-    if(line.startsWith("Veículo:")) stats.ultimaNoticia.veiculo=line.slice(8).trim();
-    if(line.startsWith("Título:")) stats.ultimaNoticia.titulo=line.slice(7).trim();
-    if(line.startsWith("Autor:")) stats.ultimaNoticia.autor=line.slice(6).trim();
-    if(line.startsWith("Análise:")) stats.ultimaNoticia.analise=line.slice(8).trim();
-    if(line.startsWith("Assunto:")) stats.ultimaNoticia.assunto=line.slice(8).trim();
-    if(line.startsWith("Link:")) stats.ultimaNoticia.link=line.slice(5).trim();
+function send(
+  channel,
+  data
+) {
+  if (
+    win
+    && !win.isDestroyed()
+  ) {
+    win.webContents.send(
+      channel,
+      data
+    );
   }
-  if(line.includes("PLANILHA ATUALIZADA")){ stats.planilha="OK"; stats.processadas++; stats.ultimaAtualizacao=stamp(); capturandoNoticia=false; }
-  if(line.includes("VÍDEO REGISTRADO NA PLANILHA")){ stats.planilha="OK"; stats.processadas++; stats.videos++; stats.ultimaAtualizacao=stamp(); capturandoVideo=false; }
-  if(line.startsWith("Linha:")) stats.ultimaLinha=line.replace("Linha:","").trim();
-  if(line.includes("ERRO AO ENVIAR PARA PLANILHA")) stats.planilha="ERRO";
-  if(line.includes("Falha na autenticação") || line.includes("ERRO AO INICIALIZAR WHATSAPP")) stats.whatsapp="ERRO";
-  if(line.includes("WhatsApp desconectado")) stats.whatsapp="DESCONECTADO";
-  if(line.includes("HTTP: 407") || line.includes("407")) stats.proxy="AUTENTICAÇÃO REJEITADA";
-  if(line.includes("ERR_INVALID_AUTH_CREDENTIALS")) stats.proxy="CREDENCIAIS REJEITADAS";
-  if(isErr && !line.includes("ERRO AO ENVIAR PARA PLANILHA")) stats.erros++;
-  send("log",{line,isErr});
-  send("status",stats);
 }
 
-function iniciarMotor(mode="headless"){
-  if(motor) return {ok:false,message:"Motor já está em execução."};
-  ensureConfig();
-  encerramentoManual=false;
-  motorMode = mode === "login" ? "login" : "headless";
-  const p = effectiveProxyConfig(readConfig());
-  stats.status="INICIANDO"; stats.whatsapp="CONECTANDO"; stats.planilha="AGUARDANDO"; stats.proxy=p?.ativo ? "CONFIGURADO" : "DESATIVADO";
-  send("status",stats);
-  const env={...process.env,CONFIG_PATH:configPath()};
+function stamp() {
+  return (
+    new Date()
+      .toLocaleString(
+        "pt-BR"
+      )
+  );
+}
 
-  const portableChrome = portableChromePath();
-  if(portableChrome){
-    env.CHROME_PATH = portableChrome;
-    parseLine(`CHROME PORTÁTIL: ${portableChrome}`, false);
+function parseLine(
+  line,
+  isErr = false
+) {
+  if (!line) {
+    return;
   }
 
-  env.CENTRAL_WHATSAPP_VISIBLE = motorMode === "login" ? "1" : "0";
+  stats.ultimaMensagem =
+    line;
 
-  if(app.isPackaged) env.ELECTRON_RUN_AS_NODE="1";
-  motor=spawn(process.execPath,[enginePath()],{cwd:baseDir(),env,windowsHide:true});
-  motor.stdout.setEncoding("utf8"); motor.stderr.setEncoding("utf8");
-  motor.stdout.on("data",d=>String(d).split(/\r?\n/).forEach(l=>parseLine(l,false)));
-  motor.stderr.on("data",d=>String(d).split(/\r?\n/).forEach(l=>parseLine(l,true)));
-  motor.on("exit",code=>{
-    parseLine(`Motor finalizado. Código: ${code}`,code!==0); motor=null;
-    if(!encerramentoManual && code!==0){
-      reiniciosAutomaticos++;
-      if(reinicioTimer) clearTimeout(reinicioTimer);
+  if (
+    line.includes(
+      "SISTEMA ATIVO"
+    )
+  ) {
+    stats.status =
+      "RODANDO";
+    stats.whatsapp =
+      "CONECTADO";
+    reiniciosAutomaticos =
+      0;
+  }
 
-      if(code===12){
-        parseLine("Sessão do WhatsApp limpa. Reiniciando para gerar novo QR Code.",false);
-        stats.status="AGUARDANDO NOVO QR";
-        stats.whatsapp="AGUARDANDO AUTENTICAÇÃO";
-      }
+  if (
+    line.includes(
+      "Leia o QR Code"
+    )
+    || line.includes(
+      "[LOGIN] QR DISPONÍVEL"
+    )
+  ) {
+    stats.status =
+      "AGUARDANDO QR";
+    stats.whatsapp =
+      "AGUARDANDO AUTENTICAÇÃO";
+  }
 
-      if(reinicioAutomaticoPermitido()){
-        stats.status=code===12 ? "AGUARDANDO NOVO QR" : "RECUPERANDO";
-        send("status",stats);
-        const delay = code===12 ? 2500 : 5000;
-        reinicioTimer=setTimeout(()=>{reinicioTimer=null;iniciarMotor(motorMode);},delay);
-        return;
-      }
-      stats.status="ERRO";
-    } else stats.status="PARADO";
-    if(stats.whatsapp!=="ERRO") stats.whatsapp="DESCONECTADO";
-    send("status",stats);
-  });
-  motor.on("error",err=>{ parseLine(`Erro ao iniciar motor: ${err.message}`,true); motor=null; stats.status="ERRO"; send("status",stats); });
-  return {ok:true};
+  if (
+    line.includes(
+      "[LOGIN] AUTENTICADO"
+    )
+  ) {
+    stats.whatsapp =
+      "AUTENTICADO";
+  }
+
+  if (
+    line.includes(
+      "[LOGIN] PRONTO"
+    )
+  ) {
+    stats.whatsapp =
+      "CONECTADO";
+    stats.status =
+      "RODANDO";
+  }
+
+  if (
+    line.includes(
+      "WHATSAPP_RELOGIN_REQUIRED"
+    )
+  ) {
+    stats.status =
+      "SESSÃO EXPIRADA";
+    stats.whatsapp =
+      "PRECISA RECONECTAR";
+  }
+
+  if (
+    line.includes(
+      "PROXY ATIVO"
+    )
+  ) {
+    stats.proxy =
+      "ATIVO";
+  }
+
+  if (
+    line.includes(
+      "PROXY: DESATIVADO"
+    )
+  ) {
+    stats.proxy =
+      "DESATIVADO";
+  }
+
+  if (
+    line.includes(
+      "PROXY COM AUTENTICAÇÃO CONFIGURADA"
+    )
+  ) {
+    stats.proxy =
+      "AUTENTICADO/CONFIGURADO";
+  }
+
+  if (
+    line.includes(
+      "RECONEXÃO"
+    )
+  ) {
+    stats.whatsapp =
+      "RECONECTANDO";
+  }
+
+  if (
+    line.includes(
+      "NOTÍCIA IDENTIFICADA"
+    )
+  ) {
+    capturandoNoticia =
+      true;
+    capturandoVideo =
+      false;
+    stats.ultimaNoticia = {
+      titulo: "--",
+      veiculo: "--",
+      grupo: "--",
+      data: "--",
+      assunto: "--",
+      analise: "--",
+      autor: "--",
+      link: "",
+    };
+  }
+
+  if (
+    line.includes(
+      "VÍDEO IDENTIFICADO"
+    )
+  ) {
+    capturandoVideo =
+      true;
+    capturandoNoticia =
+      false;
+  }
+
+  if (
+    capturandoNoticia
+  ) {
+    if (
+      line.startsWith(
+        "Data:"
+      )
+    ) {
+      stats.ultimaNoticia.data =
+        line.slice(5)
+          .trim();
+    }
+
+    if (
+      line.startsWith(
+        "Veículo:"
+      )
+    ) {
+      stats.ultimaNoticia.veiculo =
+        line.slice(8)
+          .trim();
+    }
+
+    if (
+      line.startsWith(
+        "Título:"
+      )
+    ) {
+      stats.ultimaNoticia.titulo =
+        line.slice(7)
+          .trim();
+    }
+
+    if (
+      line.startsWith(
+        "Autor:"
+      )
+    ) {
+      stats.ultimaNoticia.autor =
+        line.slice(6)
+          .trim();
+    }
+
+    if (
+      line.startsWith(
+        "Análise:"
+      )
+    ) {
+      stats.ultimaNoticia.analise =
+        line.slice(8)
+          .trim();
+    }
+
+    if (
+      line.startsWith(
+        "Assunto:"
+      )
+    ) {
+      stats.ultimaNoticia.assunto =
+        line.slice(8)
+          .trim();
+    }
+
+    if (
+      line.startsWith(
+        "Link:"
+      )
+    ) {
+      stats.ultimaNoticia.link =
+        line.slice(5)
+          .trim();
+    }
+  }
+
+  if (
+    line.includes(
+      "PLANILHA ATUALIZADA"
+    )
+  ) {
+    stats.planilha =
+      "OK";
+    stats.processadas++;
+    stats.ultimaAtualizacao =
+      stamp();
+    capturandoNoticia =
+      false;
+  }
+
+  if (
+    line.includes(
+      "VÍDEO REGISTRADO NA PLANILHA"
+    )
+  ) {
+    stats.planilha =
+      "OK";
+    stats.processadas++;
+    stats.videos++;
+    stats.ultimaAtualizacao =
+      stamp();
+    capturandoVideo =
+      false;
+  }
+
+  if (
+    line.startsWith(
+      "Linha:"
+    )
+  ) {
+    stats.ultimaLinha =
+      line.replace(
+        "Linha:",
+        ""
+      ).trim();
+  }
+
+  if (
+    line.includes(
+      "ERRO AO ENVIAR PARA PLANILHA"
+    )
+  ) {
+    stats.planilha =
+      "ERRO";
+  }
+
+  if (
+    line.includes(
+      "Falha na autenticação"
+    )
+    || line.includes(
+      "ERRO AO INICIALIZAR WHATSAPP"
+    )
+  ) {
+    stats.whatsapp =
+      "ERRO";
+  }
+
+  if (
+    line.includes(
+      "WhatsApp desconectado"
+    )
+  ) {
+    stats.whatsapp =
+      "DESCONECTADO";
+  }
+
+  if (
+    line.includes(
+      "HTTP: 407"
+    )
+    || line.includes("407")
+  ) {
+    stats.proxy =
+      "AUTENTICAÇÃO REJEITADA";
+  }
+
+  if (
+    line.includes(
+      "ERR_INVALID_AUTH_CREDENTIALS"
+    )
+  ) {
+    stats.proxy =
+      "CREDENCIAIS REJEITADAS";
+  }
+
+  if (
+    isErr
+    && !line.includes(
+      "ERRO AO ENVIAR PARA PLANILHA"
+    )
+  ) {
+    stats.erros++;
+  }
+
+  send(
+    "log",
+    {
+      line,
+      isErr,
+    }
+  );
+
+  send(
+    "status",
+    stats
+  );
 }
-function reinicioAutomaticoPermitido(){ return reiniciosAutomaticos<=5; }
-function pararMotor(){
-  if(!motor){ if(reinicioTimer){clearTimeout(reinicioTimer);reinicioTimer=null;} return {ok:false,message:"Motor já está parado."}; }
-  encerramentoManual=true; if(reinicioTimer){clearTimeout(reinicioTimer);reinicioTimer=null;}
-  try{motor.kill();}catch(_){} motor=null; stats.status="PARADO"; stats.whatsapp="DESCONECTADO"; send("status",stats); return {ok:true};
+
+// ---------------------------------------------------------------------
+// CHROME COMPARTILHADO
+// ---------------------------------------------------------------------
+
+function sharedBrowserEnabled() {
+  return (
+    process.env.CENTRAL_WHATSAPP_SHARED_BROWSER
+    === "1"
+  );
 }
 
-async function testarProxy(formCfg){
-  try{
-    const cfg = readConfig();
+function sharedBrowserUrl() {
+  return String(
+    process.env.CENTRAL_WHATSAPP_BROWSER_URL
+    || "http://127.0.0.1:9223"
+  ).trim();
+}
 
-    // Dentro do Central, o Proxy Geral tem prioridade absoluta.
-    // Fora do Central, o teste pode usar o estado atual do formulário,
-    // mesmo antes de clicar em SALVAR.
-    const localCfg = formCfg && typeof formCfg === "object"
-      ? { ...cfg, proxy: formCfg.proxy || cfg.proxy }
-      : cfg;
+function sharedBrowserPort() {
+  const configured =
+    Number(
+      process.env.CENTRAL_WHATSAPP_REMOTE_DEBUGGING_PORT
+      || 9223
+    );
 
-    const p = effectiveProxyConfig(localCfg);
+  return (
+    Number.isFinite(configured)
+    && configured > 0
+      ? configured
+      : 9223
+  );
+}
 
-    if(!p?.ativo) return {ok:false,message:"Proxy está desativado."};
+function sharedProfileDir() {
+  return String(
+    process.env.CENTRAL_WHATSAPP_PROFILE_DIR
+    || path.join(
+      baseDir(),
+      "data",
+      "whatsapp_chrome_profile"
+    )
+  );
+}
 
-    const proxy = proxyFromConfig({proxy:p});
+function sharedPidFile() {
+  return String(
+    process.env.CENTRAL_WHATSAPP_PID_FILE
+    || path.join(
+      baseDir(),
+      "data",
+      "whatsapp_chrome.pid"
+    )
+  );
+}
 
-    if(!proxy) return {ok:false,message:"Servidor e porta do proxy não estão configurados."};
+async function sharedBrowserResponding() {
+  try {
+    const url =
+      `${sharedBrowserUrl()}/json/version`;
 
-    stats.proxy="TESTANDO";
-    send("status",stats);
+    const response =
+      await axios.get(
+        url,
+        {
+          timeout: 900,
+          proxy: false,
+          validateStatus:
+            () => true,
+        }
+      );
 
-    const r=await axios.get(
-      "https://web.whatsapp.com/",
+    return (
+      response.status
+      >= 200
+      && response.status
+      < 300
+    );
+  } catch (_) {
+    return false;
+  }
+}
+
+function chromeProxyArg() {
+  const p =
+    effectiveProxyConfig(
+      readConfig()
+    );
+
+  if (
+    p?.ativo
+    && p?.host
+    && Number(p?.porta)
+  ) {
+    return (
+      `--proxy-server=http://`
+      + `${String(p.host).trim()}:`
+      + `${Number(p.porta)}`
+    );
+  }
+
+  return "--no-proxy-server";
+}
+
+async function ensureSharedChrome() {
+  if (
+    !sharedBrowserEnabled()
+  ) {
+    return {
+      ok: true,
+      reused: false,
+    };
+  }
+
+  if (
+    await sharedBrowserResponding()
+  ) {
+    parseLine(
+      "CHROME COMPARTILHADO: reutilizando sessão já aberta.",
+      false
+    );
+
+    return {
+      ok: true,
+      reused: true,
+    };
+  }
+
+  const chrome =
+    portableChromePath();
+
+  if (!chrome) {
+    throw new Error(
+      "Chrome portátil do runtime não foi encontrado."
+    );
+  }
+
+  const profile =
+    sharedProfileDir();
+
+  fs.mkdirSync(
+    profile,
+    {
+      recursive: true,
+    }
+  );
+
+  const args = [
+    `--remote-debugging-port=${sharedBrowserPort()}`,
+    `--user-data-dir=${profile}`,
+    "--remote-allow-origins=*",
+    "--no-first-run",
+    "--no-default-browser-check",
+    "--disable-background-mode",
+    "--disable-features=Translate",
+    "--start-maximized",
+    "--window-size=1280,820",
+    chromeProxyArg(),
+    "about:blank",
+  ];
+
+  parseLine(
+    `CHROME COMPARTILHADO: iniciando ${chrome}`,
+    false
+  );
+
+  parseLine(
+    `PERFIL WHATSAPP: ${profile}`,
+    false
+  );
+
+  const child =
+    spawn(
+      chrome,
+      args,
       {
-        proxy,
-        timeout:15000,
-        validateStatus:()=>true
+        detached: true,
+        stdio: "ignore",
+        windowsHide: false,
       }
     );
 
-    if(r.status>=200 && r.status<500){
-      stats.proxy=proxy.auth?"OK COM AUTENTICAÇÃO":"OK SEM AUTENTICAÇÃO";
+  child.unref();
+
+  try {
+    fs.mkdirSync(
+      path.dirname(
+        sharedPidFile()
+      ),
+      { recursive: true }
+    );
+
+    fs.writeFileSync(
+      sharedPidFile(),
+      String(
+        child.pid || ""
+      ),
+      "utf8"
+    );
+  } catch (_) {}
+
+  for (
+    let attempt = 1;
+    attempt <= 30;
+    attempt += 1
+  ) {
+    if (
+      await sharedBrowserResponding()
+    ) {
+      parseLine(
+        "CHROME COMPARTILHADO: remote debugging pronto.",
+        false
+      );
+
       return {
-        ok:true,
-        message:`Proxy respondeu HTTP ${r.status}.`
+        ok: true,
+        reused: false,
+        pid: child.pid,
       };
     }
 
-    stats.proxy=`ERRO HTTP ${r.status}`;
-    return {ok:false,message:`Proxy respondeu HTTP ${r.status}.`};
+    await new Promise(
+      resolve =>
+        setTimeout(
+          resolve,
+          500
+        )
+    );
+  }
 
-  }catch(err){
-    const code=err?.response?.status || "";
-    stats.proxy=code===407?"AUTENTICAÇÃO REJEITADA":"ERRO";
-    const detail=err?.response?.status
-      ? `HTTP ${err.response.status}`
-      : (err?.code || err?.message || "erro desconhecido");
-    return {ok:false,message:`Falha no teste do proxy: ${detail}`};
+  throw new Error(
+    "Chrome compartilhado abriu, mas a porta 9223 não respondeu."
+  );
+}
+
+// ---------------------------------------------------------------------
+// MOTOR
+// ---------------------------------------------------------------------
+
+async function iniciarMotor(
+  mode = "headless"
+) {
+  if (motor) {
+    return {
+      ok: false,
+      message:
+        "Motor já está em execução.",
+    };
+  }
+
+  ensureConfig();
+  encerramentoManual =
+    false;
+
+  motorMode =
+    mode === "login"
+      ? "login"
+      : "headless";
+
+  const p =
+    effectiveProxyConfig(
+      readConfig()
+    );
+
+  stats.status =
+    "INICIANDO";
+  stats.whatsapp =
+    "CONECTANDO";
+  stats.planilha =
+    "AGUARDANDO";
+  stats.proxy =
+    p?.ativo
+      ? "CONFIGURADO"
+      : "DESATIVADO";
+
+  send(
+    "status",
+    stats
+  );
+
+  try {
+    await ensureSharedChrome();
+  } catch (error) {
+    parseLine(
+      `Erro ao iniciar Chrome compartilhado: ${error.message}`,
+      true
+    );
+
+    stats.status =
+      "ERRO";
+    stats.whatsapp =
+      "ERRO";
+    send(
+      "status",
+      stats
+    );
+
+    return {
+      ok: false,
+      message:
+        error.message,
+    };
+  }
+
+  const env = {
+    ...process.env,
+    CONFIG_PATH:
+      configPath(),
+  };
+
+  const portableChrome =
+    portableChromePath();
+
+  if (
+    portableChrome
+  ) {
+    env.CHROME_PATH =
+      portableChrome;
+
+    parseLine(
+      `CHROME PORTÁTIL: ${portableChrome}`,
+      false
+    );
+  }
+
+  env.CENTRAL_WHATSAPP_VISIBLE =
+    motorMode === "login"
+      ? "1"
+      : "0";
+
+  if (
+    app.isPackaged
+  ) {
+    env.ELECTRON_RUN_AS_NODE =
+      "1";
+  }
+
+  motor =
+    spawn(
+      process.execPath,
+      [
+        enginePath(),
+      ],
+      {
+        cwd:
+          baseDir(),
+        env,
+        windowsHide:
+          true,
+      }
+    );
+
+  motor.stdout.setEncoding(
+    "utf8"
+  );
+  motor.stderr.setEncoding(
+    "utf8"
+  );
+
+  motor.stdout.on(
+    "data",
+    d =>
+      String(d)
+        .split(/\r?\n/)
+        .forEach(
+          l =>
+            parseLine(
+              l,
+              false
+            )
+        )
+  );
+
+  motor.stderr.on(
+    "data",
+    d =>
+      String(d)
+        .split(/\r?\n/)
+        .forEach(
+          l =>
+            parseLine(
+              l,
+              true
+            )
+        )
+  );
+
+  motor.on(
+    "exit",
+    code => {
+      parseLine(
+        `Motor finalizado. Código: ${code}`,
+        code !== 0
+      );
+
+      motor = null;
+
+      if (
+        code === 21
+      ) {
+        if (
+          reinicioTimer
+        ) {
+          clearTimeout(
+            reinicioTimer
+          );
+          reinicioTimer =
+            null;
+        }
+
+        stats.status =
+          "SESSÃO EXPIRADA";
+        stats.whatsapp =
+          "PRECISA RECONECTAR";
+
+        parseLine(
+          "WhatsApp precisa ser conectado novamente. "
+          + "Abra a aba WhatsApp do Central.",
+          false
+        );
+
+        send(
+          "status",
+          stats
+        );
+        return;
+      }
+
+      if (
+        !encerramentoManual
+        && code !== 0
+      ) {
+        reiniciosAutomaticos++;
+
+        if (
+          reinicioTimer
+        ) {
+          clearTimeout(
+            reinicioTimer
+          );
+        }
+
+        if (
+          reinicioAutomaticoPermitido()
+        ) {
+          stats.status =
+            "RECUPERANDO";
+
+          send(
+            "status",
+            stats
+          );
+
+          reinicioTimer =
+            setTimeout(
+              () => {
+                reinicioTimer =
+                  null;
+                iniciarMotor(
+                  motorMode
+                );
+              },
+              4000
+            );
+
+          return;
+        }
+
+        stats.status =
+          "ERRO";
+      } else {
+        stats.status =
+          "PARADO";
+      }
+
+      if (
+        stats.whatsapp
+        !== "ERRO"
+      ) {
+        stats.whatsapp =
+          "DESCONECTADO";
+      }
+
+      send(
+        "status",
+        stats
+      );
+    }
+  );
+
+  motor.on(
+    "error",
+    err => {
+      parseLine(
+        `Erro ao iniciar motor: ${err.message}`,
+        true
+      );
+
+      motor = null;
+      stats.status =
+        "ERRO";
+
+      send(
+        "status",
+        stats
+      );
+    }
+  );
+
+  return {
+    ok: true,
+  };
+}
+
+function reinicioAutomaticoPermitido() {
+  return (
+    reiniciosAutomaticos
+    <= 5
+  );
+}
+
+function pararMotor() {
+  if (!motor) {
+    if (
+      reinicioTimer
+    ) {
+      clearTimeout(
+        reinicioTimer
+      );
+      reinicioTimer =
+        null;
+    }
+
+    return {
+      ok: false,
+      message:
+        "Motor já está parado.",
+    };
+  }
+
+  encerramentoManual =
+    true;
+
+  if (
+    reinicioTimer
+  ) {
+    clearTimeout(
+      reinicioTimer
+    );
+    reinicioTimer =
+      null;
+  }
+
+  try {
+    motor.kill();
+  } catch (_) {}
+
+  motor = null;
+  stats.status =
+    "PARADO";
+  stats.whatsapp =
+    "DESCONECTADO";
+
+  send(
+    "status",
+    stats
+  );
+
+  return {
+    ok: true,
+  };
+}
+
+async function testarProxy(
+  formCfg
+) {
+  try {
+    const cfg =
+      readConfig();
+
+    const localCfg =
+      formCfg
+      && typeof formCfg
+        === "object"
+        ? {
+          ...cfg,
+          proxy:
+            formCfg.proxy
+            || cfg.proxy,
+        }
+        : cfg;
+
+    const p =
+      effectiveProxyConfig(
+        localCfg
+      );
+
+    if (
+      !p?.ativo
+    ) {
+      return {
+        ok: false,
+        message:
+          "Proxy está desativado.",
+      };
+    }
+
+    const proxy =
+      proxyFromConfig({
+        proxy: p,
+      });
+
+    if (!proxy) {
+      return {
+        ok: false,
+        message:
+          "Servidor e porta do proxy não estão configurados.",
+      };
+    }
+
+    stats.proxy =
+      "TESTANDO";
+
+    send(
+      "status",
+      stats
+    );
+
+    const r =
+      await axios.get(
+        "https://web.whatsapp.com/",
+        {
+          proxy,
+          timeout:
+            15000,
+          validateStatus:
+            () => true,
+        }
+      );
+
+    if (
+      r.status >= 200
+      && r.status < 500
+    ) {
+      stats.proxy =
+        proxy.auth
+          ? "OK COM AUTENTICAÇÃO"
+          : "OK SEM AUTENTICAÇÃO";
+
+      return {
+        ok: true,
+        message:
+          `Proxy respondeu HTTP ${r.status}.`,
+      };
+    }
+
+    stats.proxy =
+      `ERRO HTTP ${r.status}`;
+
+    return {
+      ok: false,
+      message:
+        `Proxy respondeu HTTP ${r.status}.`,
+    };
+
+  } catch (err) {
+    const code =
+      err?.response?.status
+      || "";
+
+    stats.proxy =
+      code === 407
+        ? "AUTENTICAÇÃO REJEITADA"
+        : "ERRO";
+
+    const detail =
+      err?.response?.status
+        ? `HTTP ${err.response.status}`
+        : (
+          err?.code
+          || err?.message
+          || "erro desconhecido"
+        );
+
+    return {
+      ok: false,
+      message:
+        `Falha no teste do proxy: ${detail}`,
+    };
+
   } finally {
-    send("status",stats);
+    send(
+      "status",
+      stats
+    );
   }
 }
 
-function createWindow(){
-  win=new BrowserWindow({width:1240,height:790,minWidth:760,minHeight:480,title:"Automação Planilhas - WhatsApp → Planilhas Google",backgroundColor:"#07131d",icon:appIcon(),webPreferences:{preload:path.join(__dirname,"preload.js"),contextIsolation:true,nodeIntegration:false}});
-  win.loadFile(path.join(__dirname,"renderer","index.html")); win.setMenuBarVisibility(false);
+function createWindow() {
+  win =
+    new BrowserWindow({
+      width: 1240,
+      height: 790,
+      minWidth: 760,
+      minHeight: 480,
+      title:
+        "Automação Planilhas - WhatsApp → Planilhas Google",
+      backgroundColor:
+        "#07131d",
+      icon:
+        appIcon(),
+      webPreferences: {
+        preload:
+          path.join(
+            __dirname,
+            "preload.js"
+          ),
+        contextIsolation:
+          true,
+        nodeIntegration:
+          false,
+      },
+    });
+
+  win.loadFile(
+    path.join(
+      __dirname,
+      "renderer",
+      "index.html"
+    )
+  );
+
+  win.setMenuBarVisibility(
+    false
+  );
 }
 
-app.whenReady().then(()=>{
-  ensureConfig(); createWindow();
-  ipcMain.handle("motor:start",()=>iniciarMotor("headless"));
-  ipcMain.handle("motor:start-login",()=>iniciarMotor("login"));
-  ipcMain.handle("motor:stop",()=>pararMotor());
-  ipcMain.handle("status:get",()=>stats);
-  ipcMain.handle("proxy:test",(_,cfg)=>testarProxy(cfg));
-  ipcMain.handle("config:get",()=>publicConfig());
-  ipcMain.handle("config:save",(_,cfg)=>{fs.writeFileSync(ensureConfig(),JSON.stringify(cfg,null,2),"utf8");return {ok:true,path:configPath()};});
-  ipcMain.handle("config:open-folder",()=>{shell.openPath(baseDir());return {ok:true};});
+app.whenReady().then(
+  () => {
+    ensureConfig();
+    createWindow();
 
-  if(process.env.CENTRAL_AUTOSTART_LOGIN === "1"){
-    setTimeout(()=>iniciarMotor("login"),900);
-  } else if(process.env.CENTRAL_AUTOSTART_MOTOR === "1"){
-    setTimeout(()=>iniciarMotor("headless"),900);
+    ipcMain.handle(
+      "motor:start",
+      () =>
+        iniciarMotor(
+          "headless"
+        )
+    );
+
+    ipcMain.handle(
+      "motor:start-login",
+      () =>
+        iniciarMotor(
+          "login"
+        )
+    );
+
+    ipcMain.handle(
+      "motor:stop",
+      () =>
+        pararMotor()
+    );
+
+    ipcMain.handle(
+      "status:get",
+      () => stats
+    );
+
+    ipcMain.handle(
+      "proxy:test",
+      (
+        _,
+        cfg
+      ) =>
+        testarProxy(
+          cfg
+        )
+    );
+
+    ipcMain.handle(
+      "config:get",
+      () =>
+        publicConfig()
+    );
+
+    ipcMain.handle(
+      "config:save",
+      (
+        _,
+        cfg
+      ) => {
+        fs.writeFileSync(
+          ensureConfig(),
+          JSON.stringify(
+            cfg,
+            null,
+            2
+          ),
+          "utf8"
+        );
+
+        return {
+          ok: true,
+          path:
+            configPath(),
+        };
+      }
+    );
+
+    ipcMain.handle(
+      "config:open-folder",
+      () => {
+        shell.openPath(
+          baseDir()
+        );
+
+        return {
+          ok: true,
+        };
+      }
+    );
+
+    if (
+      process.env.CENTRAL_AUTOSTART_LOGIN
+      === "1"
+    ) {
+      setTimeout(
+        () =>
+          iniciarMotor(
+            "login"
+          ),
+        900
+      );
+    } else if (
+      process.env.CENTRAL_AUTOSTART_MOTOR
+      === "1"
+    ) {
+      setTimeout(
+        () =>
+          iniciarMotor(
+            "headless"
+          ),
+        900
+      );
+    }
   }
-});
-app.on("before-quit",()=>{encerramentoManual=true;if(reinicioTimer)clearTimeout(reinicioTimer);try{if(motor)motor.kill();}catch(_){} });
-app.on("window-all-closed",()=>{if(process.platform!=="darwin")app.quit();});
+);
+
+app.on(
+  "before-quit",
+  () => {
+    encerramentoManual =
+      true;
+
+    if (
+      reinicioTimer
+    ) {
+      clearTimeout(
+        reinicioTimer
+      );
+    }
+
+    try {
+      if (motor) {
+        motor.kill();
+      }
+    } catch (_) {}
+
+    // O Chrome compartilhado NÃO é morto aqui.
+    // Ele pertence à sessão do Central e pode continuar aberto enquanto
+    // o runtime Electron é reiniciado. A aba WhatsApp do Central fecha
+    // o Chrome dedicado ao encerrar o aplicativo.
+  }
+);
+
+app.on(
+  "window-all-closed",
+  () => {
+    if (
+      process.platform
+      !== "darwin"
+    ) {
+      app.quit();
+    }
+  }
+);
