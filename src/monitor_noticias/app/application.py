@@ -31,9 +31,6 @@ class Application:
             "Inicializando Central Inteligente de Mídia PySide6"
         )
 
-        # Correção da pré-visualização de alguns MP4 no Windows.
-        # Estas variáveis precisam ser definidas ANTES de importar os módulos
-        # Qt Multimedia usados pelo Editor de Vídeo.
         if sys.platform.startswith(
             "win"
         ):
@@ -41,7 +38,6 @@ class Application:
                 "QT_MEDIA_BACKEND",
                 "ffmpeg",
             )
-
             os.environ.setdefault(
                 "QT_FFMPEG_DECODING_HW_DEVICE_TYPES",
                 ",",
@@ -77,6 +73,9 @@ class Application:
         from monitor_noticias.ui.spreadsheet_keyboard_focus_patch import (
             install_spreadsheet_keyboard_focus_patch,
         )
+        from monitor_noticias.ui.news_direct_link_patch import (
+            install_news_direct_link_patch,
+        )
 
         install_extractor_proxy_patch()
         install_settings_proxy_toggle_patch()
@@ -84,6 +83,7 @@ class Application:
         install_spreadsheet_shared_whatsapp_patch()
         install_news_extractor_proxy_patch()
         install_spreadsheet_keyboard_focus_patch()
+        install_news_direct_link_patch()
 
         from monitor_noticias.ui.main_window import (
             MainWindow,
