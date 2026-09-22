@@ -3,76 +3,287 @@ from __future__ import annotations
 from html import unescape
 from html.parser import HTMLParser
 from types import SimpleNamespace
-from urllib.parse import urljoin
+from urllib.parse import urljoin, urlsplit, urlunsplit
 import re
 
 from monitor_noticias.capas_tool.app import network as network_module
 from monitor_noticias.capas_tool.app import ui as covers_ui
 from monitor_noticias.capas_tool.app import web_resolver as web_resolver_module
-from monitor_noticias.capas_tool.app.web_resolver_patch import RobustFrontPageResolver
+from monitor_noticias.capas_tool.app.web_resolver_patch import (
+    RobustFrontPageResolver,
+)
 from monitor_noticias.capas_tool.app.workers import Worker
 
 
 _INSTALLED = False
 
 
-class _FrontPagesImageParser(HTMLParser):
-    """Extrai candidatos de imagem do HTML sem depender do Chromium.
+def _normalize_frontpages_image_url(
+    url: str,
+) -> str:
+    """Normaliza URLs de capa do FrontPages.
 
-    Isto é importante em rede corporativa porque requests usa explicitamente
-    o Proxy Geral do Central, inclusive usuário/senha, enquanto o processo
-    Chromium pode ter sido iniciado antes da troca de proxy.
+    Corrige principalmente o formato observado no Central:
+      ...arquivo.webp.jpg
+
+    Isso não é uma URL válida da imagem original e termina em HTTP 404.
     """
 
-    def __init__(self, source_url: str, slug: str, newspaper_name: str):
-        super().__init__(convert_charrefs=True)
+    raw = str(
+        url or ""
+    ).strip()
+
+    if not raw:
+        return ""
+
+    try:
+        parts = urlsplit(raw)
+        path = parts.path or ""
+
+        path = re.sub(
+            r"(?i)\.webp\.(?:jpe?g|png)$",
+            ".webp",
+            path,
+        )
+
+        path = re.sub(
+            r"(?i)\.(?:jpe?g|png)\.webp$",
+            ".webp",
+            path,
+        )
+
+        return urlunsplit(
+            (
+                parts.scheme,
+                parts.netloc,
+                path,
+                parts.query,
+                parts.fragment,
+            )
+        )
+
+    except Exception:
+        return re.sub(
+            r"(?i)\.webp\.(?:jpe?g|png)(?=$|[?#])",
+            ".webp",
+            raw,
+        )
+
+
+def _frontpages_variants(
+    url: str,
+) -> list[str]:
+    """Monta alternativas seguras de extensão para uma mesma capa."""
+
+    original = str(
+        url or ""
+    ).strip()
+
+    normalized = (
+        _normalize_frontpages_image_url(
+            original
+        )
+    )
+
+    out: list[str] = []
+
+    def add(
+        value: str,
+    ) -> None:
+        value = str(
+            value or ""
+        ).strip()
+
+        if (
+            value
+            and value not in out
+        ):
+            out.append(value)
+
+    add(normalized)
+
+    if (
+        original
+        and original != normalized
+    ):
+        add(original)
+
+    try:
+        parts = urlsplit(
+            normalized
+        )
+        path = parts.path or ""
+
+        match = re.search(
+            r"(?i)\.(webp|jpe?g|png)$",
+            path,
+        )
+
+        if match:
+            stem = path[
+                :match.start()
+            ]
+
+            for extension in (
+                ".webp",
+                ".jpg",
+                ".jpeg",
+                ".png",
+            ):
+                add(
+                    urlunsplit(
+                        (
+                            parts.scheme,
+                            parts.netloc,
+                            stem
+                            + extension,
+                            parts.query,
+                            parts.fragment,
+                        )
+                    )
+                )
+
+    except Exception:
+        pass
+
+    return out
+
+
+class _FrontPagesImageParser(
+    HTMLParser
+):
+    """Extrai a capa atual do HTML do FrontPages pelo Proxy Geral."""
+
+    def __init__(
+        self,
+        source_url: str,
+        slug: str,
+        newspaper_name: str,
+    ):
+        super().__init__(
+            convert_charrefs=True
+        )
+
         self.source_url = source_url
         self.slug = slug
-        self.newspaper_name = newspaper_name.upper()
-        self.candidates: list[tuple[int, str]] = []
+        self.newspaper_name = (
+            newspaper_name.upper()
+        )
+
+        self.candidates: list[
+            tuple[int, str]
+        ] = []
 
     @staticmethod
-    def _clean(value: str) -> str:
-        value = unescape(str(value or ""))
-        value = value.replace("\\/", "/").replace("\\u0026", "&")
+    def _clean(
+        value: str,
+    ) -> str:
+        value = unescape(
+            str(value or "")
+        )
+
+        value = (
+            value
+            .replace(
+                "\\/",
+                "/",
+            )
+            .replace(
+                "\\u0026",
+                "&",
+            )
+        )
+
         return value.strip()
 
-    def _push(self, raw: str, score: int, context: str = "") -> None:
-        raw = self._clean(raw)
+    def _push(
+        self,
+        raw: str,
+        score: int,
+        context: str = "",
+    ) -> None:
+        raw = self._clean(
+            raw
+        )
 
         if not raw:
             return
 
-        # srcset pode ter mais de uma URL.
-        pieces = raw.split(",")
+        for piece in raw.split(
+            ","
+        ):
+            value = (
+                piece
+                .strip()
+                .split()[0]
+                if piece.strip()
+                else ""
+            )
 
-        for piece in pieces:
-            value = piece.strip().split()[0] if piece.strip() else ""
             if not value:
                 continue
 
-            url = urljoin(self.source_url, value)
+            url = urljoin(
+                self.source_url,
+                value,
+            )
+
+            url = (
+                _normalize_frontpages_image_url(
+                    url
+                )
+            )
+
             low = url.lower()
-            ctx = str(context or "").lower()
+            ctx = str(
+                context or ""
+            ).lower()
 
-            if not url.startswith(("http://", "https://")):
+            if not url.startswith(
+                (
+                    "http://",
+                    "https://",
+                )
+            ):
                 continue
 
-            if not any(ext in low for ext in (".webp", ".jpg", ".jpeg", ".png")):
+            if not any(
+                ext in low
+                for ext in (
+                    ".webp",
+                    ".jpg",
+                    ".jpeg",
+                    ".png",
+                )
+            ):
                 continue
 
-            if any(token in low for token in ("logo", "icon", "avatar", "favicon")):
+            if any(
+                token in low
+                for token in (
+                    "logo",
+                    "icon",
+                    "avatar",
+                    "favicon",
+                )
+            ):
                 continue
 
             if (
-                self.newspaper_name == "THE WASHINGTON POST"
+                self.newspaper_name
+                == "THE WASHINGTON POST"
                 and "sports" in low
             ):
                 continue
 
-            local_score = int(score)
+            local_score = int(
+                score
+            )
 
-            if f"/{self.slug}-" in low:
+            if (
+                f"/{self.slug}-"
+                in low
+            ):
                 local_score += 900
 
             if self.slug in low:
@@ -81,34 +292,66 @@ class _FrontPagesImageParser(HTMLParser):
             if "/g/" in low:
                 local_score += 350
 
-            if "frontpages.com" in low:
+            if (
+                "frontpages.com"
+                in low
+            ):
                 local_score += 120
 
             if ".webp" in low:
                 local_score += 80
 
-            expected_words = [
-                x for x in re.split(r"[^a-z0-9]+", self.slug.lower())
-                if x and x not in {"the"}
+            words = [
+                item
+                for item
+                in re.split(
+                    r"[^a-z0-9]+",
+                    self.slug.lower(),
+                )
+                if item
+                and item != "the"
             ]
 
-            if expected_words and all(word in ctx for word in expected_words):
+            if (
+                words
+                and all(
+                    word in ctx
+                    for word in words
+                )
+            ):
                 local_score += 500
 
-            self.candidates.append((local_score, url))
+            self.candidates.append(
+                (
+                    local_score,
+                    url,
+                )
+            )
 
-    def handle_starttag(self, tag: str, attrs) -> None:
+    def handle_starttag(
+        self,
+        tag: str,
+        attrs,
+    ) -> None:
         data = {
-            str(k or "").lower(): str(v or "")
-            for k, v in attrs
+            str(k or "").lower():
+                str(v or "")
+            for k, v
+            in attrs
         }
 
-        tag = str(tag or "").lower()
+        tag = str(
+            tag or ""
+        ).lower()
 
         if tag == "meta":
             key = (
-                data.get("property")
-                or data.get("name")
+                data.get(
+                    "property"
+                )
+                or data.get(
+                    "name"
+                )
                 or ""
             ).lower()
 
@@ -119,36 +362,73 @@ class _FrontPagesImageParser(HTMLParser):
                 "twitter:image:src",
             }:
                 self._push(
-                    data.get("content", ""),
+                    data.get(
+                        "content",
+                        "",
+                    ),
                     650,
                     key,
                 )
+
             return
 
         if tag == "link":
-            rel = data.get("rel", "").lower()
-            if "image_src" in rel:
+            rel = (
+                data.get(
+                    "rel",
+                    "",
+                )
+                .lower()
+            )
+
+            if (
+                "image_src"
+                in rel
+            ):
                 self._push(
-                    data.get("href", ""),
+                    data.get(
+                        "href",
+                        "",
+                    ),
                     600,
                     rel,
                 )
+
             return
 
-        if tag not in {"img", "source", "a"}:
+        if tag not in {
+            "img",
+            "source",
+            "a",
+        }:
             return
 
         context = " ".join(
             [
-                data.get("alt", ""),
-                data.get("title", ""),
-                data.get("aria-label", ""),
-                data.get("data-title", ""),
-                data.get("data-caption", ""),
+                data.get(
+                    "alt",
+                    "",
+                ),
+                data.get(
+                    "title",
+                    "",
+                ),
+                data.get(
+                    "aria-label",
+                    "",
+                ),
+                data.get(
+                    "data-title",
+                    "",
+                ),
+                data.get(
+                    "data-caption",
+                    "",
+                ),
             ]
         )
 
-        attrs_to_check = (
+        for attr in (
             "src",
             "href",
             "srcset",
@@ -159,34 +439,53 @@ class _FrontPagesImageParser(HTMLParser):
             "data-image",
             "data-url",
             "data-full",
-        )
+        ):
+            value = data.get(
+                attr,
+                "",
+            )
 
-        for attr in attrs_to_check:
-            value = data.get(attr, "")
             if value:
                 self._push(
                     value,
-                    300 if tag == "img" else 180,
+                    (
+                        300
+                        if tag == "img"
+                        else 180
+                    ),
                     context,
                 )
 
-    def best(self) -> str:
+    def best(
+        self,
+    ) -> str:
         if not self.candidates:
             return ""
 
-        # Remove duplicadas mantendo a maior pontuação.
-        best_by_url: dict[str, int] = {}
+        by_url: dict[
+            str,
+            int,
+        ] = {}
 
-        for score, url in self.candidates:
-            best_by_url[url] = max(
+        for score, url in (
+            self.candidates
+        ):
+            by_url[url] = max(
                 score,
-                best_by_url.get(url, -10_000),
+                by_url.get(
+                    url,
+                    -10_000,
+                ),
             )
 
         ranked = sorted(
             (
-                (score, url)
-                for url, score in best_by_url.items()
+                (
+                    score,
+                    url,
+                )
+                for url, score
+                in by_url.items()
             ),
             reverse=True,
         )
@@ -194,59 +493,217 @@ class _FrontPagesImageParser(HTMLParser):
         if not ranked:
             return ""
 
-        top_score, top_url = ranked[0]
+        score, url = (
+            ranked[0]
+        )
 
-        # Para não confundir banners/og:image genéricos com capa,
-        # exigimos algum sinal forte do jornal/estrutura de FrontPages.
-        if top_score < 700:
+        if score < 700:
             return ""
 
-        return top_url
+        return (
+            _normalize_frontpages_image_url(
+                url
+            )
+        )
 
 
-def _direct_frontpages_url(newspaper_name: str) -> tuple[str, str]:
-    """Busca a capa via requests + Proxy Geral antes de abrir Chromium."""
+def _direct_frontpages_url(
+    newspaper_name: str,
+) -> tuple[str, str]:
+    """Localiza a imagem atual usando requests + Proxy Geral."""
 
-    name = str(newspaper_name or "").upper().strip()
+    name = str(
+        newspaper_name or ""
+    ).upper().strip()
 
-    if name == "THE WASHINGTON POST":
-        source = "https://www.frontpages.com/the-washington-post/"
-        slug = "the-washington-post"
-    elif name == "VALOR ECONÔMICO":
-        source = "https://www.frontpages.com/valor-economico/"
-        slug = "valor-economico"
+    if (
+        name
+        == "THE WASHINGTON POST"
+    ):
+        source = (
+            "https://www.frontpages.com/"
+            "the-washington-post/"
+        )
+        slug = (
+            "the-washington-post"
+        )
+
+    elif (
+        name
+        == "VALOR ECONÔMICO"
+    ):
+        source = (
+            "https://www.frontpages.com/"
+            "valor-economico/"
+        )
+        slug = (
+            "valor-economico"
+        )
+
     else:
         return "", ""
 
-    # Relê o proxy a cada busca. Assim uma mudança feita na aba Configurações
-    # é usada imediatamente por Capas, sem reiniciar o Central.
     network_module.refresh_central_proxy()
 
-    html = network_module.get_text_windows(
-        source,
-        headers={
-            "User-Agent": web_resolver_module.ANDROID_FRONT_UA,
-            "Accept": "text/html,application/xhtml+xml,*/*;q=0.8",
-            "Accept-Language": "pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7",
-        },
-        connect_timeout=8,
-        read_timeout=25,
+    html = (
+        network_module
+        .get_text_windows(
+            source,
+            headers={
+                "User-Agent":
+                    web_resolver_module
+                    .ANDROID_FRONT_UA,
+                "Accept":
+                    "text/html,"
+                    "application/xhtml+xml,"
+                    "*/*;q=0.8",
+                "Accept-Language":
+                    "pt-BR,pt;q=0.9,"
+                    "en-US;q=0.8,"
+                    "en;q=0.7",
+            },
+            connect_timeout=8,
+            read_timeout=25,
+        )
     )
 
-    parser = _FrontPagesImageParser(
-        source,
-        slug,
-        name,
+    parser = (
+        _FrontPagesImageParser(
+            source,
+            slug,
+            name,
+        )
     )
-    parser.feed(html)
 
-    return parser.best(), source
+    parser.feed(
+        html
+    )
+
+    return (
+        parser.best(),
+        source,
+    )
+
+
+def _install_download_retry_patch() -> None:
+    """Corrige `.webp.jpg` e testa a extensão real antes de falhar."""
+
+    original = (
+        network_module
+        .download_image
+    )
+
+    if getattr(
+        original,
+        "_central_frontpages_v35",
+        False,
+    ):
+        return
+
+    def patched(
+        url,
+        dest,
+        referer="",
+        cookie_header="",
+        user_agent=network_module.IMAGE_UA,
+    ):
+        raw = str(
+            url or ""
+        ).strip()
+
+        if (
+            "frontpages.com/"
+            not in raw.lower()
+        ):
+            return original(
+                raw,
+                dest,
+                referer,
+                cookie_header=
+                    cookie_header,
+                user_agent=
+                    user_agent,
+            )
+
+        errors: list[str] = []
+
+        for candidate in (
+            _frontpages_variants(
+                raw
+            )
+        ):
+            try:
+                return original(
+                    candidate,
+                    dest,
+                    referer,
+                    cookie_header=
+                        cookie_header,
+                    user_agent=
+                        user_agent,
+                )
+
+            except Exception as exc:
+                message = str(
+                    exc or ""
+                )
+
+                errors.append(
+                    message
+                )
+
+                low = (
+                    message.lower()
+                )
+
+                # 407 é problema real de autenticação do Proxy Geral.
+                # Não mascaramos tentando extensões diferentes.
+                if (
+                    "407" in low
+                    or "proxy authentication"
+                    in low
+                    or "autenticacao necessaria"
+                    in low
+                    or "autenticação necessária"
+                    in low
+                ):
+                    raise RuntimeError(
+                        "Proxy Geral recusou a autenticação "
+                        "ao acessar o FrontPages: "
+                        + message
+                    ) from exc
+
+        raise RuntimeError(
+            "FrontPages não encontrou a imagem "
+            "em nenhuma extensão válida"
+            + (
+                f" ({errors[-1]})"
+                if errors
+                else ""
+            )
+        )
+
+    patched._central_frontpages_v35 = True
+
+    network_module.download_image = (
+        patched
+    )
+
+    # ui.py importou a função diretamente.
+    covers_ui.download_image = (
+        patched
+    )
 
 
 def _install_browser_proxy_auth_patch() -> None:
-    browser_cls = web_resolver_module._AttachedBrowser
+    browser_cls = (
+        web_resolver_module
+        ._AttachedBrowser
+    )
 
-    original_init = browser_cls.__init__
+    original_init = (
+        browser_cls.__init__
+    )
 
     if getattr(
         original_init,
@@ -255,8 +712,11 @@ def _install_browser_proxy_auth_patch() -> None:
     ):
         return
 
-    def patched_init(self, owner, user_agent):
-        # O profile WebEngine precisa nascer DEPOIS de sincronizar o proxy.
+    def patched_init(
+        self,
+        owner,
+        user_agent,
+    ):
         try:
             network_module.refresh_central_proxy()
         except Exception:
@@ -269,16 +729,19 @@ def _install_browser_proxy_auth_patch() -> None:
         )
 
     patched_init._central_proxy_auth_patch = True
-    browser_cls.__init__ = patched_init
 
-    original_new_page = browser_cls.new_page
+    browser_cls.__init__ = (
+        patched_init
+    )
+
+    original_new_page = (
+        browser_cls.new_page
+    )
 
     def patched_new_page(
         self,
         captured_callback,
     ):
-        # Sincroniza novamente porque o usuário pode ter alterado o Proxy Geral
-        # depois que o resolver foi criado.
         try:
             network_module.refresh_central_proxy()
         except Exception:
@@ -296,7 +759,8 @@ def _install_browser_proxy_auth_patch() -> None:
         ):
             try:
                 config = (
-                    network_module.central_proxy_config()
+                    network_module
+                    .central_proxy_config()
                 )
 
                 if (
@@ -309,12 +773,10 @@ def _install_browser_proxy_auth_patch() -> None:
                     authenticator.setPassword(
                         config.password
                     )
+
             except Exception:
                 pass
 
-        # QWebEngine possui um canal específico para desafio 407 do proxy.
-        # O QNetworkProxy.applicationProxy continua configurado em network.py,
-        # e este callback reforça as credenciais quando Chromium pedir.
         try:
             page.proxyAuthenticationRequired.connect(
                 authenticate_proxy
@@ -325,15 +787,17 @@ def _install_browser_proxy_auth_patch() -> None:
         return page
 
     patched_new_page._central_proxy_auth_patch = True
-    browser_cls.new_page = patched_new_page
+
+    browser_cls.new_page = (
+        patched_new_page
+    )
 
 
 def _install_robust_resolver_patch() -> None:
-    # O projeto já contém RobustFrontPageResolver, mas ele não estava sendo
-    # ativado pela UI. Tornamos essa implementação a Resolver oficial.
     web_resolver_module.Resolver = (
         RobustFrontPageResolver
     )
+
     covers_ui.Resolver = (
         RobustFrontPageResolver
     )
@@ -341,12 +805,13 @@ def _install_robust_resolver_patch() -> None:
 
 def _install_direct_frontpages_patch() -> None:
     cls = covers_ui.MainWindow
-
-    original = cls._start_single_web_resolver
+    original = (
+        cls._start_single_web_resolver
+    )
 
     if getattr(
         original,
-        "_central_frontpages_patch",
+        "_central_frontpages_v35",
         False,
     ):
         return
@@ -358,7 +823,10 @@ def _install_direct_frontpages_patch() -> None:
         one_done,
         pressreader_only=False,
     ):
-        # PressReader continua no resolver Chromium, pois requer DOM/lazy load.
+        # IMPORTANTE:
+        # Este patch NÃO muda a sequência do Valor.
+        # A busca inicial continua sendo Gmail em _start_web_branch().
+        # Só chegamos aqui depois do fallback web ser acionado.
         if (
             pressreader_only
             or entry.name not in {
@@ -375,8 +843,10 @@ def _install_direct_frontpages_patch() -> None:
             )
 
         entry.status = (
-            f"{entry.name}: buscando FrontPages pelo Proxy Geral…"
+            f"{entry.name}: fallback web • "
+            "localizando capa no FrontPages pelo Proxy Geral…"
         )
+
         self._refresh_list()
 
         worker = Worker(
@@ -384,27 +854,42 @@ def _install_direct_frontpages_patch() -> None:
             entry.name,
         )
 
-        def direct_ready(
+        def ready(
             result,
             en=entry,
             g=generation,
             done=one_done,
         ):
-            if g != self.refresh_generation:
+            if (
+                g
+                != self.refresh_generation
+            ):
                 return
 
-            url = ""
-            referer = ""
-
             try:
-                url, referer = result
+                url, referer = (
+                    result
+                )
             except Exception:
-                pass
+                url, referer = (
+                    "",
+                    "",
+                )
+
+            url = (
+                _normalize_frontpages_image_url(
+                    url
+                )
+            )
 
             if url:
-                resolver = SimpleNamespace(
-                    last_referer=referer,
-                    last_cookie_header="",
+                resolver = (
+                    SimpleNamespace(
+                        last_referer=
+                            referer,
+                        last_cookie_header=
+                            "",
+                    )
                 )
 
                 self._web_resolved(
@@ -415,13 +900,14 @@ def _install_direct_frontpages_patch() -> None:
                     g,
                     done,
                 )
+
                 return
 
-            # HTML não expôs a imagem: continua no Chromium robusto.
             en.status = (
-                f"{en.name}: HTML não expôs a capa • "
-                "tentando navegador interno com proxy autenticado…"
+                f"{en.name}: FrontPages não expôs a imagem "
+                "• tentando navegador interno…"
             )
+
             self._refresh_list()
 
             original(
@@ -432,19 +918,42 @@ def _install_direct_frontpages_patch() -> None:
                 False,
             )
 
-        def direct_error(
+        def error(
             message,
             en=entry,
             g=generation,
             done=one_done,
         ):
-            if g != self.refresh_generation:
+            if (
+                g
+                != self.refresh_generation
+            ):
+                return
+
+            text = str(
+                message or ""
+            )
+
+            if (
+                "407" in text
+                or "autenticação"
+                in text.lower()
+                or "authentication"
+                in text.lower()
+            ):
+                en.status = (
+                    f"{en.name}: Proxy Geral recusou a conexão "
+                    f"({text})"
+                )
+                self._refresh_list()
+                done()
                 return
 
             en.status = (
-                f"{en.name}: busca HTTP não resolveu ({message}) • "
-                "tentando navegador interno com proxy autenticado…"
+                f"{en.name}: HTTP pelo Proxy Geral não resolveu "
+                f"({text}) • tentando navegador interno…"
             )
+
             self._refresh_list()
 
             original(
@@ -456,50 +965,85 @@ def _install_direct_frontpages_patch() -> None:
             )
 
         worker.signals.finished.connect(
-            direct_ready
+            ready
         )
         worker.signals.error.connect(
-            direct_error
+            error
         )
 
         self._start_worker(
             worker
         )
 
-    patched._central_frontpages_patch = True
-    cls._start_single_web_resolver = patched
+    patched._central_frontpages_v35 = True
+    cls._start_single_web_resolver = (
+        patched
+    )
 
 
-def _install_valor_404_message_patch() -> None:
+def _install_valor_gmail_first_patch() -> None:
+    """Mantém Gmail como fonte prioritária e melhora o diagnóstico."""
+
     cls = covers_ui.MainWindow
-    original = cls._valor_email_error
+    original_error = (
+        cls._valor_email_error
+    )
 
     if getattr(
-        original,
-        "_central_valor_404_patch",
+        original_error,
+        "_central_valor_gmail_v35",
         False,
     ):
         return
 
-    def patched(
+    def patched_error(
         self,
         entry,
         message,
         generation,
         one_done,
     ):
-        text = str(message or "")
+        if (
+            generation
+            != self.refresh_generation
+        ):
+            return
 
-        if "HTTP 404" in text.upper():
-            if generation != self.refresh_generation:
-                return
+        text = str(
+            message or ""
+        )
+        upper = text.upper()
 
-            # 404 nesta chamada significa que a implantação atual do Apps
-            # Script não oferece valor_manifest/valor_pdf. Não é falha de
-            # autenticação do Proxy Geral; seguimos direto para FrontPages.
+        # Um 407 ao consultar o Gmail/Apps Script é proxy, não ausência de PDF.
+        if (
+            "407" in upper
+            or "PROXY AUTHENTICATION"
+            in upper
+            or "AUTENTICAÇÃO NECESSÁRIA"
+            in upper
+            or "AUTENTICACAO NECESSARIA"
+            in upper
+        ):
             entry.status = (
-                "Valor: ponte Gmail sem endpoint de PDF nesta implantação "
-                "• usando FrontPages pelo Proxy Geral…"
+                "Valor: Gmail não pôde ser consultado "
+                "porque o Proxy Geral recusou a autenticação • "
+                f"{text}"
+            )
+            self._refresh_list()
+            one_done()
+            return
+
+        # HTTP 404 da ponte significa que o endpoint valor_manifest/valor_pdf
+        # não está presente nessa implantação do Apps Script.
+        # Só então seguimos para o fallback web.
+        if (
+            "HTTP 404"
+            in upper
+        ):
+            entry.status = (
+                "Valor: Gmail consultado primeiro • "
+                "ponte não possui endpoint PDF nesta implantação "
+                "• usando fallback web pelo Proxy Geral…"
             )
             self._refresh_list()
 
@@ -510,29 +1054,35 @@ def _install_valor_404_message_patch() -> None:
             )
             return
 
-        return original(
+        # Para qualquer outro erro, preserva o comportamento original:
+        # Gmail falha -> fallback web.
+        return original_error(
             self,
             entry,
-            message,
+            text,
             generation,
             one_done,
         )
 
-    patched._central_valor_404_patch = True
-    cls._valor_email_error = patched
+    patched_error._central_valor_gmail_v35 = True
+
+    cls._valor_email_error = (
+        patched_error
+    )
 
 
 def install_covers_web_proxy_patch() -> None:
-    """Corrige Valor/Washington Post atrás do Proxy Geral do Central."""
+    """V35 — Valor Gmail primeiro + FrontPages normalizado + Proxy Geral."""
 
     global _INSTALLED
 
     if _INSTALLED:
         return
 
+    _install_download_retry_patch()
     _install_browser_proxy_auth_patch()
     _install_robust_resolver_patch()
     _install_direct_frontpages_patch()
-    _install_valor_404_message_patch()
+    _install_valor_gmail_first_patch()
 
     _INSTALLED = True
