@@ -50,9 +50,13 @@ class Application:
         from monitor_noticias.ui.settings_proxy_toggle_patch import (
             install_settings_proxy_toggle_patch,
         )
+        from monitor_noticias.ui.covers_web_proxy_patch import (
+            install_covers_web_proxy_patch,
+        )
 
         install_extractor_proxy_patch()
         install_settings_proxy_toggle_patch()
+        install_covers_web_proxy_patch()
 
         from monitor_noticias.ui.main_window import MainWindow
         from monitor_noticias.ui.screen_recorder_integration import (
