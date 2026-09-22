@@ -20,6 +20,8 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from monitor_noticias.app.preferences import SharedPreferences
+from monitor_noticias.networking.proxy import ProxySettings
 from monitor_noticias.ui.controller import (
     MainUiController,
 )
@@ -381,6 +383,99 @@ class SpreadsheetAutomationPage(BasePage):
                 f"{self.exe_path}"
             )
 
+    def _build_process_environment(
+        self,
+    ) -> QProcessEnvironment | None:
+        """Monta o ambiente do EXE com o Proxy Geral do Central.
+
+        A senha permanece protegida no DPAPI do Central e só é lida no
+        instante em que o processo é iniciado. Ela não é escrita no
+        config.json da Automação de Planilhas.
+        """
+        env = QProcessEnvironment.systemEnvironment()
+
+        # Impede que variáveis antigas do Windows/terminal sobreponham a
+        # configuração explícita do Central.
+        for key in (
+            "HTTP_PROXY",
+            "HTTPS_PROXY",
+            "ALL_PROXY",
+            "http_proxy",
+            "https_proxy",
+            "all_proxy",
+        ):
+            env.remove(key)
+
+        try:
+            prefs = SharedPreferences(
+                self.app_root
+                / "data"
+                / "prefs"
+                / "monitor_prefs.properties"
+            )
+
+            settings = ProxySettings(
+                prefs,
+                data_dir=(
+                    self.app_root
+                    / "data"
+                ),
+            )
+
+            config = settings.load()
+
+        except Exception as exc:
+            QMessageBox.warning(
+                self,
+                "Proxy Geral",
+                "Não foi possível ler a configuração de proxy do Central.\n\n"
+                f"{exc}",
+            )
+            return None
+
+        env.insert(
+            "CENTRAL_PROXY_ENABLED",
+            "1" if config.enabled else "0",
+        )
+        env.insert(
+            "CENTRAL_PROXY_HOST",
+            config.host or "",
+        )
+        env.insert(
+            "CENTRAL_PROXY_PORT",
+            str(config.port or 0),
+        )
+        env.insert(
+            "CENTRAL_PROXY_USERNAME",
+            config.username or "",
+        )
+        env.insert(
+            "CENTRAL_PROXY_PASSWORD",
+            config.password or "",
+        )
+
+        if config.enabled:
+            if not config.ready:
+                QMessageBox.warning(
+                    self,
+                    "Proxy Geral",
+                    "O Proxy Geral está ativado, mas usuário/senha "
+                    "não estão completos.\n\n"
+                    "Abra Configurações do Central, corrija o proxy "
+                    "e tente iniciar a Automação de Planilhas novamente.",
+                )
+                return None
+
+            self.status_chip.setText(
+                "Proxy geral do Central"
+            )
+        else:
+            self.status_chip.setText(
+                "Conexão direta"
+            )
+
+        return env
+
     def start_tool(self) -> None:
         if not self.exe_path.is_file():
             QMessageBox.warning(
@@ -415,12 +510,19 @@ class SpreadsheetAutomationPage(BasePage):
             "A primeira abertura pode levar alguns segundos."
         )
 
+        process_env = (
+            self._build_process_environment()
+        )
+
+        if process_env is None:
+            return
+
         process = QProcess(self)
         process.setWorkingDirectory(
             str(self.tool_dir)
         )
         process.setProcessEnvironment(
-            QProcessEnvironment.systemEnvironment()
+            process_env
         )
 
         process.started.connect(

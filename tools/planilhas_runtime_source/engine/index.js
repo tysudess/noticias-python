@@ -12,12 +12,48 @@ catch (e) { console.error("ERRO CONFIG:", e.message); process.exit(2); }
 const GRUPOS_ID = Array.isArray(CONFIG.grupos) ? CONFIG.grupos : [];
 const APPS_SCRIPT_URL = String(CONFIG.appsScriptUrl || "").trim();
 const DIAGNOSTICO_GRUPOS = Boolean(CONFIG.diagnosticoGrupos);
-const PROXY = CONFIG.proxy || {};
-const PROXY_ATIVO = Boolean(PROXY.ativo);
-const PROXY_HOST = String(PROXY.host || "").trim();
-const PROXY_PORT = Number(PROXY.porta || 0);
-const PROXY_USUARIO = String(PROXY.usuario || "").trim();
-const PROXY_SENHA = String(PROXY.senha || "");
+
+// ---------------------------------------------------------------------
+// REDE / PROXY
+// ---------------------------------------------------------------------
+// Quando o EXE é iniciado dentro do Central, estas variáveis são fornecidas
+// pela página PySide6 e têm prioridade total sobre config.json.
+// A senha vem do DPAPI do Central e NÃO é gravada neste aplicativo.
+const CENTRAL_PROXY_PRESENT =
+  Object.prototype.hasOwnProperty.call(
+    process.env,
+    "CENTRAL_PROXY_ENABLED"
+  );
+
+const CONFIG_PROXY = CONFIG.proxy || {};
+
+const PROXY_ATIVO = CENTRAL_PROXY_PRESENT
+  ? process.env.CENTRAL_PROXY_ENABLED === "1"
+  : Boolean(CONFIG_PROXY.ativo);
+
+const PROXY_HOST = String(
+  CENTRAL_PROXY_PRESENT
+    ? (process.env.CENTRAL_PROXY_HOST || "")
+    : (CONFIG_PROXY.host || "")
+).trim();
+
+const PROXY_PORT = Number(
+  CENTRAL_PROXY_PRESENT
+    ? (process.env.CENTRAL_PROXY_PORT || 0)
+    : (CONFIG_PROXY.porta || 0)
+);
+
+const PROXY_USUARIO = String(
+  CENTRAL_PROXY_PRESENT
+    ? (process.env.CENTRAL_PROXY_USERNAME || "")
+    : (CONFIG_PROXY.usuario || "")
+).trim();
+
+const PROXY_SENHA = String(
+  CENTRAL_PROXY_PRESENT
+    ? (process.env.CENTRAL_PROXY_PASSWORD || "")
+    : (CONFIG_PROXY.senha || "")
+);
 
 const STATE_DIR = path.join(path.dirname(CONFIG_PATH), "data");
 const SEEN_FILE = path.join(STATE_DIR, "mensagens-processadas.json");
@@ -122,12 +158,33 @@ function interpretarMensagem(texto) {
 }
 
 function obterProxyAxios() {
-  if (!PROXY_ATIVO || !PROXY_HOST || !PROXY_PORT) return undefined;
-  const proxy = { protocol:"http", host:PROXY_HOST, port:PROXY_PORT };
-  if (PROXY_USUARIO) proxy.auth = { username:PROXY_USUARIO, password:PROXY_SENHA };
+  if (!PROXY_ATIVO || !PROXY_HOST || !PROXY_PORT) return false;
+
+  const proxy = {
+    protocol: "http",
+    host: PROXY_HOST,
+    port: PROXY_PORT,
+  };
+
+  if (PROXY_USUARIO) {
+    proxy.auth = {
+      username: PROXY_USUARIO,
+      password: PROXY_SENHA,
+    };
+  }
+
   return proxy;
 }
-function obterProxyArg() { return PROXY_ATIVO && PROXY_HOST && PROXY_PORT ? `--proxy-server=http://${PROXY_HOST}:${PROXY_PORT}` : null; }
+
+function obterProxyArg() {
+  return (
+    PROXY_ATIVO
+    && PROXY_HOST
+    && PROXY_PORT
+  )
+    ? `--proxy-server=http://${PROXY_HOST}:${PROXY_PORT}`
+    : null;
+}
 
 function localizarNavegador() {
   const candidatos = [
@@ -143,23 +200,68 @@ function localizarNavegador() {
 }
 
 const navegador = localizarNavegador();
+
 console.log("MODO DO NAVEGADOR: OCULTO (HEADLESS)");
 if (navegador) console.log("NAVEGADOR:", navegador);
+
+if (CENTRAL_PROXY_PRESENT) {
+  console.log("REDE: configuração recebida do Proxy Geral do Central");
+}
+
 if (PROXY_ATIVO && PROXY_HOST && PROXY_PORT) {
   console.log(`PROXY ATIVO: ${PROXY_HOST}:${PROXY_PORT}`);
   console.log(PROXY_USUARIO ? "PROXY COM AUTENTICAÇÃO CONFIGURADA" : "PROXY SEM USUÁRIO/SENHA CONFIGURADOS");
-} else console.log("PROXY: DESATIVADO");
+} else {
+  console.log("PROXY: DESATIVADO");
+  console.log("REDE DIRETA FORÇADA: proxy do Windows/ambiente ignorado.");
+}
 
-const chromeArgs = ["--no-sandbox","--disable-setuid-sandbox","--disable-gpu","--disable-dev-shm-usage","--disable-background-networking","--disable-background-timer-throttling","--disable-renderer-backgrounding","--disable-backgrounding-occluded-windows"];
+const chromeArgs = [
+  "--no-sandbox",
+  "--disable-setuid-sandbox",
+  "--disable-gpu",
+  "--disable-dev-shm-usage",
+  "--disable-background-networking",
+  "--disable-background-timer-throttling",
+  "--disable-renderer-backgrounding",
+  "--disable-backgrounding-occluded-windows",
+];
+
 const proxyArg = obterProxyArg();
-if (proxyArg) chromeArgs.push(proxyArg);
+
+if (proxyArg) {
+  chromeArgs.push(proxyArg);
+} else {
+  // Sem proxy no Central = conexão direta de verdade.
+  // Sem esta flag, o Chrome no Windows ainda pode herdar o proxy do sistema
+  // e responder ERR_INVALID_AUTH_CREDENTIALS mesmo quando o aplicativo mostra
+  // "PROXY: DESATIVADO".
+  chromeArgs.push("--no-proxy-server");
+}
 
 const clientOptions = {
-  authStrategy: new LocalAuth({ clientId:"monitor-planilha", dataPath:path.join(path.dirname(CONFIG_PATH), ".wwebjs_auth") }),
-  puppeteer: { headless:true, ...(navegador ? { executablePath:navegador } : {}), args:chromeArgs }
+  authStrategy: new LocalAuth({
+    clientId: "monitor-planilha",
+    dataPath: path.join(
+      path.dirname(CONFIG_PATH),
+      ".wwebjs_auth",
+    ),
+  }),
+  puppeteer: {
+    headless: true,
+    ...(navegador ? { executablePath:navegador } : {}),
+    args: chromeArgs,
+  },
 };
-if (PROXY_USUARIO) {
-  clientOptions.proxyAuthentication = { username:PROXY_USUARIO, password:PROXY_SENHA };
+
+if (
+  PROXY_ATIVO
+  && PROXY_USUARIO
+) {
+  clientOptions.proxyAuthentication = {
+    username: PROXY_USUARIO,
+    password: PROXY_SENHA,
+  };
 }
 
 const client = new Client(clientOptions);
@@ -172,7 +274,7 @@ client.on("ready", () => {
   console.log("SISTEMA ATIVO");
   console.log("====================================");
   console.log("WhatsApp conectado em segundo plano.");
-  if (PROXY_USUARIO) console.log("Autenticação do proxy aplicada ao WhatsApp Web.");
+  if (PROXY_ATIVO && PROXY_USUARIO) console.log("Autenticação do proxy aplicada ao WhatsApp Web.");
 });
 
 let reconectando = false;
@@ -190,10 +292,26 @@ client.on("disconnected", async motivo => {
 
 async function postar(dados) {
   if (!APPS_SCRIPT_URL) throw new Error("Apps Script URL não configurada.");
-  const cfg = { headers:{"Content-Type":"application/json"}, timeout:15000 };
+
   const proxy = obterProxyAxios();
-  if (proxy) cfg.proxy = proxy;
-  const r = await axios.post(APPS_SCRIPT_URL, dados, cfg);
+
+  const cfg = {
+    headers: {
+      "Content-Type": "application/json",
+    },
+    timeout: 15000,
+
+    // false = Axios não deve consultar HTTP_PROXY/HTTPS_PROXY do ambiente.
+    // Quando o Proxy Geral está ativo, o objeto explícito abaixo o substitui.
+    proxy: proxy || false,
+  };
+
+  const r = await axios.post(
+    APPS_SCRIPT_URL,
+    dados,
+    cfg,
+  );
+
   console.log("Resposta da planilha:");
   console.log(r.data);
   return r.data;
@@ -259,6 +377,23 @@ async function iniciarWhatsApp() {
       "ERRO AO INICIALIZAR WHATSAPP:",
       message
     );
+
+    if (
+      message.includes("ERR_INVALID_AUTH_CREDENTIALS")
+    ) {
+      if (PROXY_ATIVO) {
+        console.error(
+          "DIAGNÓSTICO: o proxy recusou as credenciais. "
+          + "Confira usuário/senha em Configurações > Proxy Geral do Central."
+        );
+      } else {
+        console.error(
+          "DIAGNÓSTICO: a conexão direta foi forçada, mas a rede recusou "
+          + "autenticação. Se esta rede exigir proxy, ative o Proxy Geral "
+          + "do Central."
+        );
+      }
+    }
 
     console.error(
       "O motor será encerrado para a recuperação automática do aplicativo."
