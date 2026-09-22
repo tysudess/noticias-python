@@ -212,6 +212,10 @@ class SpreadsheetAutomationPage(BasePage):
         self.browser_host.setObjectName(
             "sheetStandaloneHost"
         )
+        self.browser_host.setMinimumSize(
+            320,
+            240,
+        )
         self.browser_host.setAttribute(
             Qt.WidgetAttribute.WA_NativeWindow,
             True,
@@ -881,6 +885,21 @@ class SpreadsheetAutomationPage(BasePage):
 
             self._resize_embedded()
 
+            # Electron/Chromium pode recalcular o viewport alguns milissegundos
+            # depois do SetParent. Reaplicamos o tamanho para preencher 100%.
+            QTimer.singleShot(
+                80,
+                self._resize_embedded,
+            )
+            QTimer.singleShot(
+                300,
+                self._resize_embedded,
+            )
+            QTimer.singleShot(
+                900,
+                self._resize_embedded,
+            )
+
         except Exception as exc:
             self._embedded_hwnd = None
 
@@ -896,6 +915,90 @@ class SpreadsheetAutomationPage(BasePage):
                 "Use “ABRIR FORA”."
             )
 
+    def _native_host_size(self) -> tuple[int, int]:
+        """Retorna o tamanho REAL do host em pixels nativos do Windows.
+
+        QWidget.width()/height() usam pixels lógicos. Em Windows com escala
+        125%, 150% etc., passar esses valores direto para MoveWindow deixa o
+        Electron menor que a área do Central e corta a parte inferior/lateral.
+
+        Aqui usamos o HWND nativo do host e, como segurança, comparamos também
+        com o devicePixelRatio do Qt.
+        """
+        logical_w = max(
+            1,
+            int(self.browser_host.width()),
+        )
+        logical_h = max(
+            1,
+            int(self.browser_host.height()),
+        )
+
+        try:
+            dpr = float(
+                self.browser_host.devicePixelRatioF()
+            )
+        except Exception:
+            dpr = 1.0
+
+        if dpr <= 0:
+            dpr = 1.0
+
+        qt_physical_w = max(
+            1,
+            int(round(logical_w * dpr)),
+        )
+        qt_physical_h = max(
+            1,
+            int(round(logical_h * dpr)),
+        )
+
+        if os.name != "nt":
+            return (
+                qt_physical_w,
+                qt_physical_h,
+            )
+
+        try:
+            from ctypes import wintypes
+
+            host_hwnd = int(
+                self.browser_host.winId()
+            )
+
+            rect = wintypes.RECT()
+
+            ok = ctypes.windll.user32.GetClientRect(
+                ctypes.c_void_p(host_hwnd),
+                ctypes.byref(rect),
+            )
+
+            if ok:
+                native_w = max(
+                    1,
+                    int(rect.right - rect.left),
+                )
+                native_h = max(
+                    1,
+                    int(rect.bottom - rect.top),
+                )
+
+                # Dependendo do contexto DPI do processo, GetClientRect pode
+                # vir lógico ou físico. Usamos o maior valor para nunca deixar
+                # a janela incorporada menor que a área visível do Central.
+                return (
+                    max(native_w, qt_physical_w),
+                    max(native_h, qt_physical_h),
+                )
+
+        except Exception:
+            pass
+
+        return (
+            qt_physical_w,
+            qt_physical_h,
+        )
+
     def _resize_embedded(self) -> None:
         hwnd = self._embedded_hwnd
 
@@ -907,20 +1010,46 @@ class SpreadsheetAutomationPage(BasePage):
             return
 
         try:
-            ctypes.windll.user32.MoveWindow(
-                ctypes.c_void_p(hwnd),
-                0,
-                0,
-                max(
-                    1,
-                    self.browser_host.width()
-                ),
-                max(
-                    1,
-                    self.browser_host.height()
-                ),
-                True,
+            user32 = ctypes.windll.user32
+
+            width, height = (
+                self._native_host_size()
             )
+
+            SWP_NOZORDER = 0x0004
+            SWP_NOACTIVATE = 0x0010
+            SWP_FRAMECHANGED = 0x0020
+            SWP_SHOWWINDOW = 0x0040
+
+            user32.SetWindowPos(
+                ctypes.c_void_p(hwnd),
+                ctypes.c_void_p(0),
+                0,
+                0,
+                width,
+                height,
+                SWP_NOZORDER
+                | SWP_NOACTIVATE
+                | SWP_FRAMECHANGED
+                | SWP_SHOWWINDOW,
+            )
+
+            # Força o Chromium/Electron a recalcular seu viewport interno.
+            WM_SIZE = 0x0005
+            SIZE_RESTORED = 0
+            lparam = (
+                (height & 0xFFFF) << 16
+            ) | (
+                width & 0xFFFF
+            )
+
+            user32.SendMessageW(
+                ctypes.c_void_p(hwnd),
+                WM_SIZE,
+                SIZE_RESTORED,
+                lparam,
+            )
+
         except Exception:
             pass
 
