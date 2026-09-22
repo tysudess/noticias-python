@@ -28,6 +28,11 @@ env:
   PORTABLE_NAME: MonitorDeNoticias-Windows-Portable-x64.zip
   ARTIFACT_NAME: monitor-portable-release
 
+  # Runtime externo da Automação de Planilhas.
+  # O EXE de ~85 MB fica como asset de uma Release, não dentro do Git.
+  PLANILHAS_RUNTIME_TAG: planilhas-runtime-v1.0.4
+  PLANILHAS_RUNTIME_ASSET: AutomacaoPlanilhas-Windows-Portable-v1.0.4.exe
+
 jobs:
   build:
     name: Gerar portable
@@ -74,20 +79,6 @@ jobs:
 
           python -c "import pyaudiowpatch; import _portaudiowpatch; print('PyAudioWPatch OK:', pyaudiowpatch.__file__)"
           python -m pip show PyAudioWPatch
-
-      - name: Preparar motor da Automação de Planilhas
-        shell: pwsh
-        env:
-          PUPPETEER_SKIP_DOWNLOAD: "true"
-        run: |
-          Push-Location "tools/spreadsheet_automation"
-          try {
-            npm install --omit=dev --no-audit --no-fund
-            node --check "engine/index.js"
-          }
-          finally {
-            Pop-Location
-          }
 
       - name: Gerar Extrator de Notícias Electron
         shell: pwsh
@@ -136,6 +127,8 @@ jobs:
 
       - name: Preparar estrutura portable
         shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           $root = Resolve-Path "dist/MonitorDeNoticias"
 
@@ -148,8 +141,7 @@ jobs:
             "Videos",
             "VideoEditorExports",
             "tools/news_extractor",
-            "tools/spreadsheet_automation/engine",
-            "tools/spreadsheet_automation/node_modules"
+            "tools/spreadsheet_automation"
           )) {
             New-Item -ItemType Directory -Force -Path (Join-Path $root $dir) | Out-Null
           }
@@ -173,34 +165,47 @@ jobs:
             (Join-Path $root "tools/news_extractor/ExtratorMateriasPortable-V1.25.19.exe") `
             -Force
 
-          Copy-Item `
-            "tools/spreadsheet_automation/engine/index.js" `
-            (Join-Path $root "tools/spreadsheet_automation/engine/index.js") `
-            -Force
+          # O executável standalone é grande demais para upload pela interface
+          # web do repositório. Ele é mantido como asset da Release fixa:
+          # planilhas-runtime-v1.0.4
+          $sheetTargetDir = Join-Path $root "tools/spreadsheet_automation"
+          $sheetTarget = Join-Path $sheetTargetDir $env:PLANILHAS_RUNTIME_ASSET
+          $sheetConfig = "tools/spreadsheet_automation/config.json"
 
-          Copy-Item `
-            "tools/spreadsheet_automation/package.json" `
-            (Join-Path $root "tools/spreadsheet_automation/package.json") `
-            -Force
-
-          Copy-Item `
-            "tools/spreadsheet_automation/config.default.json" `
-            (Join-Path $root "tools/spreadsheet_automation/config.default.json") `
-            -Force
-
-          Copy-Item `
-            "tools/spreadsheet_automation/node_modules/*" `
-            (Join-Path $root "tools/spreadsheet_automation/node_modules") `
-            -Recurse -Force
-
-          $node = (Get-Command node -ErrorAction Stop).Source
-          if (-not (Test-Path $node)) {
-            throw "node.exe do runner não foi encontrado."
+          if (-not (Test-Path $sheetConfig)) {
+            throw "config.json da Automação de Planilhas não foi encontrado no repositório."
           }
 
+          Write-Host "Baixando runtime da Automação de Planilhas..."
+          Write-Host "Tag: $env:PLANILHAS_RUNTIME_TAG"
+          Write-Host "Asset: $env:PLANILHAS_RUNTIME_ASSET"
+
+          gh release download `
+            $env:PLANILHAS_RUNTIME_TAG `
+            --repo $env:GITHUB_REPOSITORY `
+            --pattern $env:PLANILHAS_RUNTIME_ASSET `
+            --dir $sheetTargetDir `
+            --clobber
+
+          if ($LASTEXITCODE -ne 0) {
+            throw "Falha ao baixar o runtime da Automação de Planilhas da Release $env:PLANILHAS_RUNTIME_TAG."
+          }
+
+          if (-not (Test-Path $sheetTarget)) {
+            throw "O asset $env:PLANILHAS_RUNTIME_ASSET não foi baixado da Release $env:PLANILHAS_RUNTIME_TAG."
+          }
+
+          $sheetSizeMB = [math]::Round((Get-Item $sheetTarget).Length / 1MB, 2)
+
+          if ((Get-Item $sheetTarget).Length -lt 50MB) {
+            throw "O runtime baixado parece incompleto: $sheetSizeMB MB."
+          }
+
+          Write-Host "Runtime de Planilhas baixado com sucesso: $sheetSizeMB MB"
+
           Copy-Item `
-            $node `
-            (Join-Path $root "tools/spreadsheet_automation/node.exe") `
+            $sheetConfig `
+            (Join-Path $sheetTargetDir "config.json") `
             -Force
 
           if (Test-Path "portable/README_PORTABLE.txt") {
@@ -442,22 +447,22 @@ jobs:
               throw "Extrator de Notícias não está dentro do portable."
             }
 
-            $sheetEngine = $archive.Entries |
+            $sheetExe = $archive.Entries |
               Where-Object {
                 $_.FullName.Replace("\", "/") -ieq `
-                  "tools/spreadsheet_automation/engine/index.js"
+                  "tools/spreadsheet_automation/AutomacaoPlanilhas-Windows-Portable-v1.0.4.exe"
               } |
               Select-Object -First 1
 
-            $sheetNode = $archive.Entries |
+            $sheetConfig = $archive.Entries |
               Where-Object {
                 $_.FullName.Replace("\", "/") -ieq `
-                  "tools/spreadsheet_automation/node.exe"
+                  "tools/spreadsheet_automation/config.json"
               } |
               Select-Object -First 1
 
-            if (-not $sheetEngine -or -not $sheetNode) {
-              throw "Automação de Planilhas não está completa dentro do portable."
+            if (-not $sheetExe -or -not $sheetConfig) {
+              throw "Automação de Planilhas standalone v1.0.4 não está completa dentro do portable."
             }
           }
           finally {
