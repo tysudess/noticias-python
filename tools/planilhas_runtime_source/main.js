@@ -9,6 +9,7 @@ let motor = null;
 let encerramentoManual = false;
 let reiniciosAutomaticos = 0;
 let reinicioTimer = null;
+let motorMode = "headless";
 let capturandoNoticia = false;
 let capturandoVideo = false;
 
@@ -30,6 +31,13 @@ function baseDir(){ return process.env.PORTABLE_EXECUTABLE_DIR || (app.isPackage
 function configPath(){ return path.join(baseDir(), "config.json"); }
 function enginePath(){ return app.isPackaged ? path.join(app.getAppPath(), "engine", "index.js") : path.join(__dirname, "engine", "index.js"); }
 function appIcon(){ return path.join(__dirname, "build", "icon.png"); }
+function portableChromePath(){
+  const candidate = app.isPackaged
+    ? path.join(process.resourcesPath, "chrome-portable", "chrome.exe")
+    : path.join(__dirname, "chrome-portable", "chrome.exe");
+
+  return fs.existsSync(candidate) ? candidate : "";
+}
 function ensureConfig(){
   const target = configPath();
   if(!fs.existsSync(target)){
@@ -97,6 +105,9 @@ function parseLine(line,isErr=false){
   stats.ultimaMensagem=line;
   if(line.includes("SISTEMA ATIVO")){ stats.status="RODANDO"; stats.whatsapp="CONECTADO"; reiniciosAutomaticos=0; }
   if(line.includes("Leia o QR Code")){ stats.status="AGUARDANDO QR"; stats.whatsapp="AGUARDANDO AUTENTICAÇÃO"; }
+  if(line.includes("[LOGIN] QR DISPONÍVEL")){ stats.status="AGUARDANDO QR"; stats.whatsapp="AGUARDANDO AUTENTICAÇÃO"; }
+  if(line.includes("[LOGIN] AUTENTICADO")){ stats.whatsapp="AUTENTICADO"; }
+  if(line.includes("[LOGIN] PRONTO")){ stats.whatsapp="CONECTADO"; stats.status="RODANDO"; }
   if(line.includes("PROXY ATIVO")) stats.proxy="ATIVO";
   if(line.includes("PROXY: DESATIVADO")) stats.proxy="DESATIVADO";
   if(line.includes("PROXY COM AUTENTICAÇÃO CONFIGURADA")) stats.proxy="AUTENTICADO/CONFIGURADO";
@@ -125,14 +136,24 @@ function parseLine(line,isErr=false){
   send("status",stats);
 }
 
-function iniciarMotor(){
+function iniciarMotor(mode="headless"){
   if(motor) return {ok:false,message:"Motor já está em execução."};
   ensureConfig();
   encerramentoManual=false;
+  motorMode = mode === "login" ? "login" : "headless";
   const p = effectiveProxyConfig(readConfig());
   stats.status="INICIANDO"; stats.whatsapp="CONECTANDO"; stats.planilha="AGUARDANDO"; stats.proxy=p?.ativo ? "CONFIGURADO" : "DESATIVADO";
   send("status",stats);
   const env={...process.env,CONFIG_PATH:configPath()};
+
+  const portableChrome = portableChromePath();
+  if(portableChrome){
+    env.CHROME_PATH = portableChrome;
+    parseLine(`CHROME PORTÁTIL: ${portableChrome}`, false);
+  }
+
+  env.CENTRAL_WHATSAPP_VISIBLE = motorMode === "login" ? "1" : "0";
+
   if(app.isPackaged) env.ELECTRON_RUN_AS_NODE="1";
   motor=spawn(process.execPath,[enginePath()],{cwd:baseDir(),env,windowsHide:true});
   motor.stdout.setEncoding("utf8"); motor.stderr.setEncoding("utf8");
@@ -154,7 +175,7 @@ function iniciarMotor(){
         stats.status=code===12 ? "AGUARDANDO NOVO QR" : "RECUPERANDO";
         send("status",stats);
         const delay = code===12 ? 2500 : 5000;
-        reinicioTimer=setTimeout(()=>{reinicioTimer=null;iniciarMotor();},delay);
+        reinicioTimer=setTimeout(()=>{reinicioTimer=null;iniciarMotor(motorMode);},delay);
         return;
       }
       stats.status="ERRO";
@@ -227,19 +248,26 @@ async function testarProxy(formCfg){
 }
 
 function createWindow(){
-  win=new BrowserWindow({width:1240,height:790,minWidth:1050,minHeight:680,title:"Automação Planilhas - WhatsApp → Planilhas Google",backgroundColor:"#07131d",icon:appIcon(),webPreferences:{preload:path.join(__dirname,"preload.js"),contextIsolation:true,nodeIntegration:false}});
+  win=new BrowserWindow({width:1240,height:790,minWidth:760,minHeight:480,title:"Automação Planilhas - WhatsApp → Planilhas Google",backgroundColor:"#07131d",icon:appIcon(),webPreferences:{preload:path.join(__dirname,"preload.js"),contextIsolation:true,nodeIntegration:false}});
   win.loadFile(path.join(__dirname,"renderer","index.html")); win.setMenuBarVisibility(false);
 }
 
 app.whenReady().then(()=>{
   ensureConfig(); createWindow();
-  ipcMain.handle("motor:start",()=>iniciarMotor());
+  ipcMain.handle("motor:start",()=>iniciarMotor("headless"));
+  ipcMain.handle("motor:start-login",()=>iniciarMotor("login"));
   ipcMain.handle("motor:stop",()=>pararMotor());
   ipcMain.handle("status:get",()=>stats);
   ipcMain.handle("proxy:test",(_,cfg)=>testarProxy(cfg));
   ipcMain.handle("config:get",()=>publicConfig());
   ipcMain.handle("config:save",(_,cfg)=>{fs.writeFileSync(ensureConfig(),JSON.stringify(cfg,null,2),"utf8");return {ok:true,path:configPath()};});
   ipcMain.handle("config:open-folder",()=>{shell.openPath(baseDir());return {ok:true};});
+
+  if(process.env.CENTRAL_AUTOSTART_LOGIN === "1"){
+    setTimeout(()=>iniciarMotor("login"),900);
+  } else if(process.env.CENTRAL_AUTOSTART_MOTOR === "1"){
+    setTimeout(()=>iniciarMotor("headless"),900);
+  }
 });
 app.on("before-quit",()=>{encerramentoManual=true;if(reinicioTimer)clearTimeout(reinicioTimer);try{if(motor)motor.kill();}catch(_){} });
 app.on("window-all-closed",()=>{if(process.platform!=="darwin")app.quit();});

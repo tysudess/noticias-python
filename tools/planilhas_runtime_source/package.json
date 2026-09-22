@@ -36,6 +36,13 @@
       {
         "from": "config.json",
         "to": "config.default.json"
+      },
+      {
+        "from": "chrome-portable",
+        "to": "chrome-portable",
+        "filter": [
+          "**/*"
+        ]
       }
     ],
     "win": {

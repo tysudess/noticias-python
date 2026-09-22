@@ -2,6 +2,7 @@ const { contextBridge, ipcRenderer } = require("electron");
 
 contextBridge.exposeInMainWorld("api", {
   start: () => ipcRenderer.invoke("motor:start"),
+  startLogin: () => ipcRenderer.invoke("motor:start-login"),
   stop: () => ipcRenderer.invoke("motor:stop"),
   getStatus: () => ipcRenderer.invoke("status:get"),
   testProxy: cfg => ipcRenderer.invoke("proxy:test", cfg),

@@ -89,6 +89,7 @@ $("proxyAtivo").addEventListener("change",()=>{
     : "Proxy marcado como desativado.";
 });
 $("start").onclick=async()=>{const r=await window.api.start(); if(r.message)addLog(r.message);};
+$("loginWhats").onclick=async()=>{const r=await window.api.startLogin(); if(r.message)addLog(r.message);};
 $("stop").onclick=async()=>{const r=await window.api.stop(); if(r.message)addLog(r.message);};
 $("openLog").onclick=()=>switchView("logview"); $("openCfg").onclick=()=>window.api.openConfigFolder();
 $("testProxy").onclick=async()=>{ const btn=$("testProxy"); btn.disabled=true; $("proxyTestResult").textContent="Testando proxy..."; const r=await window.api.testProxy(formConfig()); addLog(r.message||"Teste do proxy concluído.",!r.ok); $("proxyTestResult").textContent=r.message||"Concluído."; btn.disabled=false; showStatus(await window.api.getStatus()); };

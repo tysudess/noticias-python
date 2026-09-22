@@ -13,9 +13,11 @@ const GRUPOS_ID = Array.isArray(CONFIG.grupos) ? CONFIG.grupos : [];
 const APPS_SCRIPT_URL = String(CONFIG.appsScriptUrl || "").trim();
 const DIAGNOSTICO_GRUPOS = Boolean(CONFIG.diagnosticoGrupos);
 
+const MODO_VISUAL_LOGIN = process.env.CENTRAL_WHATSAPP_VISIBLE === "1";
+
 const AUTH_ROOT = path.join(
   path.dirname(CONFIG_PATH),
-  ".wwebjs_auth"
+  ".wwebjs_auth_v2"
 );
 
 const AUTH_SESSION_DIR = path.join(
@@ -212,7 +214,11 @@ function localizarNavegador() {
 
 const navegador = localizarNavegador();
 
-console.log("MODO DO NAVEGADOR: OCULTO (HEADLESS)");
+console.log(
+  MODO_VISUAL_LOGIN
+    ? "MODO DO NAVEGADOR: LOGIN VISUAL"
+    : "MODO DO NAVEGADOR: OCULTO (HEADLESS)"
+);
 if (navegador) console.log("NAVEGADOR:", navegador);
 
 if (CENTRAL_PROXY_PRESENT) {
@@ -238,6 +244,11 @@ const chromeArgs = [
   "--disable-backgrounding-occluded-windows",
 ];
 
+if (MODO_VISUAL_LOGIN) {
+  chromeArgs.push("--start-maximized");
+  chromeArgs.push("--window-size=1280,820");
+}
+
 const proxyArg = obterProxyArg();
 
 if (proxyArg) {
@@ -256,8 +267,10 @@ const clientOptions = {
     dataPath: AUTH_ROOT,
     rmMaxRetries: 12,
   }),
+  authTimeoutMs: MODO_VISUAL_LOGIN ? 180000 : 120000,
   puppeteer: {
-    headless: true,
+    headless: !MODO_VISUAL_LOGIN,
+    ...(MODO_VISUAL_LOGIN ? { defaultViewport: null } : {}),
     ...(navegador ? { executablePath:navegador } : {}),
     args: chromeArgs,
   },
@@ -275,14 +288,54 @@ if (
 
 const client = new Client(clientOptions);
 
-client.on("qr", qr => { console.log("\nLeia o QR Code:\n"); qrcode.generate(qr,{small:true}); });
-client.on("authenticated", () => console.log("WhatsApp autenticado."));
-client.on("loading_screen", (percent, message) => console.log(`WhatsApp carregando: ${percent}% ${message || ""}`));
+let visualTitleTimer = null;
+
+function manterTituloLoginVisual() {
+  if (!MODO_VISUAL_LOGIN) return;
+
+  if (visualTitleTimer) return;
+
+  visualTitleTimer = setInterval(async () => {
+    try {
+      const page = client.pupPage;
+      if (!page || page.isClosed()) return;
+
+      await page.evaluate(() => {
+        document.title = "CENTRAL WHATSAPP LOGIN";
+      });
+    } catch (_) {}
+  }, 900);
+}
+
+client.on("qr", qr => {
+  manterTituloLoginVisual();
+  console.log("[LOGIN] QR DISPONÍVEL");
+  console.log("\nLeia o QR Code:\n");
+  qrcode.generate(qr,{small:true});
+});
+
+client.on("authenticated", () => {
+  manterTituloLoginVisual();
+  console.log("[LOGIN] AUTENTICADO");
+  console.log("WhatsApp autenticado.");
+});
+
+client.on("loading_screen", (percent, message) => {
+  manterTituloLoginVisual();
+  console.log(`WhatsApp carregando: ${percent}% ${message || ""}`);
+});
+
 client.on("ready", () => {
+  manterTituloLoginVisual();
+  console.log("[LOGIN] PRONTO");
   console.log("\n====================================");
   console.log("SISTEMA ATIVO");
   console.log("====================================");
-  console.log("WhatsApp conectado em segundo plano.");
+  console.log(
+    MODO_VISUAL_LOGIN
+      ? "WhatsApp conectado no Chrome visual."
+      : "WhatsApp conectado em segundo plano."
+  );
   if (PROXY_ATIVO && PROXY_USUARIO) console.log("Autenticação do proxy aplicada ao WhatsApp Web.");
 });
 
@@ -450,6 +503,11 @@ process.on("unhandledRejection", erro => console.error("PROMISE NÃO TRATADA:", 
 
 async function iniciarWhatsApp() {
   try {
+    if (MODO_VISUAL_LOGIN) {
+      console.log("[LOGIN] Abrindo Chrome portátil para autenticação visual...");
+      manterTituloLoginVisual();
+    }
+
     await client.initialize();
   } catch (erro) {
     const message = String(
@@ -511,3 +569,9 @@ async function iniciarWhatsApp() {
 }
 
 iniciarWhatsApp();
+
+process.on("exit", () => {
+  try {
+    if (visualTitleTimer) clearInterval(visualTitleTimer);
+  } catch (_) {}
+});
