@@ -65,6 +65,9 @@ class Application:
         from monitor_noticias.ui.covers_web_proxy_patch import (
             install_covers_web_proxy_patch,
         )
+        from monitor_noticias.ui.covers_frontpages_browser_capture_patch import (
+            install_covers_browser_capture_patch,
+        )
         from monitor_noticias.ui.news_extractor_proxy_patch import (
             install_news_extractor_proxy_patch,
         )
@@ -74,7 +77,14 @@ class Application:
 
         install_extractor_proxy_patch()
         install_settings_proxy_toggle_patch()
+
+        # Ordem importante:
+        # V35 mantém Proxy Geral + Gmail primeiro para Valor.
+        # V42 substitui apenas o fallback FrontPages de Valor/Post por captura
+        # da imagem que já foi renderizada no Qt WebEngine.
         install_covers_web_proxy_patch()
+        install_covers_browser_capture_patch()
+
         install_news_extractor_proxy_patch()
         install_news_direct_link_patch()
 
@@ -92,7 +102,6 @@ class Application:
             remove_legacy_pages,
         )
 
-        # Precisa ocorrer antes de MainWindow() montar a sidebar.
         install_removed_integrations_guard(
             MainWindow
         )
@@ -120,7 +129,6 @@ class Application:
             paths=self.paths,
         )
 
-        # Elimina a página legada do dicionário da janela.
         remove_legacy_pages(
             window
         )
@@ -131,11 +139,6 @@ class Application:
         install_demands_news_actions(
             window
         )
-
-        # IMPORTANTE:
-        # install_whatsapp_browser() NÃO é mais chamado.
-        # Os patches spreadsheet_shared_whatsapp e
-        # spreadsheet_keyboard_focus também NÃO são mais instalados.
 
         window.show()
 
