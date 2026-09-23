@@ -1,6 +1,12 @@
 const fs = require("fs");
 const path = require("path");
 
+function normalizeLineEndings(value) {
+  return String(value || "")
+    .replace(/\r\n/g, "\n")
+    .replace(/\r/g, "\n");
+}
+
 const runtimeRoot = path.join(
   __dirname,
   ".."
@@ -33,9 +39,11 @@ if (!fs.existsSync(engineTarget)) {
 }
 
 let source =
-  fs.readFileSync(
-    clientTarget,
-    "utf8"
+  normalizeLineEndings(
+    fs.readFileSync(
+      clientTarget,
+      "utf8"
+    )
   );
 
 const originalClient =
@@ -46,6 +54,13 @@ function replaceOnce(
   newText,
   label
 ) {
+  oldText = normalizeLineEndings(
+    oldText
+  );
+  newText = normalizeLineEndings(
+    newText
+  );
+
   if (!source.includes(oldText)) {
     throw new Error(
       `Patch incompatível: trecho não encontrado (${label}).`
@@ -525,9 +540,11 @@ fs.writeFileSync(
 // ---------------------------------------------------------------------
 
 let engine =
-  fs.readFileSync(
-    engineTarget,
-    "utf8"
+  normalizeLineEndings(
+    fs.readFileSync(
+      engineTarget,
+      "utf8"
+    )
   );
 
 const originalEngine =
@@ -538,6 +555,13 @@ function replaceEngineOnce(
   newText,
   label
 ) {
+  oldText = normalizeLineEndings(
+    oldText
+  );
+  newText = normalizeLineEndings(
+    newText
+  );
+
   if (!engine.includes(oldText)) {
     throw new Error(
       `Patch do motor incompatível: trecho não encontrado (${label}).`
