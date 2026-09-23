@@ -77,9 +77,12 @@ class Section(Enum):
         "Editor de vídeo incorporado ao Monitor",
         "▰",
     )
+
+    # Mantido apenas como identificador legado para permitir rollback sem
+    # quebrar imports antigos. NÃO entra mais no menu, stack ou navegação.
     SPREADSHEETS = SectionSpec(
         "Planilhas",
-        "Automação WhatsApp → Google Planilhas integrada ao Central",
+        "Integração desativada",
         "▦",
     )
 
@@ -91,6 +94,9 @@ class Section(Enum):
     )
 
 
+# V41:
+# WhatsApp e Planilhas foram retirados da interface do Central.
+# SPREADSHEETS fica fora de SECTION_ORDER para não ocupar índice no stack.
 SECTION_ORDER = (
     Section.HOME,
     Section.NEWS,
@@ -105,7 +111,6 @@ SECTION_ORDER = (
     Section.PDF_EDITOR,
     Section.EXTRACTOR,
     Section.VIDEO_EDITOR,
-    Section.SPREADSHEETS,
     Section.SETTINGS,
 )
 
@@ -118,7 +123,6 @@ CORE_SECTIONS = {
     Section.HISTORY,
     Section.TERMS,
     Section.STOP,
-    Section.SPREADSHEETS,
     Section.SETTINGS,
 }
 

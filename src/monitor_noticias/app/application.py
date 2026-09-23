@@ -54,7 +54,8 @@ class Application:
             AppContainer,
         )
 
-        # Patches instalados antes de MainWindow importar as páginas.
+        # Patches ativos do Central.
+        # V41 removeu toda inicialização de WhatsApp/Planilhas.
         from monitor_noticias.ui.extractor_proxy_patch import (
             install_extractor_proxy_patch,
         )
@@ -64,14 +65,8 @@ class Application:
         from monitor_noticias.ui.covers_web_proxy_patch import (
             install_covers_web_proxy_patch,
         )
-        from monitor_noticias.ui.spreadsheet_shared_whatsapp_patch import (
-            install_spreadsheet_shared_whatsapp_patch,
-        )
         from monitor_noticias.ui.news_extractor_proxy_patch import (
             install_news_extractor_proxy_patch,
-        )
-        from monitor_noticias.ui.spreadsheet_keyboard_focus_patch import (
-            install_spreadsheet_keyboard_focus_patch,
         )
         from monitor_noticias.ui.news_direct_link_patch import (
             install_news_direct_link_patch,
@@ -80,9 +75,7 @@ class Application:
         install_extractor_proxy_patch()
         install_settings_proxy_toggle_patch()
         install_covers_web_proxy_patch()
-        install_spreadsheet_shared_whatsapp_patch()
         install_news_extractor_proxy_patch()
-        install_spreadsheet_keyboard_focus_patch()
         install_news_direct_link_patch()
 
         from monitor_noticias.ui.main_window import (
@@ -91,11 +84,17 @@ class Application:
         from monitor_noticias.ui.screen_recorder_integration import (
             install_screen_recorder,
         )
-        from monitor_noticias.ui.whatsapp_browser_integration import (
-            install_whatsapp_browser,
-        )
         from monitor_noticias.ui.demands_news_actions_integration import (
             install_demands_news_actions,
+        )
+        from monitor_noticias.ui.removed_integrations_guard import (
+            install_removed_integrations_guard,
+            remove_legacy_pages,
+        )
+
+        # Precisa ocorrer antes de MainWindow() montar a sidebar.
+        install_removed_integrations_guard(
+            MainWindow
         )
 
         qt_app = (
@@ -121,15 +120,22 @@ class Application:
             paths=self.paths,
         )
 
-        install_screen_recorder(
+        # Elimina a página legada do dicionário da janela.
+        remove_legacy_pages(
             window
         )
-        install_whatsapp_browser(
+
+        install_screen_recorder(
             window
         )
         install_demands_news_actions(
             window
         )
+
+        # IMPORTANTE:
+        # install_whatsapp_browser() NÃO é mais chamado.
+        # Os patches spreadsheet_shared_whatsapp e
+        # spreadsheet_keyboard_focus também NÃO são mais instalados.
 
         window.show()
 
