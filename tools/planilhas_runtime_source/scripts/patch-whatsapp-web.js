@@ -709,6 +709,765 @@ replaceEngineOnce(
   "monitor v37 ready marker"
 );
 
+
+// ---------------------------------------------------------------------
+// 7) V38 — PIPELINE WHATSAPP -> APPS SCRIPT
+// ---------------------------------------------------------------------
+//
+// A versão antiga que preenchia a planilha e a versão atual usam o mesmo
+// axios.post. A regressão estava antes do POST:
+// - o Central compartilhava TÍTULO + LINK;
+// - o parser esperava LINK + VEÍCULO + TÍTULO + DATA;
+// - mensagem somente com link era descartada;
+// - message/message_create podiam competir.
+// A V38 aceita os dois formatos, usa prévia do WhatsApp quando necessário,
+// passa o grupo real ao Apps Script e registra cada etapa do POST.
+
+replaceEngineOnce(
+`function interpretarMensagem(texto) {
+  const linhas =
+    String(texto || "")
+      .split(/\\r?\\n/)
+      .map(
+        x => x.trim()
+      )
+      .filter(Boolean);
+
+  const link =
+    extrairLink(texto);
+
+  if (!link) {
+    return null;
+  }
+
+  const iLink =
+    linhas.findIndex(
+      x => x.includes(link)
+    );
+
+  if (iLink < 0) {
+    return null;
+  }
+
+  const veiculo =
+    limparTexto(
+      linhas[iLink + 1]
+      || ""
+    );
+
+  const titulo =
+    limparTexto(
+      linhas[iLink + 2]
+      || ""
+    );
+
+  let iData = -1;
+
+  for (
+    let i = iLink + 3;
+    i < linhas.length;
+    i += 1
+  ) {
+    if (
+      ehData(
+        linhas[i]
+      )
+    ) {
+      iData = i;
+      break;
+    }
+  }
+
+  const dataPublicacao =
+    iData >= 0
+      ? limparTexto(
+        linhas[iData]
+      )
+      : "";
+
+  let autor = "";
+
+  if (
+    iData >= 0
+    && iData - 1
+      > iLink + 2
+  ) {
+    const c =
+      limparTexto(
+        linhas[iData - 1]
+      );
+
+    if (
+      pareceAutor(c)
+    ) {
+      autor = c;
+    }
+  }
+
+  return {
+    link,
+    veiculo,
+    titulo,
+    autor,
+    dataPublicacao,
+  };
+}`,
+`function veiculoPorLink(link) {
+  try {
+    const host =
+      new URL(link)
+        .hostname
+        .toLowerCase()
+        .replace(/^www\\./, "");
+
+    const known = [
+      ["folha.uol.com.br", "Folha de S.Paulo"],
+      ["estadao.com.br", "Estadão"],
+      ["oglobo.globo.com", "O Globo"],
+      ["valor.globo.com", "Valor Econômico"],
+      ["g1.globo.com", "G1"],
+      ["correiobraziliense.com.br", "Correio Braziliense"],
+      ["em.com.br", "Estado de Minas"],
+      ["nytimes.com", "The New York Times"],
+      ["washingtonpost.com", "The Washington Post"],
+      ["cnnbrasil.com.br", "CNN Brasil"],
+      ["metropoles.com", "Metrópoles"],
+      ["uol.com.br", "UOL"],
+      ["bbc.com", "BBC"],
+      ["reuters.com", "Reuters"],
+    ];
+
+    for (
+      const [domain, name]
+      of known
+    ) {
+      if (
+        host === domain
+        || host.endsWith(
+          \`.\${domain}\`
+        )
+      ) {
+        return name;
+      }
+    }
+
+    return host || "Não Informado";
+
+  } catch (_) {
+    return "Não Informado";
+  }
+}
+
+function interpretarMensagem(
+  texto,
+  message = null
+) {
+  const linhas =
+    String(texto || "")
+      .split(/\\r?\\n/)
+      .map(
+        x => x.trim()
+      )
+      .filter(Boolean);
+
+  const link =
+    extrairLink(texto);
+
+  if (!link) {
+    return null;
+  }
+
+  const iLink =
+    linhas.findIndex(
+      x => x.includes(link)
+    );
+
+  if (iLink < 0) {
+    return null;
+  }
+
+  // Formato histórico:
+  // LINK / VEÍCULO / TÍTULO / [AUTOR] / DATA
+  let veiculo =
+    limparTexto(
+      linhas[iLink + 1]
+      || ""
+    );
+
+  let titulo =
+    limparTexto(
+      linhas[iLink + 2]
+      || ""
+    );
+
+  // Formato que o Central usava antes da V38:
+  // TÍTULO / LINK
+  const tituloAntesDoLink =
+    iLink > 0
+      ? limparTexto(
+        linhas[iLink - 1]
+      )
+      : "";
+
+  const previewTitle =
+    limparTexto(
+      message?.title
+      || ""
+    );
+
+  const previewDescription =
+    limparTexto(
+      message?.description
+      || ""
+    );
+
+  if (
+    !veiculo
+    || /^https?:\\/\\//i.test(
+      veiculo
+    )
+    || ehData(veiculo)
+  ) {
+    veiculo =
+      veiculoPorLink(
+        link
+      );
+  }
+
+  if (
+    !titulo
+    || /^https?:\\/\\//i.test(
+      titulo
+    )
+    || ehData(titulo)
+  ) {
+    titulo =
+      tituloAntesDoLink
+      || previewTitle
+      || previewDescription;
+  }
+
+  if (!titulo) {
+    return null;
+  }
+
+  if (!veiculo) {
+    veiculo =
+      "Não Informado";
+  }
+
+  let iData = -1;
+
+  for (
+    let i = 0;
+    i < linhas.length;
+    i += 1
+  ) {
+    if (
+      ehData(
+        linhas[i]
+      )
+    ) {
+      iData = i;
+      break;
+    }
+  }
+
+  const dataPublicacao =
+    iData >= 0
+      ? limparTexto(
+        linhas[iData]
+      )
+      : "";
+
+  let autor = "";
+
+  if (iData > 0) {
+    const candidate =
+      limparTexto(
+        linhas[iData - 1]
+        || ""
+      );
+
+    if (
+      candidate
+      && candidate !== titulo
+      && candidate !== veiculo
+      && !candidate.includes(
+        link
+      )
+      && pareceAutor(
+        candidate
+      )
+    ) {
+      autor = candidate;
+    }
+  }
+
+  return {
+    link,
+    veiculo,
+    titulo,
+    autor,
+    dataPublicacao,
+  };
+}`,
+  "V38 parser de notícias"
+);
+
+replaceEngineOnce(
+`    if (
+      ehSomenteLink(
+        texto
+      )
+    ) {
+      console.log(
+        "MENSAGEM IGNORADA: contém somente link."
+      );
+      return;
+    }
+
+    const noticia =
+      interpretarMensagem(
+        texto
+      );`,
+`    if (
+      ehSomenteLink(
+        texto
+      )
+    ) {
+      console.log(
+        "MENSAGEM SOMENTE LINK: "
+        + "tentando usar a prévia do WhatsApp."
+      );
+    }
+
+    const noticia =
+      interpretarMensagem(
+        texto,
+        message
+      );`,
+  "V38 link simples e parser com preview"
+);
+
+replaceEngineOnce(
+`async function postar(dados) {
+  if (
+    !APPS_SCRIPT_URL
+  ) {
+    throw new Error(
+      "Apps Script URL não configurada."
+    );
+  }
+
+  const proxy =
+    obterProxyAxios();
+
+  const cfg = {
+    headers: {
+      "Content-Type":
+        "application/json",
+    },
+    timeout:
+      15000,
+    proxy:
+      proxy || false,
+  };
+
+  const r =
+    await axios.post(
+      APPS_SCRIPT_URL,
+      dados,
+      cfg
+    );
+
+  console.log(
+    "Resposta da planilha:"
+  );
+  console.log(
+    r.data
+  );
+
+  return r.data;
+}`,
+`function normalizarRespostaPlanilha(data) {
+  if (
+    typeof data === "string"
+  ) {
+    const clean =
+      data.trim();
+
+    if (!clean) {
+      return {};
+    }
+
+    try {
+      return JSON.parse(
+        clean
+      );
+    } catch (_) {
+      return {
+        sucesso: false,
+        erro: clean,
+      };
+    }
+  }
+
+  return (
+    data
+    && typeof data === "object"
+      ? data
+      : {}
+  );
+}
+
+function respostaPlanilhaSucesso(resp) {
+  return Boolean(
+    resp?.sucesso === true
+    || resp?.success === true
+    || String(
+      resp?.status
+      || ""
+    ).toUpperCase() === "OK"
+  );
+}
+
+async function postar(dados) {
+  if (
+    !APPS_SCRIPT_URL
+  ) {
+    throw new Error(
+      "Apps Script URL não configurada."
+    );
+  }
+
+  const proxy =
+    obterProxyAxios();
+
+  const cfg = {
+    headers: {
+      "Content-Type":
+        "application/json",
+    },
+    timeout:
+      20000,
+    maxRedirects:
+      10,
+    proxy:
+      proxy || false,
+    validateStatus:
+      () => true,
+  };
+
+  console.log(
+    "[PLANILHA] ENVIANDO:",
+    dados.aba || "",
+    "|",
+    dados.veiculo || "",
+    "|",
+    dados.titulo || ""
+  );
+
+  const r =
+    await axios.post(
+      APPS_SCRIPT_URL,
+      dados,
+      cfg
+    );
+
+  console.log(
+    "[PLANILHA] HTTP:",
+    r.status
+  );
+
+  const response =
+    normalizarRespostaPlanilha(
+      r.data
+    );
+
+  console.log(
+    "[PLANILHA] RESPOSTA:",
+    JSON.stringify(
+      response
+    )
+  );
+
+  if (
+    r.status < 200
+    || r.status >= 300
+  ) {
+    throw new Error(
+      \`Apps Script respondeu HTTP \${r.status}: \`
+      + JSON.stringify(
+        response
+      )
+    );
+  }
+
+  return response;
+}`,
+  "V38 diagnóstico e resposta do Apps Script"
+);
+
+// O grupo era conhecido pelo motor, mas o payload enviava string vazia.
+// Mantemos compatibilidade e preenchemos o campo com o JID real.
+replaceEngineOnce(
+`          grupo:
+            "",`,
+`          grupo:
+            grupoEncontrado,`,
+  "V38 grupo real no vídeo"
+);
+
+replaceEngineOnce(
+`        grupo:
+          "",`,
+`        grupo:
+          grupoEncontrado,`,
+  "V38 grupo real na notícia"
+);
+
+// Aceita o contrato histórico {sucesso:true} e também respostas equivalentes.
+replaceEngineOnce(
+`      resp?.sucesso`,
+`      respostaPlanilhaSucesso(
+        resp
+      )`,
+  "V38 sucesso vídeo"
+);
+
+replaceEngineOnce(
+`      resp?.sucesso`,
+`      respostaPlanilhaSucesso(
+        resp
+      )`,
+  "V38 sucesso notícia"
+);
+
+// message_create é emitido tanto para mensagens recebidas quanto enviadas.
+// Usamos ambos os eventos como redundância, mas uma trava impede POST duplo
+// enquanto a primeira cópia da mesma mensagem ainda está em processamento.
+replaceEngineOnce(
+`client.on(
+  "message",
+  message =>
+    enviarParaPlanilha(
+      message
+    )
+);
+
+client.on(
+  "message_create",
+  message => {
+    if (
+      message.fromMe
+    ) {
+      enviarParaPlanilha(
+        message
+      );
+    }
+  }
+);`,
+`const mensagensEmProcessamento =
+  new Set();
+
+function chaveMensagem(
+  message
+) {
+  return String(
+    message?.id?._serialized
+    || message?.id?.id
+    || [
+      message?.timestamp
+      || "",
+      message?.from
+      || "",
+      message?.to
+      || "",
+      message?.body
+      || "",
+    ].join("|")
+  );
+}
+
+function encaminharMensagem(
+  message,
+  origem
+) {
+  const key =
+    chaveMensagem(
+      message
+    );
+
+  if (
+    key
+    && mensagensEmProcessamento.has(
+      key
+    )
+  ) {
+    return;
+  }
+
+  if (key) {
+    mensagensEmProcessamento.add(
+      key
+    );
+  }
+
+  Promise
+    .resolve(
+      enviarParaPlanilha(
+        message
+      )
+    )
+    .catch(
+      erro => {
+        console.error(
+          "ERRO NO PIPELINE DA MENSAGEM:",
+          origem,
+          erro?.message
+          || erro
+        );
+      }
+    )
+    .finally(
+      () => {
+        if (key) {
+          mensagensEmProcessamento.delete(
+            key
+          );
+        }
+      }
+    );
+}
+
+client.on(
+  "message",
+  message =>
+    encaminharMensagem(
+      message,
+      "message"
+    )
+);
+
+client.on(
+  "message_create",
+  message =>
+    encaminharMensagem(
+      message,
+      "message_create"
+    )
+);`,
+  "V38 eventos redundantes sem duplicar POST"
+);
+
+// A V37 já introduziu grupoEncontrado. Agora o log de pronto confirma
+// configuração real carregada no processo e valida os grupos conhecidos.
+replaceEngineOnce(
+`    console.log(
+      "[MONITOR V37] "
+      + "aba compartilhada + eventos + "
+      + "varredura de recuperação ativos"
+    );`,
+`    console.log(
+      "[MONITOR V38] "
+      + "captura + parser compatível + "
+      + "envio diagnosticado ativos"
+    );
+
+    console.log(
+      "[CONFIG MOTOR] grupos:",
+      GRUPOS_ID.length,
+      "| Apps Script:",
+      APPS_SCRIPT_URL
+        ? "CONFIGURADO"
+        : "AUSENTE"
+    );
+
+    setTimeout(
+      async () => {
+        for (
+          const groupId
+          of GRUPOS_ID
+        ) {
+          try {
+            const chat =
+              await client.getChatById(
+                groupId
+              );
+
+            console.log(
+              "[GRUPO VALIDADO]",
+              groupId,
+              "|",
+              chat?.name
+              || "sem nome"
+            );
+          } catch (erro) {
+            console.error(
+              "[GRUPO NÃO VALIDADO]",
+              groupId,
+              "|",
+              erro?.message
+              || erro
+            );
+          }
+        }
+      },
+      1800
+    );`,
+  "V38 diagnóstico de configuração e grupos"
+);
+
+// Se a mensagem for de grupo mas o JID não for um dos três configurados,
+// deixa evidência no log em vez de descartar silenciosamente.
+replaceEngineOnce(
+`  if (!grupoEncontrado) {
+    return;
+  }
+
+  console.log(
+    "MENSAGEM CAPTURADA DO GRUPO:",`,
+`  if (!grupoEncontrado) {
+    const candidates = [
+      message?.from,
+      message?.to,
+      message?.id?.remote,
+      message?.id?._serialized,
+    ]
+      .map(
+        value =>
+          normalizarIdWhatsApp(
+            value
+          )
+      )
+      .filter(Boolean);
+
+    if (
+      candidates.some(
+        value =>
+          value.includes(
+            "@g.us"
+          )
+      )
+    ) {
+      console.log(
+        "[GRUPO IGNORADO/NÃO CONFIGURADO]",
+        candidates.join(
+          " | "
+        )
+      );
+    }
+
+    return;
+  }
+
+  console.log(
+    "MENSAGEM CAPTURADA DO GRUPO:",`,
+  "V38 log de grupo não reconhecido"
+);
+
+
 if (engine === originalEngine) {
   throw new Error(
     "Nenhuma alteração foi aplicada ao engine/index.js."
@@ -751,6 +1510,6 @@ for (const target of [
 }
 
 console.log(
-  "V37 aplicada: Chrome compartilhado sem abas duplicadas, "
-  + "recuperação de eventos e IDs de grupos normalizados."
+  "V38 aplicada: sessão compartilhada, recuperação de mensagens, "
+  + "parser compatível e diagnóstico completo do Apps Script."
 );

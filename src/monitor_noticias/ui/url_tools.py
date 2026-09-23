@@ -1,7 +1,8 @@
 from __future__ import annotations
 
+from datetime import datetime
 from functools import lru_cache
-from urllib.parse import quote
+from urllib.parse import quote, urlsplit
 
 import requests
 from PySide6.QtCore import QUrl
@@ -255,18 +256,95 @@ def open_article_url(
         )
 
 
+def _vehicle_from_url(
+    url: str,
+) -> str:
+    """Nome amigável do veículo para o formato WhatsApp → Planilhas."""
+
+    try:
+        host = (
+            urlsplit(url).hostname
+            or ""
+        ).lower()
+
+        if host.startswith("www."):
+            host = host[4:]
+    except Exception:
+        host = ""
+
+    known = (
+        ("folha.uol.com.br", "Folha de S.Paulo"),
+        ("estadao.com.br", "Estadão"),
+        ("oglobo.globo.com", "O Globo"),
+        ("valor.globo.com", "Valor Econômico"),
+        ("g1.globo.com", "G1"),
+        ("correiobraziliense.com.br", "Correio Braziliense"),
+        ("em.com.br", "Estado de Minas"),
+        ("nytimes.com", "The New York Times"),
+        ("washingtonpost.com", "The Washington Post"),
+        ("cnnbrasil.com.br", "CNN Brasil"),
+        ("metropoles.com", "Metrópoles"),
+        ("uol.com.br", "UOL"),
+        ("bbc.com", "BBC"),
+        ("reuters.com", "Reuters"),
+    )
+
+    for domain, name in known:
+        if (
+            host == domain
+            or host.endswith(
+                "." + domain
+            )
+        ):
+            return name
+
+    return host or "Não Informado"
+
+
 def open_whatsapp(
     title: str,
     url: str,
 ) -> None:
+    """Compartilha no formato nativo da Automação de Planilhas.
+
+    Ordem:
+    LINK
+    VEÍCULO
+    TÍTULO
+    DATA
+
+    O parser antigo já entendia esse formato. A V38 também mantém fallback
+    para mensagens antigas no formato TÍTULO + LINK.
+    """
+
     resolved = (
         resolve_article_url(
             url
         )
     )
 
+    vehicle = (
+        _vehicle_from_url(
+            resolved
+        )
+    )
+
+    date_text = (
+        datetime.now()
+        .strftime(
+            "%d/%m/%Y"
+        )
+    )
+
+    payload = (
+        f"{resolved}\n"
+        f"{vehicle}\n"
+        f"{title.strip()}\n"
+        f"{date_text}"
+    )
+
     text = quote(
-        f"{title}\n{resolved}"
+        payload
     )
 
     QDesktopServices.openUrl(
