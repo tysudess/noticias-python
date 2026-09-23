@@ -1,0 +1,531 @@
+name: Build e Release Ubuntu AppImage
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - "src/**"
+      - "resources/**"
+      - "portable/linux/**"
+      - "tools/news_extractor/**"
+      - "tools/globoplay-login-helper.py"
+      - "tools/build-globoplay-login-helper.py"
+      - "scripts/pyi_runtime_linux_validation.py"
+      - "scripts/validate_linux_bundle.py"
+      - "run.py"
+      - "requirements*.txt"
+      - "pyproject.toml"
+      - "MonitorDeNoticias-Linux.spec"
+      - ".github/workflows/build-ubuntu.yml"
+
+permissions:
+  contents: write
+  actions: read
+
+concurrency:
+  group: ubuntu-appimage-release-main
+  cancel-in-progress: true
+
+env:
+  APPIMAGE_NAME: Central-Inteligente-de-Midia-Ubuntu-x86_64.AppImage
+  ARTIFACT_NAME: central-ubuntu-appimage
+
+jobs:
+  build:
+    name: Gerar Ubuntu AppImage
+    runs-on: ubuntu-22.04
+    timeout-minutes: 90
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configurar Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+          cache-dependency-path: |
+            requirements.txt
+            requirements-build.txt
+            pyproject.toml
+
+      - name: Configurar Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Instalar bibliotecas Linux
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          sudo apt-get update
+
+          sudo apt-get install -y \
+            curl \
+            file \
+            xz-utils \
+            unzip \
+            desktop-file-utils \
+            patchelf \
+            libgl1 \
+            libegl1 \
+            libdbus-1-3 \
+            libnss3 \
+            libnspr4 \
+            libasound2 \
+            libpulse0 \
+            pulseaudio-utils \
+            libxkbcommon0 \
+            libxkbcommon-x11-0 \
+            libxcb1 \
+            libxcb-cursor0 \
+            libxcb-xinerama0 \
+            libxcb-icccm4 \
+            libxcb-image0 \
+            libxcb-keysyms1 \
+            libxcb-render-util0 \
+            libxcb-shape0 \
+            libxcb-randr0 \
+            libxcb-xfixes0 \
+            libx11-6 \
+            libx11-xcb1 \
+            libxcomposite1 \
+            libxdamage1 \
+            libxrandr2 \
+            libxtst6 \
+            libdrm2 \
+            libgbm1 \
+            libgtk-3-0 \
+            libcups2
+
+      - name: Instalar dependências Python
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          python -m pip install --upgrade pip
+          python -m pip install \
+            -r requirements.txt \
+            -r requirements-build.txt
+
+      - name: Validar dependências Linux
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          python - <<'PY'
+          import keyring
+          import secretstorage
+          import PySide6
+          from PySide6 import QtWebEngineCore
+          print("PySide6:", PySide6.__version__)
+          print("keyring:", keyring.__file__)
+          print("secretstorage:", secretstorage.__file__)
+          print("QtWebEngineCore:", QtWebEngineCore.__file__)
+          PY
+
+      - name: Gerar helper Globoplay Linux
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          python tools/build-globoplay-login-helper.py
+
+          HELPER="resources/globoplay-login-helper/GloboplayLoginHelper"
+
+          test -f "$HELPER"
+          chmod +x "$HELPER"
+
+          SIZE="$(stat -c%s "$HELPER")"
+
+          if [ "$SIZE" -lt 20000000 ]; then
+            echo "Helper Globoplay parece incompleto: ${SIZE} bytes"
+            exit 1
+          fi
+
+      - name: Gerar runtime Linux do Extrator de Matérias
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          pushd tools/news_extractor
+          npm install --no-audit --no-fund
+          npm run dist:linux
+          popd
+
+          RUNTIME="tools/news_extractor/dist/linux-unpacked"
+
+          if [ ! -d "$RUNTIME" ]; then
+            echo "linux-unpacked não foi gerado."
+            exit 1
+          fi
+
+          ENGINE="$(
+            find "$RUNTIME" \
+              -maxdepth 1 \
+              -type f \
+              -perm -u+x \
+              -printf '%s %p\n' |
+            sort -nr |
+            head -n 1 |
+            cut -d' ' -f2-
+          )"
+
+          if [ -z "$ENGINE" ] || [ ! -f "$ENGINE" ]; then
+            echo "Executável principal Electron não localizado."
+            exit 1
+          fi
+
+          echo "NEWS_ENGINE=$(basename "$ENGINE")" >> "$GITHUB_ENV"
+          echo "Motor Electron Linux: $ENGINE"
+
+      - name: Gerar Central com PyInstaller
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          python -m PyInstaller \
+            --noconfirm \
+            --clean \
+            MonitorDeNoticias-Linux.spec
+
+          ROOT="dist/CentralInteligenteDeMidia"
+
+          test -x "$ROOT/CentralInteligenteDeMidia"
+
+      - name: Preparar bundle Ubuntu
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          ROOT="dist/CentralInteligenteDeMidia"
+
+          mkdir -p \
+            "$ROOT/resources" \
+            "$ROOT/bin" \
+            "$ROOT/tools/news_extractor"
+
+          if [ -d resources ]; then
+            cp -a resources/. "$ROOT/resources/"
+          fi
+
+          chmod +x \
+            "$ROOT/resources/globoplay-login-helper/GloboplayLoginHelper"
+
+          cp -a \
+            tools/news_extractor/dist/linux-unpacked \
+            "$ROOT/tools/news_extractor/runtime"
+
+          cat > \
+            "$ROOT/tools/news_extractor/ExtratorMateriasPortable-V1.25.19" \
+            <<EOF
+          #!/bin/sh
+          set -eu
+          HERE="\$(CDPATH= cd -- "\$(dirname -- "\$0")" && pwd)"
+          exec "\$HERE/runtime/${NEWS_ENGINE}" "\$@"
+          EOF
+
+          chmod +x \
+            "$ROOT/tools/news_extractor/ExtratorMateriasPortable-V1.25.19"
+
+      - name: Baixar yt-dlp Linux standalone
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          ROOT="dist/CentralInteligenteDeMidia"
+
+          curl \
+            --fail \
+            --location \
+            --retry 4 \
+            --retry-all-errors \
+            --connect-timeout 30 \
+            --max-time 300 \
+            "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp_linux" \
+            -o "$ROOT/bin/yt-dlp"
+
+          chmod +x "$ROOT/bin/yt-dlp"
+          cp "$ROOT/bin/yt-dlp" "$ROOT/bin/yt-dlp-stable"
+          chmod +x "$ROOT/bin/yt-dlp-stable"
+
+          "$ROOT/bin/yt-dlp" --version
+
+      - name: Baixar Deno Linux
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          ROOT="dist/CentralInteligenteDeMidia"
+          TMP_DIR="${RUNNER_TEMP}/deno-linux"
+          ZIP="${RUNNER_TEMP}/deno-linux.zip"
+
+          rm -rf "$TMP_DIR" "$ZIP"
+          mkdir -p "$TMP_DIR"
+
+          curl \
+            --fail \
+            --location \
+            --retry 4 \
+            --retry-all-errors \
+            --connect-timeout 30 \
+            --max-time 300 \
+            "https://github.com/denoland/deno/releases/latest/download/deno-x86_64-unknown-linux-gnu.zip" \
+            -o "$ZIP"
+
+          unzip -q "$ZIP" -d "$TMP_DIR"
+
+          test -f "$TMP_DIR/deno"
+
+          cp "$TMP_DIR/deno" "$ROOT/bin/deno"
+          chmod +x "$ROOT/bin/deno"
+
+          "$ROOT/bin/deno" --version
+
+      - name: Baixar FFmpeg estático Linux
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          ROOT="dist/CentralInteligenteDeMidia"
+          ARCHIVE="${RUNNER_TEMP}/ffmpeg-static.tar.xz"
+          EXTRACTED="${RUNNER_TEMP}/ffmpeg-static"
+
+          rm -rf "$ARCHIVE" "$EXTRACTED"
+          mkdir -p "$EXTRACTED"
+
+          curl \
+            --fail \
+            --location \
+            --retry 4 \
+            --retry-all-errors \
+            --connect-timeout 30 \
+            --max-time 600 \
+            "https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-amd64-static.tar.xz" \
+            -o "$ARCHIVE"
+
+          tar -xJf "$ARCHIVE" -C "$EXTRACTED"
+
+          FFMPEG="$(
+            find "$EXTRACTED" \
+              -type f \
+              -name ffmpeg \
+              -perm -u+x |
+            head -n 1
+          )"
+
+          FFPROBE="$(
+            find "$EXTRACTED" \
+              -type f \
+              -name ffprobe \
+              -perm -u+x |
+            head -n 1
+          )"
+
+          test -n "$FFMPEG"
+          test -n "$FFPROBE"
+
+          cp "$FFMPEG" "$ROOT/bin/ffmpeg"
+          cp "$FFPROBE" "$ROOT/bin/ffprobe"
+
+          chmod +x \
+            "$ROOT/bin/ffmpeg" \
+            "$ROOT/bin/ffprobe"
+
+          "$ROOT/bin/ffmpeg" -version | head -n 1
+          "$ROOT/bin/ffprobe" -version | head -n 1
+
+      - name: Validar bundle Linux
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          ROOT="dist/CentralInteligenteDeMidia"
+
+          python scripts/validate_linux_bundle.py "$ROOT"
+
+          echo "Dependências dinâmicas do executável principal:"
+          ldd "$ROOT/CentralInteligenteDeMidia" || true
+
+          if ldd "$ROOT/CentralInteligenteDeMidia" 2>/dev/null |
+             grep -q "not found"; then
+            echo "Há biblioteca dinâmica ausente no executável."
+            exit 1
+          fi
+
+      - name: Smoke test do executável PyInstaller
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          ROOT="dist/CentralInteligenteDeMidia"
+
+          CENTRAL_LINUX_SMOKE=1 \
+          CENTRAL_LINUX_SMOKE_OUTPUT="${RUNNER_TEMP}/central-linux-smoke.json" \
+            "$ROOT/CentralInteligenteDeMidia"
+
+          cat "${RUNNER_TEMP}/central-linux-smoke.json"
+
+      - name: Montar AppDir
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          ROOT="dist/CentralInteligenteDeMidia"
+          APPDIR="dist/AppDir"
+
+          rm -rf "$APPDIR"
+
+          mkdir -p \
+            "$APPDIR/usr/lib/central" \
+            "$APPDIR/usr/share/applications" \
+            "$APPDIR/usr/share/icons/hicolor/256x256/apps"
+
+          cp -a "$ROOT/." "$APPDIR/usr/lib/central/"
+
+          cp \
+            portable/linux/AppRun \
+            "$APPDIR/AppRun"
+
+          cp \
+            portable/linux/central-inteligente-de-midia.desktop \
+            "$APPDIR/central-inteligente-de-midia.desktop"
+
+          cp \
+            portable/linux/central-inteligente-de-midia.desktop \
+            "$APPDIR/usr/share/applications/central-inteligente-de-midia.desktop"
+
+          cp \
+            src/monitor_noticias/assets/app_icon.png \
+            "$APPDIR/central-inteligente-de-midia.png"
+
+          cp \
+            src/monitor_noticias/assets/app_icon.png \
+            "$APPDIR/.DirIcon"
+
+          cp \
+            src/monitor_noticias/assets/app_icon.png \
+            "$APPDIR/usr/share/icons/hicolor/256x256/apps/central-inteligente-de-midia.png"
+
+          chmod +x \
+            "$APPDIR/AppRun" \
+            "$APPDIR/usr/lib/central/CentralInteligenteDeMidia"
+
+          desktop-file-validate \
+            "$APPDIR/central-inteligente-de-midia.desktop"
+
+      - name: Gerar AppImage
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          TOOL="${RUNNER_TEMP}/appimagetool-x86_64.AppImage"
+
+          curl \
+            --fail \
+            --location \
+            --retry 4 \
+            --retry-all-errors \
+            --connect-timeout 30 \
+            --max-time 300 \
+            "https://github.com/AppImage/AppImageKit/releases/download/continuous/appimagetool-x86_64.AppImage" \
+            -o "$TOOL"
+
+          chmod +x "$TOOL"
+
+          rm -f "$APPIMAGE_NAME"
+
+          ARCH=x86_64 \
+          APPIMAGE_EXTRACT_AND_RUN=1 \
+            "$TOOL" \
+            "dist/AppDir" \
+            "$APPIMAGE_NAME"
+
+          test -f "$APPIMAGE_NAME"
+          chmod +x "$APPIMAGE_NAME"
+
+          ls -lh "$APPIMAGE_NAME"
+          sha256sum "$APPIMAGE_NAME" > "${APPIMAGE_NAME}.sha256"
+
+      - name: Validar AppImage final
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          rm -rf squashfs-root
+
+          "./$APPIMAGE_NAME" --appimage-extract >/dev/null
+
+          test -x "squashfs-root/AppRun"
+          test -x "squashfs-root/usr/lib/central/CentralInteligenteDeMidia"
+
+          APPIMAGE="$PWD/$APPIMAGE_NAME" \
+          CENTRAL_LINUX_SMOKE=1 \
+          CENTRAL_LINUX_SMOKE_OUTPUT="${RUNNER_TEMP}/appimage-smoke.json" \
+            "squashfs-root/AppRun"
+
+          cat "${RUNNER_TEMP}/appimage-smoke.json"
+
+      - name: Guardar AppImage
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.ARTIFACT_NAME }}
+          path: |
+            ${{ env.APPIMAGE_NAME }}
+            ${{ env.APPIMAGE_NAME }}.sha256
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 2
+
+  release:
+    name: Publicar Release Ubuntu
+    needs: build
+    runs-on: ubuntu-22.04
+    timeout-minutes: 30
+
+    steps:
+      - name: Baixar AppImage
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ env.ARTIFACT_NAME }}
+          path: release-files
+
+      - name: Definir Release Ubuntu
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          echo \
+            "RELEASE_TAG=ubuntu-${GITHUB_RUN_NUMBER}-${GITHUB_SHA:0:7}" \
+            >> "$GITHUB_ENV"
+
+          echo \
+            "RELEASE_NAME=Central Inteligente de Mídia Ubuntu - Build ${GITHUB_RUN_NUMBER}" \
+            >> "$GITHUB_ENV"
+
+      - name: Criar Release e publicar AppImage
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          APPIMAGE="release-files/${APPIMAGE_NAME}"
+          SHA_FILE="${APPIMAGE}.sha256"
+
+          test -f "$APPIMAGE"
+          test -f "$SHA_FILE"
+
+          gh release create \
+            "$RELEASE_TAG" \
+            "$APPIMAGE" \
+            "$SHA_FILE" \
+            --repo "$GITHUB_REPOSITORY" \
+            --target "$GITHUB_SHA" \
+            --title "$RELEASE_NAME" \
+            --generate-notes
+
+          echo "Release Ubuntu publicada: $RELEASE_TAG"
