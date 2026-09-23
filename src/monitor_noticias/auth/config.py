@@ -1,10 +1,8 @@
 from __future__ import annotations
 
 
-# V57:
-# Depois de publicar o Apps Script, esta URL será substituída pela URL /exec.
 AUTH_API_URL = (
-    "COLE_AQUI_A_URL_DO_APPS_SCRIPT_EXEC"
+    "https://script.google.com/macros/s/AKfycbzSv0Zxz-EQnFHKPTTtfvAErWt2cL2gPBLryMnMQiOFNv4L14FpgpZVeXWVy3YEVXgW/exec"
 )
 
 
