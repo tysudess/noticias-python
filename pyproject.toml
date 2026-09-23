@@ -13,7 +13,9 @@ dependencies = [
     "requests>=2.32,<3",
     "beautifulsoup4>=4.12,<5",
     "lxml>=5,<7",
-    "PyAudioWPatch==0.2.12.8",
+    "PyAudioWPatch==0.2.12.8; sys_platform == 'win32'",
+    "keyring>=25,<26; sys_platform == 'linux'",
+    "SecretStorage>=3.3,<4; sys_platform == 'linux'",
 ]
 
 [project.optional-dependencies]

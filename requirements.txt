@@ -6,3 +6,6 @@ lxml>=5,<7
 pypdf==6.18.0
 pypdfium2==5.13.0
 Pillow==12.3.0
+
+keyring>=25,<26; sys_platform == "linux"
+SecretStorage>=3.3,<4; sys_platform == "linux"

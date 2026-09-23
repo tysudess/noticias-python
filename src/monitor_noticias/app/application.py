@@ -21,18 +21,11 @@ class Application:
         configure_logging(self.paths)
         install_global_exception_hooks()
 
-        log = logging.getLogger(
-            "monitor_noticias.application"
-        )
-        log.info(
-            "Inicializando Central Inteligente de Mídia PySide6"
-        )
+        log = logging.getLogger("monitor_noticias.application")
+        log.info("Inicializando Central Inteligente de Mídia PySide6")
 
         if sys.platform.startswith("win"):
-            os.environ.setdefault(
-                "QT_MEDIA_BACKEND",
-                "ffmpeg",
-            )
+            os.environ.setdefault("QT_MEDIA_BACKEND", "ffmpeg")
             os.environ.setdefault(
                 "QT_FFMPEG_DECODING_HW_DEVICE_TYPES",
                 ",",
@@ -47,6 +40,9 @@ class Application:
 
         from monitor_noticias.ui.extractor_proxy_patch import (
             install_extractor_proxy_patch,
+        )
+        from monitor_noticias.ui.settings_credentials_patch import (
+            install_settings_credentials_patch,
         )
         from monitor_noticias.ui.settings_proxy_toggle_patch import (
             install_settings_proxy_toggle_patch,
@@ -68,16 +64,14 @@ class Application:
         )
 
         install_extractor_proxy_patch()
+
+        # V48 primeiro; V27.6 envolve depois o método já protegido.
+        install_settings_credentials_patch()
         install_settings_proxy_toggle_patch()
 
-        # Capas:
-        # V35 = Proxy Geral / fluxo base.
-        # V42 = captura do navegador para o fallback web.
-        # V43 = Valor Econômico usa exclusivamente Gmail.
         install_covers_web_proxy_patch()
         install_covers_browser_capture_patch()
         install_valor_gmail_only_patch()
-
         install_news_extractor_proxy_patch()
         install_news_direct_link_patch()
 
@@ -98,9 +92,7 @@ class Application:
         from monitor_noticias.ui.visual_refinement_patch import (
             install_visual_refinement_patch,
         )
-        from monitor_noticias.ui.app_icon_loader import (
-            load_app_icon,
-        )
+        from monitor_noticias.ui.app_icon_loader import load_app_icon
 
         install_removed_integrations_guard(MainWindow)
 
@@ -110,6 +102,7 @@ class Application:
         qt_app.setOrganizationName("Central Inteligente de Mídia")
 
         app_icon = load_app_icon()
+
         if not app_icon.isNull():
             qt_app.setWindowIcon(app_icon)
 
@@ -126,15 +119,8 @@ class Application:
         remove_legacy_pages(window)
         install_screen_recorder(window)
         install_demands_news_actions(window)
-
-        # V44 — ajustes visuais e de layout da Home.
         install_home_dashboard_patch(window)
-
-        # V45 — refinamento visual global sem alterar funcionalidades.
-        install_visual_refinement_patch(
-            qt_app,
-            window,
-        )
+        install_visual_refinement_patch(qt_app, window)
 
         window.show()
 

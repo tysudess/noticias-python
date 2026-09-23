@@ -12,10 +12,14 @@ from .binaries import (
     bundled_binary,
     resolve_binary,
 )
-from .processes import (
-    HiddenProcessRunner,
-    ProcessResult,
+from .credentials import (
+    CredentialStoreUnavailable,
+    LinuxKeyringTextStore,
+    SecureTextStore,
+    create_proxy_secret_store,
+    credential_backend_label,
 )
+from .processes import HiddenProcessRunner, ProcessResult
 from .startup import StartupManager
 
 __all__ = [
@@ -27,6 +31,11 @@ __all__ = [
     "binary_filename",
     "bundled_binary",
     "resolve_binary",
+    "CredentialStoreUnavailable",
+    "LinuxKeyringTextStore",
+    "SecureTextStore",
+    "create_proxy_secret_store",
+    "credential_backend_label",
     "HiddenProcessRunner",
     "ProcessResult",
     "StartupManager",
