@@ -11,13 +11,12 @@ from PIL import Image
 from PySide6.QtCore import QThread
 from PySide6.QtWidgets import QFileDialog
 
-from pypdf import PdfWriter
+from pypdf import PageObject, PdfWriter
 from pypdf.generic import (
     DictionaryObject,
     EncodedStreamObject,
     NameObject,
     NumberObject,
-    PageObject,
 )
 
 from monitor_noticias.pdf_editor.core import (

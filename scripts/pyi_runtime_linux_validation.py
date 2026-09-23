@@ -31,6 +31,7 @@ if os.environ.get(
         "monitor_noticias.app.paths",
         "monitor_noticias.networking.proxy",
         "monitor_noticias.ui.screen_recorder_linux",
+        "monitor_noticias.ui.pdf_export_quality_fix",
     ]
 
     ok = True
