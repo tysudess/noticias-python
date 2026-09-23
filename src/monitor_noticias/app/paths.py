@@ -7,6 +7,8 @@ import sys
 
 from monitor_noticias.platform.binaries import (
     bundled_binary,
+    resolve_binary,
+    writable_binary,
 )
 from monitor_noticias.platform.current import (
     appimage_original_path,
@@ -31,8 +33,6 @@ def _development_root() -> Path:
 
 
 def resolve_app_root() -> Path:
-    """Resolve a raiz de recursos/binários do aplicativo."""
-
     if getattr(
         sys,
         "frozen",
@@ -96,19 +96,6 @@ def _directory_is_writable(
 def resolve_state_root(
     app_root: Path | None = None,
 ) -> Path:
-    """Resolve onde ficam dados graváveis.
-
-    Windows Portable / desenvolvimento:
-        mantém tudo ao lado do programa.
-
-    AppImage:
-        Central-Inteligente-de-Midia-Data/
-        ao lado do AppImage quando possível.
-
-    Fallback Linux:
-        ~/.local/share/CentralInteligenteDeMidia/
-    """
-
     root = (
         Path(app_root)
         if app_root is not None
@@ -149,6 +136,22 @@ def resolve_state_root(
     return root
 
 
+def _same_path(
+    left: Path,
+    right: Path,
+) -> bool:
+    try:
+        return (
+            Path(left).resolve()
+            == Path(right).resolve()
+        )
+    except Exception:
+        return (
+            Path(left)
+            == Path(right)
+        )
+
+
 @dataclass(
     frozen=True,
     slots=True,
@@ -160,9 +163,7 @@ class AppPaths:
     def __post_init__(
         self,
     ) -> None:
-        root = Path(
-            self.root
-        )
+        root = Path(self.root)
 
         state = (
             Path(self.state_root)
@@ -175,7 +176,6 @@ class AppPaths:
             "root",
             root,
         )
-
         object.__setattr__(
             self,
             "state_root",
@@ -195,12 +195,34 @@ class AppPaths:
             ),
         )
 
+    @classmethod
+    def for_app_root(
+        cls,
+        app_root: Path,
+    ) -> "AppPaths":
+        """Preserva caminhos explícitos de testes e reconhece a raiz real.
+
+        As páginas atuais recebem apenas `paths.root`. Dentro de AppImage,
+        esta função recupera também o `state_root` gravável correspondente.
+        """
+
+        requested = Path(app_root)
+        discovered = cls.discover()
+
+        if _same_path(
+            requested,
+            discovered.root,
+        ):
+            return discovered
+
+        return cls(
+            root=requested,
+            state_root=requested,
+        )
+
     @property
     def resources(self) -> Path:
-        return (
-            self.root
-            / "resources"
-        )
+        return self.root / "resources"
 
     @property
     def data(self) -> Path:
@@ -211,8 +233,12 @@ class AppPaths:
 
     @property
     def bin(self) -> Path:
+        return self.root / "bin"
+
+    @property
+    def user_bin(self) -> Path:
         return (
-            self.root
+            Path(self.state_root)
             / "bin"
         )
 
@@ -231,45 +257,74 @@ class AppPaths:
         )
 
     @property
-    def news_db(self) -> Path:
+    def videos(self) -> Path:
         return (
-            self.data
-            / "news.db"
+            Path(self.state_root)
+            / "Videos"
         )
 
     @property
-    def videos_db(self) -> Path:
+    def video_editor_exports(self) -> Path:
         return (
-            self.data
-            / "videos.db"
+            Path(self.state_root)
+            / "VideoEditorExports"
+        )
+
+    @property
+    def news_db(self) -> Path:
+        return self.data / "news.db"
+
+    @property
+    def videos_db(self) -> Path:
+        return self.data / "videos.db"
+
+    def runtime_binary(
+        self,
+        name: str,
+        *,
+        allow_system: bool = True,
+    ) -> Path:
+        return resolve_binary(
+            self.root,
+            name,
+            state_root=Path(
+                self.state_root
+            ),
+            allow_system=allow_system,
+        )
+
+    def writable_binary(
+        self,
+        name: str,
+    ) -> Path:
+        return writable_binary(
+            self.root,
+            Path(self.state_root),
+            name,
         )
 
     @property
     def ffmpeg(self) -> Path:
-        return bundled_binary(
-            self.root,
-            "ffmpeg",
+        return self.runtime_binary(
+            "ffmpeg"
         )
 
     @property
     def ffprobe(self) -> Path:
-        return bundled_binary(
-            self.root,
-            "ffprobe",
+        return self.runtime_binary(
+            "ffprobe"
         )
 
     @property
     def yt_dlp(self) -> Path:
-        return bundled_binary(
-            self.root,
-            "yt-dlp",
+        return self.runtime_binary(
+            "yt-dlp"
         )
 
     @property
     def deno(self) -> Path:
-        return bundled_binary(
-            self.root,
-            "deno",
+        return self.runtime_binary(
+            "deno"
         )
 
     def ensure_runtime_dirs(

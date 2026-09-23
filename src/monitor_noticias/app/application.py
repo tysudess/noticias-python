@@ -21,11 +21,18 @@ class Application:
         configure_logging(self.paths)
         install_global_exception_hooks()
 
-        log = logging.getLogger("monitor_noticias.application")
-        log.info("Inicializando Central Inteligente de Mídia PySide6")
+        log = logging.getLogger(
+            "monitor_noticias.application"
+        )
+        log.info(
+            "Inicializando Central Inteligente de Mídia PySide6"
+        )
 
         if sys.platform.startswith("win"):
-            os.environ.setdefault("QT_MEDIA_BACKEND", "ffmpeg")
+            os.environ.setdefault(
+                "QT_MEDIA_BACKEND",
+                "ffmpeg",
+            )
             os.environ.setdefault(
                 "QT_FFMPEG_DECODING_HW_DEVICE_TYPES",
                 ",",
@@ -62,18 +69,25 @@ class Application:
         from monitor_noticias.ui.news_direct_link_patch import (
             install_news_direct_link_patch,
         )
+        from monitor_noticias.ui.cross_platform_runtime_patch import (
+            install_cross_platform_runtime_patch,
+        )
 
         install_extractor_proxy_patch()
 
-        # V48 primeiro; V27.6 envolve depois o método já protegido.
         install_settings_credentials_patch()
         install_settings_proxy_toggle_patch()
 
         install_covers_web_proxy_patch()
         install_covers_browser_capture_patch()
         install_valor_gmail_only_patch()
+
         install_news_extractor_proxy_patch()
         install_news_direct_link_patch()
+
+        # V49 precisa vir depois dos patches do Extrator para envolver
+        # o updater já ligado ao Proxy Geral.
+        install_cross_platform_runtime_patch()
 
         from monitor_noticias.ui.main_window import MainWindow
         from monitor_noticias.ui.screen_recorder_integration import (
@@ -92,21 +106,40 @@ class Application:
         from monitor_noticias.ui.visual_refinement_patch import (
             install_visual_refinement_patch,
         )
-        from monitor_noticias.ui.app_icon_loader import load_app_icon
+        from monitor_noticias.ui.app_icon_loader import (
+            load_app_icon,
+        )
 
-        install_removed_integrations_guard(MainWindow)
+        install_removed_integrations_guard(
+            MainWindow
+        )
 
-        qt_app = QApplication.instance() or QApplication(sys.argv)
-        qt_app.setApplicationName("Central Inteligente de Mídia")
-        qt_app.setApplicationDisplayName("Central Inteligente de Mídia")
-        qt_app.setOrganizationName("Central Inteligente de Mídia")
+        qt_app = (
+            QApplication.instance()
+            or QApplication(
+                sys.argv
+            )
+        )
+        qt_app.setApplicationName(
+            "Central Inteligente de Mídia"
+        )
+        qt_app.setApplicationDisplayName(
+            "Central Inteligente de Mídia"
+        )
+        qt_app.setOrganizationName(
+            "Central Inteligente de Mídia"
+        )
 
         app_icon = load_app_icon()
 
         if not app_icon.isNull():
-            qt_app.setWindowIcon(app_icon)
+            qt_app.setWindowIcon(
+                app_icon
+            )
 
-        container = AppContainer.build(self.paths)
+        container = AppContainer.build(
+            self.paths
+        )
 
         window = MainWindow(
             controller=container.controller,
@@ -114,13 +147,26 @@ class Application:
         )
 
         if not app_icon.isNull():
-            window.setWindowIcon(app_icon)
+            window.setWindowIcon(
+                app_icon
+            )
 
-        remove_legacy_pages(window)
-        install_screen_recorder(window)
-        install_demands_news_actions(window)
-        install_home_dashboard_patch(window)
-        install_visual_refinement_patch(qt_app, window)
+        remove_legacy_pages(
+            window
+        )
+        install_screen_recorder(
+            window
+        )
+        install_demands_news_actions(
+            window
+        )
+        install_home_dashboard_patch(
+            window
+        )
+        install_visual_refinement_patch(
+            qt_app,
+            window,
+        )
 
         window.show()
 
@@ -133,6 +179,7 @@ class Application:
             "Aplicação encerrada com código %s",
             result,
         )
+
         return int(result)
 
 

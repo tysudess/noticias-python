@@ -3,50 +3,102 @@ from __future__ import annotations
 from pathlib import Path
 
 from PySide6.QtCore import QUrl, Signal, Qt
-from PySide6.QtWidgets import QScrollArea, QVBoxLayout, QWidget
+from PySide6.QtWidgets import (
+    QScrollArea,
+    QVBoxLayout,
+    QWidget,
+)
 
-from monitor_noticias.video_editor.integrated_editor import AdvancedVideoEditorWidget300
+from monitor_noticias.app.paths import AppPaths
+from monitor_noticias.video_editor.integrated_editor import (
+    AdvancedVideoEditorWidget300,
+)
 
 
 class VideoEditorPage(QWidget):
     back_requested = Signal()
 
-    def __init__(self, app_root: Path) -> None:
+    def __init__(
+        self,
+        app_root: Path,
+    ) -> None:
         super().__init__()
 
-        self.app_root = Path(app_root)
-        self.videos_dir = self.app_root / "Videos"
-        self.bin_dir = self.app_root / "bin"
-        self.videos_dir.mkdir(parents=True, exist_ok=True)
+        self.paths = AppPaths.for_app_root(
+            Path(app_root)
+        )
+        self.app_root = self.paths.root
+        self.videos_dir = self.paths.videos
+        self.bin_dir = self.paths.bin
 
-        self.ffmpeg = self.bin_dir / "ffmpeg.exe"
-        self.ffprobe = self.bin_dir / "ffprobe.exe"
+        self.videos_dir.mkdir(
+            parents=True,
+            exist_ok=True,
+        )
+
+        self.ffmpeg = (
+            self.paths.runtime_binary(
+                "ffmpeg"
+            )
+        )
+        self.ffprobe = (
+            self.paths.runtime_binary(
+                "ffprobe"
+            )
+        )
 
         root = QVBoxLayout(self)
-        root.setContentsMargins(0, 0, 0, 0)
+        root.setContentsMargins(
+            0,
+            0,
+            0,
+            0,
+        )
         root.setSpacing(0)
 
         self.scroll = QScrollArea(self)
-        self.scroll.setObjectName("videoEditorOuterScroll")
-        self.scroll.setWidgetResizable(True)
-        self.scroll.setFrameShape(QScrollArea.Shape.NoFrame)
-        self.scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
-        self.scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
-
-        self.editor = AdvancedVideoEditorWidget300(
-            self.videos_dir,
-            self.ffmpeg,
-            self.ffprobe,
-            self.scroll,
+        self.scroll.setObjectName(
+            "videoEditorOuterScroll"
+        )
+        self.scroll.setWidgetResizable(
+            True
+        )
+        self.scroll.setFrameShape(
+            QScrollArea.Shape.NoFrame
+        )
+        self.scroll.setHorizontalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAsNeeded
+        )
+        self.scroll.setVerticalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAsNeeded
         )
 
-        self.editor.setMinimumWidth(1180)
-        self.editor.setMinimumHeight(900)
+        self.editor = (
+            AdvancedVideoEditorWidget300(
+                self.videos_dir,
+                self.ffmpeg,
+                self.ffprobe,
+                self.scroll,
+            )
+        )
 
-        self.scroll.setWidget(self.editor)
-        root.addWidget(self.scroll, 1)
+        self.editor.setMinimumWidth(
+            1180
+        )
+        self.editor.setMinimumHeight(
+            900
+        )
 
-        self.setStyleSheet("""
+        self.scroll.setWidget(
+            self.editor
+        )
+        root.addWidget(
+            self.scroll,
+            1,
+        )
+
+        self.setStyleSheet(
+            """
         QScrollArea#videoEditorOuterScroll {
             background:#07111f;
             border:0;
@@ -85,33 +137,63 @@ class VideoEditorPage(QWidget):
             width:0;
             height:0;
         }
-        """)
+        """
+        )
 
-    def refresh(self, _state=None) -> None:
+    def refresh(
+        self,
+        _state=None,
+    ) -> None:
         pass
 
-    def shutdown(self) -> bool:
+    def shutdown(
+        self,
+    ) -> bool:
         try:
-            if hasattr(self.editor, "pause_sequence"):
+            if hasattr(
+                self.editor,
+                "pause_sequence",
+            ):
                 self.editor.pause_sequence()
         except Exception:
             pass
 
         try:
-            player = getattr(self.editor, "player", None)
+            player = getattr(
+                self.editor,
+                "player",
+                None,
+            )
+
             if player is not None:
                 player.stop()
-                player.setSource(QUrl())
+                player.setSource(
+                    QUrl()
+                )
         except Exception:
             pass
 
-        worker = getattr(self.editor, "export_worker", None)
+        worker = getattr(
+            self.editor,
+            "export_worker",
+            None,
+        )
+
         if worker is not None:
             try:
                 if worker.isRunning():
-                    status = getattr(self.editor, "status", None)
+                    status = getattr(
+                        self.editor,
+                        "status",
+                        None,
+                    )
+
                     if status is not None:
-                        status.setText("Aguarde a exportação do vídeo terminar antes de sair.")
+                        status.setText(
+                            "Aguarde a exportação do vídeo "
+                            "terminar antes de sair."
+                        )
+
                     return False
             except Exception:
                 pass
