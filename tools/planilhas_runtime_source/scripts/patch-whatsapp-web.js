@@ -26,6 +26,11 @@ const engineTarget = path.join(
   "index.js"
 );
 
+const mainTarget = path.join(
+  runtimeRoot,
+  "main.js"
+);
+
 if (!fs.existsSync(clientTarget)) {
   throw new Error(
     `Client.js do whatsapp-web.js não encontrado: ${clientTarget}`
@@ -35,6 +40,12 @@ if (!fs.existsSync(clientTarget)) {
 if (!fs.existsSync(engineTarget)) {
   throw new Error(
     `engine/index.js não encontrado: ${engineTarget}`
+  );
+}
+
+if (!fs.existsSync(mainTarget)) {
+  throw new Error(
+    `main.js não encontrado: ${mainTarget}`
   );
 }
 
@@ -284,6 +295,76 @@ replaceOnce(
                 await browser.newPage();`,
   "shared browser tab reuse"
 );
+
+// ---------------------------------------------------------------------
+// 4.1) PROXY AUTENTICADO: RETENTATIVA DE NAVEGAÇÃO
+// ---------------------------------------------------------------------
+//
+// Em Chrome conectado por remote debugging, uma página antiga pode estar
+// parada numa tela de erro de rede. As credenciais são reaplicadas antes de
+// repetir a navegação. Não há bypass do Proxy Geral.
+
+replaceOnce(
+`        await page.goto(WhatsWebURL, {
+            waitUntil: 'load',
+            timeout: 0,
+            referer: 'https://whatsapp.com/',
+        });`,
+`        const centralNavigateWhatsApp = async () => {
+            await page.goto(WhatsWebURL, {
+                waitUntil: 'load',
+                timeout: 0,
+                referer: 'https://whatsapp.com/',
+            });
+        };
+
+        try {
+            await centralNavigateWhatsApp();
+        } catch (err) {
+            const message = String(err?.message || err || '');
+
+            const proxyNavigationError =
+                this.options.proxyAuthentication !== undefined &&
+                (
+                    message.includes('ERR_CONNECTION_TIMED_OUT') ||
+                    message.includes('ERR_TIMED_OUT') ||
+                    message.includes('ERR_PROXY_CONNECTION_FAILED') ||
+                    message.includes('ERR_TUNNEL_CONNECTION_FAILED') ||
+                    message.includes('ERR_PROXY_AUTH_REQUESTED')
+                );
+
+            if (!proxyNavigationError) {
+                throw err;
+            }
+
+            try {
+                await page.goto('about:blank', {
+                    waitUntil: 'domcontentloaded',
+                    timeout: 30000,
+                });
+            } catch (_) {}
+
+            try {
+                await page.authenticate(null);
+            } catch (_) {}
+
+            await new Promise((resolve) =>
+                setTimeout(resolve, 500),
+            );
+
+            await page.authenticate(
+                this.options.proxyAuthentication,
+            );
+
+            await new Promise((resolve) =>
+                setTimeout(resolve, 700),
+            );
+
+            await centralNavigateWhatsApp();
+        }`,
+  "proxy authenticated navigation retry"
+);
+
 
 // ---------------------------------------------------------------------
 // 5) RECUPERAÇÃO DE EVENTOS DE MENSAGEM
@@ -1504,13 +1585,610 @@ fs.writeFileSync(
   "utf8"
 );
 
-// Validação final dos dois JavaScripts que foram alterados.
+// ---------------------------------------------------------------------
+// 8) V40 — CHROME COMPARTILHADO + PROXY GERAL
+// ---------------------------------------------------------------------
+//
+// O proxy do Chrome é um argumento de inicialização (--proxy-server).
+// Portanto um Chrome antigo NÃO pode ser simplesmente reutilizado quando
+// a configuração do Proxy Geral muda. A V40 salva apenas uma assinatura
+// (senha em SHA-256), reinicia o Chrome quando necessário e testa a rota
+// web.whatsapp.com antes de entregar o navegador ao whatsapp-web.js.
+
+let mainSource =
+  normalizeLineEndings(
+    fs.readFileSync(
+      mainTarget,
+      "utf8"
+    )
+  );
+
+const originalMain =
+  mainSource;
+
+function replaceMainOnce(
+  oldText,
+  newText,
+  label
+) {
+  oldText =
+    normalizeLineEndings(
+      oldText
+    );
+
+  newText =
+    normalizeLineEndings(
+      newText
+    );
+
+  if (
+    !mainSource.includes(
+      oldText
+    )
+  ) {
+    throw new Error(
+      `Patch do main.js incompatível: trecho não encontrado (${label}).`
+    );
+  }
+
+  mainSource =
+    mainSource.replace(
+      oldText,
+      newText
+    );
+}
+
+replaceMainOnce(
+`function chromeProxyArg() {
+  const p =
+    effectiveProxyConfig(
+      readConfig()
+    );
+
+  if (
+    p?.ativo
+    && p?.host
+    && Number(p?.porta)
+  ) {
+    return (
+      \`--proxy-server=http://\`
+      + \`\${String(p.host).trim()}:\`
+      + \`\${Number(p.porta)}\`
+    );
+  }
+
+  return "--no-proxy-server";
+}
+
+async function ensureSharedChrome() {`,
+`function chromeProxyArg() {
+  const p =
+    effectiveProxyConfig(
+      readConfig()
+    );
+
+  if (
+    p?.ativo
+    && p?.host
+    && Number(p?.porta)
+  ) {
+    return (
+      \`--proxy-server=http://\`
+      + \`\${String(p.host).trim()}:\`
+      + \`\${Number(p.porta)}\`
+    );
+  }
+
+  return "--no-proxy-server";
+}
+
+function sharedNetworkStateFile() {
+  return path.join(
+    path.dirname(
+      sharedPidFile()
+    ),
+    "whatsapp_chrome_network.json"
+  );
+}
+
+function desiredSharedNetworkState() {
+  const crypto =
+    require("crypto");
+
+  const p =
+    effectiveProxyConfig(
+      readConfig()
+    );
+
+  const enabled =
+    Boolean(
+      p?.ativo
+    );
+
+  const host =
+    enabled
+      ? String(
+        p?.host
+        || ""
+      ).trim()
+      : "";
+
+  const port =
+    enabled
+      ? Number(
+        p?.porta
+        || 0
+      )
+      : 0;
+
+  const username =
+    enabled
+      ? String(
+        p?.usuario
+        || ""
+      ).trim()
+      : "";
+
+  const password =
+    enabled
+      ? String(
+        p?.senha
+        || ""
+      )
+      : "";
+
+  const secretHash =
+    crypto
+      .createHash(
+        "sha256"
+      )
+      .update(
+        [
+          enabled
+            ? "1"
+            : "0",
+          host,
+          String(port),
+          username,
+          password,
+        ].join("\\n"),
+        "utf8"
+      )
+      .digest(
+        "hex"
+      );
+
+  return {
+    version: 40,
+    proxyEnabled:
+      enabled,
+    host,
+    port,
+    username,
+    secretHash,
+  };
+}
+
+function readSharedNetworkState() {
+  try {
+    return JSON.parse(
+      fs.readFileSync(
+        sharedNetworkStateFile(),
+        "utf8"
+      )
+    );
+  } catch (_) {
+    return null;
+  }
+}
+
+function writeSharedNetworkState(
+  state
+) {
+  try {
+    const file =
+      sharedNetworkStateFile();
+
+    fs.mkdirSync(
+      path.dirname(file),
+      {
+        recursive: true,
+      }
+    );
+
+    fs.writeFileSync(
+      file,
+      JSON.stringify(
+        state,
+        null,
+        2
+      ),
+      "utf8"
+    );
+  } catch (_) {}
+}
+
+function sameSharedNetworkState(
+  current,
+  desired
+) {
+  return Boolean(
+    current
+    && desired
+    && current.version
+      === desired.version
+    && current.proxyEnabled
+      === desired.proxyEnabled
+    && String(
+      current.host
+      || ""
+    )
+      === String(
+        desired.host
+        || ""
+      )
+    && Number(
+      current.port
+      || 0
+    )
+      === Number(
+        desired.port
+        || 0
+      )
+    && String(
+      current.username
+      || ""
+    )
+      === String(
+        desired.username
+        || ""
+      )
+    && String(
+      current.secretHash
+      || ""
+    )
+      === String(
+        desired.secretHash
+        || ""
+      )
+  );
+}
+
+function readSharedPid() {
+  try {
+    return Number(
+      fs.readFileSync(
+        sharedPidFile(),
+        "utf8"
+      ).trim()
+    ) || 0;
+  } catch (_) {
+    return 0;
+  }
+}
+
+async function stopSharedChromeForNetworkChange(
+  reason
+) {
+  const pid =
+    readSharedPid();
+
+  parseLine(
+    \`CHROME COMPARTILHADO: reiniciando por configuração de rede (\${reason}).\`,
+    false
+  );
+
+  if (
+    pid > 0
+    && process.platform === "win32"
+  ) {
+    try {
+      const {
+        spawnSync,
+      } =
+        require(
+          "child_process"
+        );
+
+      spawnSync(
+        "taskkill",
+        [
+          "/PID",
+          String(pid),
+          "/T",
+          "/F",
+        ],
+        {
+          windowsHide: true,
+          stdio: "ignore",
+        }
+      );
+    } catch (_) {}
+  } else if (
+    pid > 0
+  ) {
+    try {
+      process.kill(
+        pid,
+        "SIGTERM"
+      );
+    } catch (_) {}
+  }
+
+  for (
+    let attempt = 1;
+    attempt <= 24;
+    attempt += 1
+  ) {
+    if (
+      !await sharedBrowserResponding()
+    ) {
+      break;
+    }
+
+    await new Promise(
+      resolve =>
+        setTimeout(
+          resolve,
+          250
+        )
+    );
+  }
+
+  if (
+    await sharedBrowserResponding()
+  ) {
+    throw new Error(
+      "O Chrome compartilhado antigo continua ativo na porta 9223. "
+      + "Feche a sessão do WhatsApp pelo Central e tente novamente."
+    );
+  }
+
+  try {
+    fs.unlinkSync(
+      sharedPidFile()
+    );
+  } catch (_) {}
+
+  try {
+    fs.unlinkSync(
+      sharedNetworkStateFile()
+    );
+  } catch (_) {}
+}
+
+async function testWhatsAppThroughCentralProxy() {
+  const p =
+    effectiveProxyConfig(
+      readConfig()
+    );
+
+  if (
+    !p?.ativo
+  ) {
+    parseLine(
+      "TESTE WHATSAPP: conexão direta selecionada.",
+      false
+    );
+
+    return;
+  }
+
+  const host =
+    String(
+      p?.host
+      || ""
+    ).trim();
+
+  const port =
+    Number(
+      p?.porta
+      || 0
+    );
+
+  const username =
+    String(
+      p?.usuario
+      || ""
+    ).trim();
+
+  const password =
+    String(
+      p?.senha
+      || ""
+    );
+
+  if (
+    !host
+    || !port
+    || !username
+    || !password
+  ) {
+    throw new Error(
+      "Proxy Geral está ativo, mas host/porta/usuário/senha estão incompletos."
+    );
+  }
+
+  parseLine(
+    \`TESTE WHATSAPP VIA PROXY: \${host}:\${port}\`,
+    false
+  );
+
+  try {
+    const response =
+      await axios.get(
+        "https://web.whatsapp.com/",
+        {
+          timeout: 18000,
+          maxRedirects: 5,
+          proxy: {
+            protocol:
+              "http",
+            host,
+            port,
+            auth: {
+              username,
+              password,
+            },
+          },
+          validateStatus:
+            () => true,
+          headers: {
+            "User-Agent":
+              "Mozilla/5.0 "
+              + "(Windows NT 10.0; Win64; x64) "
+              + "AppleWebKit/537.36 "
+              + "(KHTML, like Gecko) "
+              + "Chrome/131.0 Safari/537.36",
+          },
+        }
+      );
+
+    if (
+      response.status === 407
+    ) {
+      throw new Error(
+        "HTTP 407 - credenciais rejeitadas pelo proxy."
+      );
+    }
+
+    if (
+      response.status < 200
+      || response.status >= 500
+    ) {
+      throw new Error(
+        \`HTTP \${response.status}\`
+      );
+    }
+
+    parseLine(
+      \`TESTE WHATSAPP VIA PROXY: OK (HTTP \${response.status}).\`,
+      false
+    );
+
+  } catch (error) {
+    const detail =
+      error?.code
+      || error?.message
+      || String(error);
+
+    throw new Error(
+      "O Proxy Geral não conseguiu acessar https://web.whatsapp.com/. "
+      + \`Detalhe: \${detail}\`
+    );
+  }
+}
+
+async function ensureSharedChrome() {`,
+  "V40 helpers de rede do Chrome compartilhado"
+);
+
+replaceMainOnce(
+`  if (
+    await sharedBrowserResponding()
+  ) {
+    parseLine(
+      "CHROME COMPARTILHADO: reutilizando sessão já aberta.",
+      false
+    );
+
+    return {
+      ok: true,
+      reused: true,
+    };
+  }
+
+  const chrome =`,
+`  const desiredNetwork =
+    desiredSharedNetworkState();
+
+  if (
+    await sharedBrowserResponding()
+  ) {
+    const currentNetwork =
+      readSharedNetworkState();
+
+    if (
+      sameSharedNetworkState(
+        currentNetwork,
+        desiredNetwork
+      )
+    ) {
+      parseLine(
+        "CHROME COMPARTILHADO: reutilizando sessão já aberta com a mesma configuração de rede.",
+        false
+      );
+
+      return {
+        ok: true,
+        reused: true,
+      };
+    }
+
+    await stopSharedChromeForNetworkChange(
+      currentNetwork
+        ? "Proxy Geral alterado"
+        : "Chrome iniciado por versão anterior"
+    );
+  }
+
+  await testWhatsAppThroughCentralProxy();
+
+  const chrome =`,
+  "V40 validar/reiniciar Chrome antes do reuso"
+);
+
+replaceMainOnce(
+`    "--disable-background-mode",
+    "--disable-features=Translate",
+    "--start-maximized",`,
+`    "--disable-background-mode",
+    "--disable-features=Translate",
+    "--disable-quic",
+    "--start-maximized",`,
+  "V40 desabilitar QUIC no Chrome compartilhado"
+);
+
+replaceMainOnce(
+`      return {
+        ok: true,
+        reused: false,
+        pid: child.pid,
+      };`,
+`      writeSharedNetworkState(
+        desiredNetwork
+      );
+
+      return {
+        ok: true,
+        reused: false,
+        pid: child.pid,
+      };`,
+  "V40 persistir assinatura de rede"
+);
+
+if (
+  mainSource === originalMain
+) {
+  throw new Error(
+    "Nenhuma alteração foi aplicada ao main.js."
+  );
+}
+
+fs.writeFileSync(
+  mainTarget,
+  mainSource,
+  "utf8"
+);
+
+// Validação final dos JavaScripts que foram alterados.
 const { spawnSync } =
   require("child_process");
 
 for (const target of [
   clientTarget,
   engineTarget,
+  mainTarget,
 ]) {
   const check =
     spawnSync(
@@ -1534,6 +2212,6 @@ for (const target of [
 }
 
 console.log(
-  "V38 aplicada: sessão compartilhada, recuperação de mensagens, "
-  + "parser compatível e diagnóstico completo do Apps Script."
+  "V40 aplicada: sessão compartilhada, pipeline Planilhas e "
+  + "Chrome com Proxy Geral validado/reiniciado automaticamente."
 );
