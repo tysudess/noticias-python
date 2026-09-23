@@ -72,6 +72,9 @@ class Application:
         from monitor_noticias.ui.cross_platform_runtime_patch import (
             install_cross_platform_runtime_patch,
         )
+        from monitor_noticias.ui.pdf_export_quality_fix import (
+            install_pdf_export_quality_fix,
+        )
 
         install_extractor_proxy_patch()
         install_settings_credentials_patch()
@@ -84,6 +87,8 @@ class Application:
         install_news_extractor_proxy_patch()
         install_news_direct_link_patch()
         install_cross_platform_runtime_patch()
+
+        install_pdf_export_quality_fix()
 
         from monitor_noticias.ui.main_window import MainWindow
         from monitor_noticias.ui.screen_recorder_integration import (
@@ -112,8 +117,6 @@ class Application:
 
         install_removed_integrations_guard(MainWindow)
         install_linux_boot_patch(MainWindow)
-
-        # V51: X11 + PulseAudio/PipeWire somente no Linux.
         install_linux_screen_recorder_patch()
 
         qt_app = QApplication.instance() or QApplication(sys.argv)
