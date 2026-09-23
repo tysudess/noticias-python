@@ -85,8 +85,6 @@ class Application:
         install_news_extractor_proxy_patch()
         install_news_direct_link_patch()
 
-        # V49 precisa vir depois dos patches do Extrator para envolver
-        # o updater já ligado ao Proxy Geral.
         install_cross_platform_runtime_patch()
 
         from monitor_noticias.ui.main_window import MainWindow
@@ -109,8 +107,16 @@ class Application:
         from monitor_noticias.ui.app_icon_loader import (
             load_app_icon,
         )
+        from monitor_noticias.ui.linux_boot_patch import (
+            install_linux_boot_patch,
+        )
 
         install_removed_integrations_guard(
+            MainWindow
+        )
+
+        # V50: aplica antes de criar qualquer página da MainWindow.
+        install_linux_boot_patch(
             MainWindow
         )
 
@@ -120,6 +126,7 @@ class Application:
                 sys.argv
             )
         )
+
         qt_app.setApplicationName(
             "Central Inteligente de Mídia"
         )
