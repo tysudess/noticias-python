@@ -1,4 +1,4 @@
-name: Build e Release Ubuntu AppImage
+name: Build e Release Ubuntu Portable
 
 on:
   workflow_dispatch:
@@ -24,16 +24,17 @@ permissions:
   actions: read
 
 concurrency:
-  group: ubuntu-appimage-release-main
+  group: ubuntu-portable-release-main
   cancel-in-progress: true
 
 env:
-  APPIMAGE_NAME: Central-Inteligente-de-Midia-Ubuntu-x86_64.AppImage
-  ARTIFACT_NAME: central-ubuntu-appimage
+  PORTABLE_DIR: Central-Inteligente-de-Midia-Ubuntu-Portable-x86_64
+  PORTABLE_ARCHIVE: Central-Inteligente-de-Midia-Ubuntu-Portable-x86_64.tar.gz
+  ARTIFACT_NAME: central-ubuntu-portable
 
 jobs:
   build:
-    name: Gerar Ubuntu AppImage
+    name: Gerar Ubuntu Portable
     runs-on: ubuntu-22.04
     timeout-minutes: 90
 
@@ -56,7 +57,7 @@ jobs:
         with:
           node-version: "20"
 
-      - name: Instalar bibliotecas Linux
+      - name: Instalar bibliotecas de build e teste
         shell: bash
         run: |
           set -euo pipefail
@@ -68,8 +69,9 @@ jobs:
             file \
             xz-utils \
             unzip \
-            desktop-file-utils \
             patchelf \
+            xvfb \
+            xauth \
             libgl1 \
             libegl1 \
             libdbus-1-3 \
@@ -107,11 +109,12 @@ jobs:
           set -euo pipefail
 
           python -m pip install --upgrade pip
+
           python -m pip install \
             -r requirements.txt \
             -r requirements-build.txt
 
-      - name: Validar dependências Linux
+      - name: Validar dependências Python Linux
         shell: bash
         run: |
           set -euo pipefail
@@ -121,6 +124,7 @@ jobs:
           import secretstorage
           import PySide6
           from PySide6 import QtWebEngineCore
+
           print("PySide6:", PySide6.__version__)
           print("keyring:", keyring.__file__)
           print("secretstorage:", secretstorage.__file__)
@@ -180,9 +184,11 @@ jobs:
           fi
 
           echo "NEWS_ENGINE=$(basename "$ENGINE")" >> "$GITHUB_ENV"
-          echo "Motor Electron Linux: $ENGINE"
 
-      - name: Gerar Central com PyInstaller
+          echo "Motor Electron Linux:"
+          echo "$ENGINE"
+
+      - name: Gerar Central Linux com PyInstaller
         shell: bash
         run: |
           set -euo pipefail
@@ -196,7 +202,7 @@ jobs:
 
           test -x "$ROOT/CentralInteligenteDeMidia"
 
-      - name: Preparar bundle Ubuntu
+      - name: Preparar bundle da Central
         shell: bash
         run: |
           set -euo pipefail
@@ -206,7 +212,12 @@ jobs:
           mkdir -p \
             "$ROOT/resources" \
             "$ROOT/bin" \
-            "$ROOT/tools/news_extractor"
+            "$ROOT/tools/news_extractor" \
+            "$ROOT/data" \
+            "$ROOT/logs" \
+            "$ROOT/temp" \
+            "$ROOT/Videos" \
+            "$ROOT/VideoEditorExports"
 
           if [ -d resources ]; then
             cp -a resources/. "$ROOT/resources/"
@@ -249,7 +260,11 @@ jobs:
             -o "$ROOT/bin/yt-dlp"
 
           chmod +x "$ROOT/bin/yt-dlp"
-          cp "$ROOT/bin/yt-dlp" "$ROOT/bin/yt-dlp-stable"
+
+          cp \
+            "$ROOT/bin/yt-dlp" \
+            "$ROOT/bin/yt-dlp-stable"
+
           chmod +x "$ROOT/bin/yt-dlp-stable"
 
           "$ROOT/bin/yt-dlp" --version
@@ -280,12 +295,15 @@ jobs:
 
           test -f "$TMP_DIR/deno"
 
-          cp "$TMP_DIR/deno" "$ROOT/bin/deno"
+          cp \
+            "$TMP_DIR/deno" \
+            "$ROOT/bin/deno"
+
           chmod +x "$ROOT/bin/deno"
 
           "$ROOT/bin/deno" --version
 
-      - name: Baixar FFmpeg estático Linux
+      - name: Baixar FFmpeg e FFprobe Linux estáticos
         shell: bash
         run: |
           set -euo pipefail
@@ -338,194 +356,254 @@ jobs:
           "$ROOT/bin/ffmpeg" -version | head -n 1
           "$ROOT/bin/ffprobe" -version | head -n 1
 
-      - name: Validar bundle Linux
+      - name: Validar bundle antes de empacotar
         shell: bash
         run: |
           set -euo pipefail
 
           ROOT="dist/CentralInteligenteDeMidia"
 
-          python scripts/validate_linux_bundle.py "$ROOT"
-
-          echo "Dependências dinâmicas do executável principal:"
-          ldd "$ROOT/CentralInteligenteDeMidia" || true
+          python \
+            scripts/validate_linux_bundle.py \
+            "$ROOT"
 
           if ldd "$ROOT/CentralInteligenteDeMidia" 2>/dev/null |
              grep -q "not found"; then
-            echo "Há biblioteca dinâmica ausente no executável."
+            echo "Há biblioteca dinâmica ausente no executável principal."
+            ldd "$ROOT/CentralInteligenteDeMidia" || true
             exit 1
           fi
 
-      - name: Smoke test do executável PyInstaller
+      - name: Montar pasta Ubuntu Portable
         shell: bash
         run: |
           set -euo pipefail
 
-          ROOT="dist/CentralInteligenteDeMidia"
+          SOURCE="dist/CentralInteligenteDeMidia"
+          TARGET="dist/${PORTABLE_DIR}"
 
-          CENTRAL_LINUX_SMOKE=1 \
-          CENTRAL_LINUX_SMOKE_OUTPUT="${RUNNER_TEMP}/central-linux-smoke.json" \
-            "$ROOT/CentralInteligenteDeMidia"
+          rm -rf "$TARGET"
+          mkdir -p "$TARGET"
 
-          cat "${RUNNER_TEMP}/central-linux-smoke.json"
-
-      - name: Montar AppDir
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          ROOT="dist/CentralInteligenteDeMidia"
-          APPDIR="dist/AppDir"
-
-          rm -rf "$APPDIR"
-
-          mkdir -p \
-            "$APPDIR/usr/lib/central" \
-            "$APPDIR/usr/share/applications" \
-            "$APPDIR/usr/share/icons/hicolor/256x256/apps"
-
-          cp -a "$ROOT/." "$APPDIR/usr/lib/central/"
+          cp -a "$SOURCE/." "$TARGET/"
 
           cp \
-            portable/linux/AppRun \
-            "$APPDIR/AppRun"
+            portable/linux/INICIAR-CENTRAL.sh \
+            "$TARGET/INICIAR-CENTRAL.sh"
 
           cp \
-            portable/linux/central-inteligente-de-midia.desktop \
-            "$APPDIR/central-inteligente-de-midia.desktop"
+            portable/linux/TESTAR-PORTABLE.sh \
+            "$TARGET/TESTAR-PORTABLE.sh"
 
           cp \
-            portable/linux/central-inteligente-de-midia.desktop \
-            "$APPDIR/usr/share/applications/central-inteligente-de-midia.desktop"
-
-          cp \
-            src/monitor_noticias/assets/app_icon.png \
-            "$APPDIR/central-inteligente-de-midia.png"
-
-          cp \
-            src/monitor_noticias/assets/app_icon.png \
-            "$APPDIR/.DirIcon"
-
-          cp \
-            src/monitor_noticias/assets/app_icon.png \
-            "$APPDIR/usr/share/icons/hicolor/256x256/apps/central-inteligente-de-midia.png"
+            portable/linux/README-UBUNTU-PORTABLE.txt \
+            "$TARGET/README-UBUNTU-PORTABLE.txt"
 
           chmod +x \
-            "$APPDIR/AppRun" \
-            "$APPDIR/usr/lib/central/CentralInteligenteDeMidia"
+            "$TARGET/INICIAR-CENTRAL.sh" \
+            "$TARGET/TESTAR-PORTABLE.sh" \
+            "$TARGET/CentralInteligenteDeMidia" \
+            "$TARGET/bin/ffmpeg" \
+            "$TARGET/bin/ffprobe" \
+            "$TARGET/bin/yt-dlp" \
+            "$TARGET/bin/yt-dlp-stable" \
+            "$TARGET/bin/deno" \
+            "$TARGET/resources/globoplay-login-helper/GloboplayLoginHelper" \
+            "$TARGET/tools/news_extractor/ExtratorMateriasPortable-V1.25.19"
 
-          desktop-file-validate \
-            "$APPDIR/central-inteligente-de-midia.desktop"
+          echo "Conteúdo da raiz portable:"
+          ls -lah "$TARGET"
 
-      - name: Gerar AppImage
+      - name: Smoke test dos imports no portable
         shell: bash
         run: |
           set -euo pipefail
 
-          TOOL="${RUNNER_TEMP}/appimagetool-x86_64.AppImage"
+          TARGET="dist/${PORTABLE_DIR}"
+          RESULT="${RUNNER_TEMP}/central-linux-smoke.json"
 
-          curl \
-            --fail \
-            --location \
-            --retry 4 \
-            --retry-all-errors \
-            --connect-timeout 30 \
-            --max-time 300 \
-            "https://github.com/AppImage/AppImageKit/releases/download/continuous/appimagetool-x86_64.AppImage" \
-            -o "$TOOL"
-
-          chmod +x "$TOOL"
-
-          rm -f "$APPIMAGE_NAME"
-
-          ARCH=x86_64 \
-          APPIMAGE_EXTRACT_AND_RUN=1 \
-            "$TOOL" \
-            "dist/AppDir" \
-            "$APPIMAGE_NAME"
-
-          test -f "$APPIMAGE_NAME"
-          chmod +x "$APPIMAGE_NAME"
-
-          ls -lh "$APPIMAGE_NAME"
-          sha256sum "$APPIMAGE_NAME" > "${APPIMAGE_NAME}.sha256"
-
-      - name: Validar AppImage final
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          rm -rf squashfs-root
-
-          "./$APPIMAGE_NAME" --appimage-extract >/dev/null
-
-          test -x "squashfs-root/AppRun"
-          test -x "squashfs-root/usr/lib/central/CentralInteligenteDeMidia"
-
-          APPIMAGE="$PWD/$APPIMAGE_NAME" \
           CENTRAL_LINUX_SMOKE=1 \
-          CENTRAL_LINUX_SMOKE_OUTPUT="${RUNNER_TEMP}/appimage-smoke.json" \
-            "squashfs-root/AppRun"
+          CENTRAL_LINUX_SMOKE_OUTPUT="$RESULT" \
+            "$TARGET/CentralInteligenteDeMidia"
 
-          cat "${RUNNER_TEMP}/appimage-smoke.json"
+          cat "$RESULT"
 
-      - name: Guardar AppImage
+      - name: Boot real da interface em X11 virtual
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          TARGET="$PWD/dist/${PORTABLE_DIR}"
+
+          mkdir -p \
+            "${RUNNER_TEMP}/central-home" \
+            "${RUNNER_TEMP}/central-xdg"
+
+          chmod 700 \
+            "${RUNNER_TEMP}/central-xdg"
+
+          set +e
+
+          timeout \
+            --signal=TERM \
+            --kill-after=5s \
+            18s \
+            xvfb-run \
+              -a \
+              -s "-screen 0 1920x1080x24" \
+              env \
+                HOME="${RUNNER_TEMP}/central-home" \
+                XDG_RUNTIME_DIR="${RUNNER_TEMP}/central-xdg" \
+                XDG_SESSION_TYPE=x11 \
+                "$TARGET/INICIAR-CENTRAL.sh"
+
+          STATUS=$?
+
+          set -e
+
+          if [ "$STATUS" -ne 124 ]; then
+            echo
+            echo "A Central encerrou durante o teste real."
+            echo "Código: $STATUS"
+            echo
+
+            if [ -f "$TARGET/logs/inicializacao.log" ]; then
+              cat "$TARGET/logs/inicializacao.log"
+            fi
+
+            exit 1
+          fi
+
+          echo "Boot real aprovado: interface permaneceu ativa por 18 segundos."
+
+      - name: Gerar TAR.GZ portable
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          rm -f \
+            "$PORTABLE_ARCHIVE" \
+            "${PORTABLE_ARCHIVE}.sha256"
+
+          tar \
+            -C dist \
+            -czf "$PORTABLE_ARCHIVE" \
+            "$PORTABLE_DIR"
+
+          test -f "$PORTABLE_ARCHIVE"
+
+          sha256sum \
+            "$PORTABLE_ARCHIVE" \
+            > "${PORTABLE_ARCHIVE}.sha256"
+
+          ls -lh \
+            "$PORTABLE_ARCHIVE" \
+            "${PORTABLE_ARCHIVE}.sha256"
+
+      - name: Validar arquivo compactado final
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          TEST_ROOT="${RUNNER_TEMP}/portable-final-test"
+
+          rm -rf "$TEST_ROOT"
+          mkdir -p "$TEST_ROOT"
+
+          tar \
+            -xzf "$PORTABLE_ARCHIVE" \
+            -C "$TEST_ROOT"
+
+          TARGET="$TEST_ROOT/$PORTABLE_DIR"
+
+          test -x "$TARGET/INICIAR-CENTRAL.sh"
+          test -x "$TARGET/TESTAR-PORTABLE.sh"
+          test -x "$TARGET/CentralInteligenteDeMidia"
+          test -x "$TARGET/bin/ffmpeg"
+          test -x "$TARGET/bin/yt-dlp"
+          test -x "$TARGET/bin/deno"
+
+          "$TARGET/TESTAR-PORTABLE.sh"
+
+          RESULT="${RUNNER_TEMP}/archive-smoke.json"
+
+          CENTRAL_LINUX_SMOKE=1 \
+          CENTRAL_LINUX_SMOKE_OUTPUT="$RESULT" \
+            "$TARGET/CentralInteligenteDeMidia"
+
+          cat "$RESULT"
+
+          echo "Portable extraído e validado com sucesso."
+
+      - name: Guardar diagnóstico
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ubuntu-portable-diagnostics
+          path: |
+            dist/${{ env.PORTABLE_DIR }}/logs/
+          if-no-files-found: ignore
+          retention-days: 3
+
+      - name: Guardar Ubuntu Portable
         uses: actions/upload-artifact@v4
         with:
           name: ${{ env.ARTIFACT_NAME }}
           path: |
-            ${{ env.APPIMAGE_NAME }}
-            ${{ env.APPIMAGE_NAME }}.sha256
+            ${{ env.PORTABLE_ARCHIVE }}
+            ${{ env.PORTABLE_ARCHIVE }}.sha256
           if-no-files-found: error
           compression-level: 0
           retention-days: 2
 
   release:
-    name: Publicar Release Ubuntu
+    name: Publicar Release Ubuntu Portable
     needs: build
     runs-on: ubuntu-22.04
     timeout-minutes: 30
 
     steps:
-      - name: Baixar AppImage
+      - name: Baixar Ubuntu Portable
         uses: actions/download-artifact@v4
         with:
           name: ${{ env.ARTIFACT_NAME }}
           path: release-files
 
-      - name: Definir Release Ubuntu
+      - name: Definir Release
         shell: bash
         run: |
           set -euo pipefail
 
           echo \
-            "RELEASE_TAG=ubuntu-${GITHUB_RUN_NUMBER}-${GITHUB_SHA:0:7}" \
+            "RELEASE_TAG=ubuntu-portable-${GITHUB_RUN_NUMBER}-${GITHUB_SHA:0:7}" \
             >> "$GITHUB_ENV"
 
           echo \
-            "RELEASE_NAME=Central Inteligente de Mídia Ubuntu - Build ${GITHUB_RUN_NUMBER}" \
+            "RELEASE_NAME=Central Inteligente de Mídia Ubuntu Portable - Build ${GITHUB_RUN_NUMBER}" \
             >> "$GITHUB_ENV"
 
-      - name: Criar Release e publicar AppImage
+      - name: Criar Release e publicar portable
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
 
-          APPIMAGE="release-files/${APPIMAGE_NAME}"
-          SHA_FILE="${APPIMAGE}.sha256"
+          ARCHIVE="release-files/${PORTABLE_ARCHIVE}"
+          SHA_FILE="${ARCHIVE}.sha256"
 
-          test -f "$APPIMAGE"
+          test -f "$ARCHIVE"
           test -f "$SHA_FILE"
 
           gh release create \
             "$RELEASE_TAG" \
-            "$APPIMAGE" \
+            "$ARCHIVE" \
             "$SHA_FILE" \
             --repo "$GITHUB_REPOSITORY" \
             --target "$GITHUB_SHA" \
             --title "$RELEASE_NAME" \
             --generate-notes
 
-          echo "Release Ubuntu publicada: $RELEASE_TAG"
+          echo
+          echo "Release Ubuntu Portable publicada:"
+          echo "$RELEASE_TAG"
