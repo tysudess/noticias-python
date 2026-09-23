@@ -1,0 +1,11 @@
+#!/bin/sh
+set -eu
+
+APPDIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
+
+export APPDIR
+export PATH="$APPDIR/usr/lib/central/bin:$PATH"
+
+exec \
+  "$APPDIR/usr/lib/central/CentralInteligenteDeMidia" \
+  "$@"

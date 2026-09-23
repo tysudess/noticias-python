@@ -1,13 +1,14 @@
 {
   "name": "extrator-materias-portable-v12519",
   "version": "1.25.19",
-  "description": "Extrator de Materias Windows Portable V1.25.19 com corretor PT-BR rigido e acentuacao obrigatoria",
+  "description": "Extrator de Materias multiplataforma V1.25.19 com corretor PT-BR rigido e acentuacao obrigatoria",
   "main": "monitor-main.js",
   "author": "",
   "license": "UNLICENSED",
   "scripts": {
     "start": "electron .",
-    "dist": "electron-builder --win portable --x64"
+    "dist": "electron-builder --win portable --x64",
+    "dist:linux": "electron-builder --linux dir --x64"
   },
   "dependencies": {
     "@mozilla/readability": "^0.6.0",
@@ -47,6 +48,9 @@
     },
     "portable": {
       "artifactName": "ExtratorMateriasPortable-V1.25.19.exe"
+    },
+    "linux": {
+      "category": "Utility"
     }
   }
 }

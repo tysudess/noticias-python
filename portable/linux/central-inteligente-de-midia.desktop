@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Central Inteligente de Mídia
+Comment=Monitoramento, notícias, capas, vídeos e ferramentas de mídia
+Exec=CentralInteligenteDeMidia
+Icon=central-inteligente-de-midia
+Terminal=false
+Categories=AudioVideo;Utility;Network;
+StartupNotify=true

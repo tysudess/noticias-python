@@ -44,10 +44,14 @@ def _patch_state_store() -> None:
         self,
         app_root: Path,
     ) -> None:
-        paths = _paths_for(app_root)
+        paths = _paths_for(
+            app_root
+        )
         original(
             self,
-            Path(paths.state_root),
+            Path(
+                paths.state_root
+            ),
         )
 
     patched._central_linux_paths = True
@@ -68,16 +72,19 @@ def _patch_globoplay_session_store() -> None:
         self,
         app_root: Path,
     ) -> None:
-        paths = _paths_for(app_root)
+        paths = _paths_for(
+            app_root
+        )
 
         if not is_linux():
             original(
                 self,
-                Path(paths.state_root),
+                Path(
+                    paths.state_root
+                ),
             )
             return
 
-        # No Linux a sessão também precisa sair do DPAPI.
         from monitor_noticias.platform.credentials import (
             LinuxKeyringTextStore,
         )
@@ -91,8 +98,6 @@ def _patch_globoplay_session_store() -> None:
             exist_ok=True,
         )
 
-        # Mantido apenas como marcador/diagnóstico; a sessão não é escrita
-        # nesse arquivo. O conteúdo real fica no Secret Service/keyring.
         self.encrypted_file = (
             self.session_dir
             / "globoplay.session.keyring"
@@ -130,33 +135,51 @@ def _patch_extractor_engine() -> None:
             )
             return
 
-        paths = _paths_for(app_root)
+        paths = _paths_for(
+            app_root
+        )
 
-        self.app_root = paths.root
+        self.app_root = (
+            paths.root
+        )
         self.state_root = Path(
             paths.state_root
         )
-        self.bin_dir = paths.bin
-        self.videos_dir = paths.videos
+        self.bin_dir = (
+            paths.bin
+        )
+        self.videos_dir = (
+            paths.videos
+        )
         self.videos_dir.mkdir(
             parents=True,
             exist_ok=True,
         )
 
-        self.yt_dlp = paths.runtime_binary(
-            "yt-dlp"
+        self.yt_dlp = (
+            paths.runtime_binary(
+                "yt-dlp"
+            )
         )
-        self.yt_dlp_stable = paths.runtime_binary(
-            "yt-dlp-stable"
+        self.yt_dlp_stable = (
+            paths.runtime_binary(
+                "yt-dlp-stable"
+            )
         )
-        self.ffmpeg = paths.runtime_binary(
-            "ffmpeg"
+        self.ffmpeg = (
+            paths.runtime_binary(
+                "ffmpeg"
+            )
         )
-        self.ffprobe = paths.runtime_binary(
-            "ffprobe"
+        self.ffprobe = (
+            paths.runtime_binary(
+                "ffprobe"
+            )
         )
-        self.deno = paths.runtime_binary(
-            "deno"
+        self.deno = (
+            paths.runtime_binary(
+                "deno"
+            )
         )
 
         self.runner = (
@@ -164,8 +187,10 @@ def _patch_extractor_engine() -> None:
             or HiddenProcessRunner()
         )
 
-        self.session_store = GloboplaySessionStore(
-            paths.root
+        self.session_store = (
+            GloboplaySessionStore(
+                paths.root
+            )
         )
 
         self._lock = threading.Lock()
@@ -177,10 +202,15 @@ def _patch_extractor_engine() -> None:
 
 
 def _patch_extractor_page() -> None:
-    cls = extractor_page_module.ExtractorPage
+    cls = (
+        extractor_page_module
+        .ExtractorPage
+    )
 
     original_init = cls.__init__
-    original_refresh_session = cls._refresh_session
+    original_refresh_session = (
+        cls._refresh_session
+    )
 
     if getattr(
         original_init,
@@ -201,7 +231,9 @@ def _patch_extractor_page() -> None:
         paths = _paths_for(
             app_root
         )
-        self._runtime_paths = paths
+        self._runtime_paths = (
+            paths
+        )
         self._download_log = (
             paths.logs
             / "extractor-video.log"
@@ -222,9 +254,15 @@ def _patch_extractor_page() -> None:
         )
 
         self.session_status.setText(
-            "Sessão protegida salva no cofre seguro do Ubuntu."
+            (
+                "Sessão protegida salva "
+                "no cofre seguro do Ubuntu."
+            )
             if saved
-            else "Nenhuma sessão Globoplay salva."
+            else (
+                "Nenhuma sessão "
+                "Globoplay salva."
+            )
         )
 
         self.delete_session_button.setEnabled(
@@ -235,7 +273,9 @@ def _patch_extractor_page() -> None:
     patched_refresh_session._central_linux_paths = True
 
     cls.__init__ = patched_init
-    cls._refresh_session = patched_refresh_session
+    cls._refresh_session = (
+        patched_refresh_session
+    )
 
 
 def _patch_news_extractor_page() -> None:
@@ -264,10 +304,10 @@ def _patch_news_extractor_page() -> None:
             app_root
         )
 
-        self.bundle_root = paths.root
+        self.bundle_root = (
+            paths.root
+        )
 
-        # O NewsExtractor usa app_root apenas para temp/proxy no fluxo ativo.
-        # No Linux isso precisa apontar para a área gravável.
         self.app_root = Path(
             paths.state_root
         )
@@ -284,9 +324,9 @@ def _patch_news_extractor_page() -> None:
 
 
 def _patch_extractor_proxy_settings() -> None:
-    # O patch de proxy existente recebe app_root do bundle.
-    # Redirecionamos apenas a leitura de prefs/segredos para state_root.
-    from monitor_noticias.ui import extractor_proxy_patch
+    from monitor_noticias.ui import (
+        extractor_proxy_patch,
+    )
 
     def settings_for(
         app_root: Path,
@@ -306,13 +346,21 @@ def _patch_extractor_proxy_settings() -> None:
             data_dir=paths.data,
         )
 
-    extractor_proxy_patch._settings_for = settings_for
+    extractor_proxy_patch._settings_for = (
+        settings_for
+    )
 
 
 def _patch_ytdlp_updater() -> None:
-    original_init = YtDlpUpdater.__init__
-    original_validate = YtDlpUpdater._validate
-    original_update = YtDlpUpdater.update
+    original_init = (
+        YtDlpUpdater.__init__
+    )
+    original_validate = (
+        YtDlpUpdater._validate
+    )
+    original_update = (
+        YtDlpUpdater.update
+    )
 
     if getattr(
         original_init,
@@ -337,12 +385,16 @@ def _patch_ytdlp_updater() -> None:
             engine.app_root
         )
 
-        self.target = paths.writable_binary(
-            "yt-dlp"
+        self.target = (
+            paths.writable_binary(
+                "yt-dlp"
+            )
         )
+
+        # Standalone Linux executable. Não depende do Python do sistema.
         self.URL = (
             "https://github.com/yt-dlp/yt-dlp/"
-            "releases/latest/download/yt-dlp"
+            "releases/latest/download/yt-dlp_linux"
         )
 
     def patched_validate(
@@ -391,9 +443,9 @@ def _patch_ytdlp_updater() -> None:
             except OSError:
                 pass
 
-            # O restante da sessão passa a usar imediatamente a versão
-            # atualizada gravada fora do AppImage.
-            self.engine.yt_dlp = self.target
+            self.engine.yt_dlp = (
+                self.target
+            )
 
         return result
 
@@ -401,18 +453,18 @@ def _patch_ytdlp_updater() -> None:
     patched_validate._central_linux_paths = True
     patched_update._central_linux_paths = True
 
-    YtDlpUpdater.__init__ = patched_init
-    YtDlpUpdater._validate = patched_validate
-    YtDlpUpdater.update = patched_update
+    YtDlpUpdater.__init__ = (
+        patched_init
+    )
+    YtDlpUpdater._validate = (
+        patched_validate
+    )
+    YtDlpUpdater.update = (
+        patched_update
+    )
 
 
 def install_cross_platform_runtime_patch() -> None:
-    """Completa os caminhos/binários ativos para Linux/AppImage.
-
-    Deve ser chamado DEPOIS dos patches de Proxy/Extractor para poder
-    envolver o updater já conectado ao Proxy Geral.
-    """
-
     global _INSTALLED
 
     if _INSTALLED:
