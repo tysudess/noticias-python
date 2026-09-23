@@ -10,15 +10,24 @@ from urllib.parse import urlencode
 import pypdfium2 as pdfium
 
 from .network import get_text_windows
-from .config import ACCESS_KEY, cache_dir, data_dir, downloads_dir
+from .config import (
+    ACCESS_KEY,
+    cache_dir,
+    data_dir,
+    downloads_dir,
+)
 from .models import CandidatePage
 
-UA = "PrincipaisCapas-Windows/1.2.6"
+
+UA = "PrincipaisCapas-Windows/1.2.7"
 
 
 def _valid_webapp_url(url: str) -> bool:
-    u = (url or "").strip().lower()
-    return u.startswith("https://script.google.com/macros/s/") and "/exec" in u
+    value = (url or "").strip().lower()
+    return (
+        value.startswith("https://script.google.com/macros/s/")
+        and "/exec" in value
+    )
 
 
 def _endpoint(base: str, action: str, target_date: date, page: int = 0) -> str:
@@ -27,10 +36,8 @@ def _endpoint(base: str, action: str, target_date: date, page: int = 0) -> str:
         "action": action,
         "date": target_date.isoformat(),
     }
-
     if page > 0:
         params["page"] = str(page)
-
     return base + ("&" if "?" in base else "?") + urlencode(params)
 
 
@@ -41,43 +48,90 @@ def _request_json(url: str) -> dict:
             headers={
                 "User-Agent": UA,
                 "Accept": "application/json,text/plain,*/*",
+                "Cache-Control": "no-cache",
+                "Pragma": "no-cache",
             },
-            connect_timeout=5,
-            read_timeout=22,
+            connect_timeout=7,
+            read_timeout=30,
         )
     except Exception as exc:
-        raise RuntimeError(
-            f"Ponte Gmail do Valor: {exc}"
-        ) from exc
+        raise RuntimeError(f"Ponte Gmail do Valor: {exc}") from exc
 
     body = (body or "").strip()
 
     if body.lower().startswith(("<!doctype", "<html")):
-        raise RuntimeError(
-            "A ponte do Valor abriu HTML em vez de JSON"
-        )
+        raise RuntimeError("A ponte do Valor abriu HTML em vez de JSON")
 
     try:
-        return json.loads(body)
+        parsed = json.loads(body)
     except Exception as exc:
         raise RuntimeError(
             "Resposta inválida da ponte Gmail para o Valor"
         ) from exc
 
+    if not isinstance(parsed, dict):
+        raise RuntimeError(
+            "A ponte Gmail do Valor não retornou um objeto JSON"
+        )
+
+    return parsed
+
 
 def _safe_filename(value: str) -> str:
-    s = (
+    text = (
         (value or "")
         .replace("\\", "_")
         .replace("/", "_")
         .strip()
     )
-    s = re.sub(
-        r"[^A-Za-z0-9._ -]+",
-        "_",
-        s,
+    text = re.sub(r"[^A-Za-z0-9._ -]+", "_", text)
+    return text or "Valor-Economico.pdf"
+
+
+def _extract_page_number(item: dict) -> int:
+    if not isinstance(item, dict):
+        return 0
+
+    raw = (
+        item.get("page")
+        or item.get("pageNumber")
+        or item.get("page_number")
+        or item.get("pagina")
+        or 0
     )
-    return s or "Valor-Economico.pdf"
+
+    try:
+        return int(raw)
+    except Exception:
+        return 0
+
+
+def _extract_filename(item: dict) -> str:
+    if not isinstance(item, dict):
+        return "Valor-Economico.pdf"
+
+    return _safe_filename(
+        str(
+            item.get("filename")
+            or item.get("fileName")
+            or item.get("name")
+            or ""
+        )
+    )
+
+
+def _manifest_pages(manifest: dict) -> list[dict]:
+    raw = (
+        manifest.get("pages")
+        or manifest.get("attachments")
+        or manifest.get("files")
+        or []
+    )
+
+    if not isinstance(raw, list):
+        return []
+
+    return [item for item in raw if isinstance(item, dict)]
 
 
 def _fetch_pdf_bytes(
@@ -86,12 +140,7 @@ def _fetch_pdf_bytes(
     page: int,
 ) -> tuple[bytes, dict]:
     root = _request_json(
-        _endpoint(
-            base,
-            "valor_pdf",
-            target_date,
-            page,
-        )
+        _endpoint(base, "valor_pdf", target_date, page)
     )
 
     if not root.get("ok"):
@@ -100,27 +149,24 @@ def _fetch_pdf_bytes(
             or f"PDF Página {page} do Valor não disponível"
         )
 
-    b64 = str(root.get("dataBase64") or "")
+    b64 = str(
+        root.get("dataBase64")
+        or root.get("data_base64")
+        or root.get("base64")
+        or ""
+    )
 
     if not b64:
-        raise RuntimeError(
-            f"PDF Página {page} do Valor veio vazio"
-        )
+        raise RuntimeError(f"PDF Página {page} do Valor veio vazio")
 
     try:
-        raw = base64.b64decode(
-            b64,
-            validate=False,
-        )
+        raw = base64.b64decode(b64, validate=False)
     except Exception as exc:
         raise RuntimeError(
             f"PDF Página {page} do Valor veio com base64 inválido"
         ) from exc
 
-    if (
-        len(raw) < 5
-        or not raw.startswith(b"%PDF")
-    ):
+    if len(raw) < 5 or not raw.startswith(b"%PDF"):
         raise RuntimeError(
             f"Anexo Página {page} do Valor não é um PDF válido"
         )
@@ -135,27 +181,14 @@ def _write_pdf(
 ) -> tuple[Path, Path]:
     safe = _safe_filename(filename)
 
-    app_dir = (
-        data_dir()
-        / "valor-pdfs"
-        / target_date.isoformat()
-    )
-    app_dir.mkdir(
-        parents=True,
-        exist_ok=True,
-    )
+    app_dir = data_dir() / "valor-pdfs" / target_date.isoformat()
+    app_dir.mkdir(parents=True, exist_ok=True)
 
     app_pdf = app_dir / safe
     app_pdf.write_bytes(raw)
 
-    download_dir = (
-        downloads_dir()
-        / "Valor Economico"
-    )
-    download_dir.mkdir(
-        parents=True,
-        exist_ok=True,
-    )
+    download_dir = downloads_dir() / "Valor Economico"
+    download_dir.mkdir(parents=True, exist_ok=True)
 
     download_pdf = download_dir / safe
     download_pdf.write_bytes(raw)
@@ -168,30 +201,19 @@ def _render_first_page(
     target_date: date,
     page_number: int,
 ) -> Path:
-    """Renderiza a primeira página com pypdfium2.
-
-    O projeto já usa pypdfium2 no Editor de PDF, então o programa Capas não
-    precisa mais de PyMuPDF/fitz. Isto evita módulos ausentes no portable.
-    """
     out = (
         cache_dir()
         / target_date.isoformat()
         / f"valor-email-p{page_number}.png"
     )
-
-    out.parent.mkdir(
-        parents=True,
-        exist_ok=True,
-    )
+    out.parent.mkdir(parents=True, exist_ok=True)
 
     pdf = None
     page = None
     bitmap = None
 
     try:
-        pdf = pdfium.PdfDocument(
-            str(pdf_path)
-        )
+        pdf = pdfium.PdfDocument(str(pdf_path))
 
         if len(pdf) <= 0:
             raise RuntimeError(
@@ -199,16 +221,9 @@ def _render_first_page(
             )
 
         page = pdf[0]
+        width_pt, _ = page.get_size()
+        width_pt = max(1.0, float(width_pt))
 
-        width_pt, _height_pt = page.get_size()
-        width_pt = max(
-            1.0,
-            float(width_pt),
-        )
-
-        # Aproxima o comportamento antigo do fitz:
-        # tenta gerar uma imagem com ~2400 px de largura,
-        # sem exagerar no consumo de memória.
         scale = max(
             1.0,
             min(
@@ -223,10 +238,7 @@ def _render_first_page(
         )
 
         image = bitmap.to_pil()
-        image.save(
-            out,
-            format="PNG",
-        )
+        image.save(out, format="PNG")
 
     except Exception as exc:
         raise RuntimeError(
@@ -253,10 +265,7 @@ def _render_first_page(
         except Exception:
             pass
 
-    if (
-        not out.exists()
-        or out.stat().st_size < 8192
-    ):
+    if not out.exists() or out.stat().st_size < 8192:
         raise RuntimeError(
             f"Prévia da Página {page_number} do Valor inválida"
         )
@@ -268,18 +277,22 @@ def load_valor_candidates(
     apps_script_url: str,
     target_date: date,
 ) -> list[CandidatePage]:
-    """Port Windows do ValorEmailPdfClient Android v0.7.7.5.
+    """Carrega exclusivamente do Gmail os PDFs do Valor Econômico.
 
-    Página 1 é obrigatória. Páginas 1/2/3 ficam no app e em Downloads; se a
-    Página 1 não estiver disponível, o chamador usa o fallback web da v1.2.2.
+    V43:
+    - Gmail é a fonte obrigatória do Valor;
+    - Página 1 é obrigatória;
+    - ausência/erro NÃO libera fallback web automático;
+    - aceita pequenas variações no JSON da ponte Apps Script.
     """
-    base = (
-        apps_script_url
-        or ""
-    ).strip()
+
+    base = (apps_script_url or "").strip()
 
     if not _valid_webapp_url(base):
-        return []
+        raise RuntimeError(
+            "Apps Script do Gmail não está configurado "
+            "com uma URL /exec válida."
+        )
 
     manifest = _request_json(
         _endpoint(
@@ -292,67 +305,69 @@ def load_valor_candidates(
     if not manifest.get("ok"):
         raise RuntimeError(
             manifest.get("error")
-            or "Falha ao consultar PDFs do Valor no Gmail"
+            or "Falha ao consultar os PDFs do Valor no Gmail"
         )
 
-    if "pages" not in manifest:
-        return []
+    page_items = _manifest_pages(manifest)
 
-    metas = []
+    if not page_items:
+        raise RuntimeError(
+            "O Gmail não retornou anexos do Valor "
+            "para a data selecionada."
+        )
 
-    for item in (
-        manifest.get("pages")
-        or []
-    ):
-        try:
-            pn = int(
-                item.get("page")
-                or 0
-            )
-        except Exception:
-            pn = 0
+    metas: list[tuple[int, str]] = []
+    seen_pages: set[int] = set()
 
-        if pn < 1 or pn > 3:
+    for item in page_items:
+        page_number = _extract_page_number(item)
+
+        if (
+            page_number < 1
+            or page_number > 3
+            or page_number in seen_pages
+        ):
             continue
+
+        seen_pages.add(page_number)
 
         metas.append(
             (
-                pn,
-                _safe_filename(
-                    str(
-                        item.get("filename")
-                        or ""
-                    )
-                ),
+                page_number,
+                _extract_filename(item),
             )
         )
 
-    metas.sort(
-        key=lambda x: x[0]
-    )
+    metas.sort(key=lambda item: item[0])
 
-    if not any(
-        pn == 1
-        for pn, _ in metas
-    ):
-        return []
+    if not any(page_number == 1 for page_number, _ in metas):
+        available = (
+            ", ".join(str(page_number) for page_number, _ in metas)
+            or "nenhuma"
+        )
+
+        raise RuntimeError(
+            "O Gmail respondeu, mas a Página 1 "
+            "do Valor não foi encontrada. "
+            f"Páginas informadas: {available}."
+        )
 
     candidates: list[CandidatePage] = []
 
-    for pn, filename in metas:
-        c = CandidatePage(
+    for page_number, filename in metas:
+        candidate = CandidatePage(
             path=None,
             score=100,
             confidence=100,
             recognized_text=(
                 "VALOR ECONÔMICO — PDF recebido por e-mail — "
-                f"Página {pn}"
+                f"Página {page_number}"
             ),
             source_url=(
                 "gmail-pdf://valor/"
-                f"{target_date.isoformat()}/pagina-{pn}"
+                f"{target_date.isoformat()}/pagina-{page_number}"
             ),
-            page_number=pn,
+            page_number=page_number,
             available=False,
             error="",
             pdf_path=None,
@@ -363,12 +378,13 @@ def load_valor_candidates(
             raw, root = _fetch_pdf_bytes(
                 base,
                 target_date,
-                pn,
+                page_number,
             )
 
             server_name = _safe_filename(
                 str(
                     root.get("filename")
+                    or root.get("fileName")
                     or filename
                 )
             )
@@ -379,26 +395,31 @@ def load_valor_candidates(
                 raw,
             )
 
-            c.path = _render_first_page(
+            candidate.path = _render_first_page(
                 app_pdf,
                 target_date,
-                pn,
+                page_number,
             )
-            c.pdf_path = app_pdf
-            c.source_filename = server_name
-            c.available = True
+
+            candidate.pdf_path = app_pdf
+            candidate.source_filename = server_name
+            candidate.available = True
 
         except Exception as exc:
-            c.available = False
-            c.error = str(exc)
+            candidate.available = False
+            candidate.error = str(exc)
 
-            if pn == 1:
-                raise
+            if page_number == 1:
+                raise RuntimeError(
+                    "A Página 1 do Valor foi localizada "
+                    "no Gmail, mas não pôde ser aberta: "
+                    f"{exc}"
+                ) from exc
 
-        candidates.append(c)
+        candidates.append(candidate)
 
     candidates.sort(
-        key=lambda c: c.page_number
+        key=lambda candidate: candidate.page_number
     )
 
     return candidates

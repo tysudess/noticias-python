@@ -14,10 +14,7 @@ class Application:
         self,
         paths: AppPaths | None = None,
     ) -> None:
-        self.paths = (
-            paths
-            or AppPaths.discover()
-        )
+        self.paths = paths or AppPaths.discover()
 
     def run(self) -> int:
         self.paths.ensure_runtime_dirs()
@@ -31,9 +28,7 @@ class Application:
             "Inicializando Central Inteligente de Mídia PySide6"
         )
 
-        if sys.platform.startswith(
-            "win"
-        ):
+        if sys.platform.startswith("win"):
             os.environ.setdefault(
                 "QT_MEDIA_BACKEND",
                 "ffmpeg",
@@ -47,15 +42,9 @@ class Application:
                 "1",
             )
 
-        from PySide6.QtWidgets import (
-            QApplication,
-        )
-        from monitor_noticias.app.composition import (
-            AppContainer,
-        )
+        from PySide6.QtWidgets import QApplication
+        from monitor_noticias.app.composition import AppContainer
 
-        # Patches ativos do Central.
-        # V41 removeu toda inicialização de WhatsApp/Planilhas.
         from monitor_noticias.ui.extractor_proxy_patch import (
             install_extractor_proxy_patch,
         )
@@ -68,6 +57,9 @@ class Application:
         from monitor_noticias.ui.covers_frontpages_browser_capture_patch import (
             install_covers_browser_capture_patch,
         )
+        from monitor_noticias.ui.covers_valor_gmail_only_patch import (
+            install_valor_gmail_only_patch,
+        )
         from monitor_noticias.ui.news_extractor_proxy_patch import (
             install_news_extractor_proxy_patch,
         )
@@ -78,19 +70,18 @@ class Application:
         install_extractor_proxy_patch()
         install_settings_proxy_toggle_patch()
 
-        # Ordem importante:
-        # V35 mantém Proxy Geral + Gmail primeiro para Valor.
-        # V42 substitui apenas o fallback FrontPages de Valor/Post por captura
-        # da imagem que já foi renderizada no Qt WebEngine.
+        # Ordem das correções de Capas:
+        # V35 = Proxy Geral / fluxo base.
+        # V42 = captura do navegador para o fallback web.
+        # V43 = Valor Econômico usa exclusivamente Gmail.
         install_covers_web_proxy_patch()
         install_covers_browser_capture_patch()
+        install_valor_gmail_only_patch()
 
         install_news_extractor_proxy_patch()
         install_news_direct_link_patch()
 
-        from monitor_noticias.ui.main_window import (
-            MainWindow,
-        )
+        from monitor_noticias.ui.main_window import MainWindow
         from monitor_noticias.ui.screen_recorder_integration import (
             install_screen_recorder,
         )
@@ -102,43 +93,23 @@ class Application:
             remove_legacy_pages,
         )
 
-        install_removed_integrations_guard(
-            MainWindow
-        )
+        install_removed_integrations_guard(MainWindow)
 
-        qt_app = (
-            QApplication.instance()
-            or QApplication(sys.argv)
-        )
-        qt_app.setApplicationName(
-            "Central Inteligente de Mídia"
-        )
-        qt_app.setApplicationDisplayName(
-            "Central Inteligente de Mídia"
-        )
-        qt_app.setOrganizationName(
-            "Central Inteligente de Mídia"
-        )
+        qt_app = QApplication.instance() or QApplication(sys.argv)
+        qt_app.setApplicationName("Central Inteligente de Mídia")
+        qt_app.setApplicationDisplayName("Central Inteligente de Mídia")
+        qt_app.setOrganizationName("Central Inteligente de Mídia")
 
-        container = AppContainer.build(
-            self.paths
-        )
+        container = AppContainer.build(self.paths)
 
         window = MainWindow(
             controller=container.controller,
             paths=self.paths,
         )
 
-        remove_legacy_pages(
-            window
-        )
-
-        install_screen_recorder(
-            window
-        )
-        install_demands_news_actions(
-            window
-        )
+        remove_legacy_pages(window)
+        install_screen_recorder(window)
+        install_demands_news_actions(window)
 
         window.show()
 
