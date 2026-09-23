@@ -1,0 +1,14 @@
+[project]
+name = "central-inteligente-midia-android"
+version = "0.1.0"
+description = "Versão Android da Central Inteligente de Mídia"
+requires-python = ">=3.11,<3.12"
+dependencies = [
+    "PySide6==6.9.1",
+]
+
+[tool.pyside6-project]
+files = [
+    "main.py",
+    "qml/Main.qml",
+]
