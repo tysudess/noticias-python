@@ -1,0 +1,164 @@
+name: Build Android APK MVP
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - android-apk-v1
+    paths:
+      - "android/**"
+      - ".github/workflows/build-android-apk.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: android-apk-v1
+  cancel-in-progress: true
+
+env:
+  PYSIDE_VERSION: "6.9.1"
+  ANDROID_NDK_VERSION: "27.2.12479018"
+  APK_ARTIFACT_NAME: "Central-Inteligente-Midia-Android-APK"
+
+jobs:
+  build-apk:
+    name: Gerar APK arm64
+    runs-on: ubuntu-22.04
+    timeout-minutes: 120
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configurar Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+          cache-dependency-path: android/requirements.txt
+
+      - name: Configurar Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Configurar Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Instalar dependências do sistema
+        shell: bash
+        run: |
+          set -euxo pipefail
+          sudo apt-get update
+          sudo apt-get install -y \
+            autoconf \
+            automake \
+            build-essential \
+            ccache \
+            cmake \
+            git \
+            libffi-dev \
+            libltdl-dev \
+            libncurses5-dev \
+            libncursesw5-dev \
+            libssl-dev \
+            libtool \
+            pkg-config \
+            unzip \
+            zip \
+            zlib1g-dev
+
+      - name: Instalar Android SDK e NDK compatíveis
+        shell: bash
+        run: |
+          set -euxo pipefail
+          yes | sdkmanager --licenses >/dev/null || true
+          sdkmanager \
+            "platform-tools" \
+            "platforms;android-34" \
+            "platforms;android-35" \
+            "build-tools;35.0.0" \
+            "ndk;${ANDROID_NDK_VERSION}"
+
+      - name: Criar ambiente Python de build
+        shell: bash
+        run: |
+          set -euxo pipefail
+          python -m venv "${RUNNER_TEMP}/central-android-venv"
+          source "${RUNNER_TEMP}/central-android-venv/bin/activate"
+          python -m pip install --upgrade pip setuptools wheel
+          python -m pip install "PySide6==${PYSIDE_VERSION}"
+
+      - name: Validar QML
+        shell: bash
+        run: |
+          set -euxo pipefail
+          source "${RUNNER_TEMP}/central-android-venv/bin/activate"
+          pyside6-qmllint android/qml/Main.qml
+
+      - name: Baixar wheels oficiais PySide6 Android arm64
+        shell: bash
+        run: |
+          set -euxo pipefail
+          mkdir -p "${RUNNER_TEMP}/android-wheels"
+
+          PYSIDE_WHEEL="${RUNNER_TEMP}/android-wheels/PySide6-${PYSIDE_VERSION}-${PYSIDE_VERSION}-cp311-cp311-android_aarch64.whl"
+          SHIBOKEN_WHEEL="${RUNNER_TEMP}/android-wheels/shiboken6-${PYSIDE_VERSION}-${PYSIDE_VERSION}-cp311-cp311-android_aarch64.whl"
+
+          curl --fail --location --retry 3 \
+            "https://download.qt.io/official_releases/QtForPython/pyside6/PySide6-${PYSIDE_VERSION}-${PYSIDE_VERSION}-cp311-cp311-android_aarch64.whl" \
+            --output "${PYSIDE_WHEEL}"
+
+          curl --fail --location --retry 3 \
+            "https://download.qt.io/official_releases/QtForPython/shiboken6/shiboken6-${PYSIDE_VERSION}-${PYSIDE_VERSION}-cp311-cp311-android_aarch64.whl" \
+            --output "${SHIBOKEN_WHEEL}"
+
+          test -s "${PYSIDE_WHEEL}"
+          test -s "${SHIBOKEN_WHEEL}"
+
+          echo "PYSIDE_ANDROID_WHEEL=${PYSIDE_WHEEL}" >> "${GITHUB_ENV}"
+          echo "SHIBOKEN_ANDROID_WHEEL=${SHIBOKEN_WHEEL}" >> "${GITHUB_ENV}"
+
+      - name: Gerar APK
+        shell: bash
+        working-directory: android
+        run: |
+          set -euxo pipefail
+          source "${RUNNER_TEMP}/central-android-venv/bin/activate"
+
+          pyside6-android-deploy \
+            --name "Central Inteligente de Midia" \
+            --wheel-pyside="${PYSIDE_ANDROID_WHEEL}" \
+            --wheel-shiboken="${SHIBOKEN_ANDROID_WHEEL}" \
+            --sdk-path="${ANDROID_SDK_ROOT}" \
+            --ndk-path="${ANDROID_SDK_ROOT}/ndk/${ANDROID_NDK_VERSION}" \
+            --extra-modules="Quick,Qml,QuickControls2" \
+            --keep-deployment-files \
+            --force \
+            --verbose
+
+      - name: Localizar APK gerado
+        id: apk
+        shell: bash
+        run: |
+          set -euxo pipefail
+          APK_PATH="$(find android -type f -name '*.apk' | head -n 1)"
+          if [ -z "${APK_PATH}" ]; then
+            echo "Nenhum APK foi encontrado."
+            find android -maxdepth 5 -type f | sort
+            exit 1
+          fi
+
+          mkdir -p release-android
+          cp "${APK_PATH}" "release-android/Central-Inteligente-de-Midia-Android-arm64-debug.apk"
+          echo "apk_path=release-android/Central-Inteligente-de-Midia-Android-arm64-debug.apk" >> "${GITHUB_OUTPUT}"
+
+      - name: Publicar APK como artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.APK_ARTIFACT_NAME }}
+          path: ${{ steps.apk.outputs.apk_path }}
+          if-no-files-found: error
+          retention-days: 14
