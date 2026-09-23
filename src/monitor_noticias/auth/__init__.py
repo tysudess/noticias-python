@@ -4,12 +4,14 @@ from .client import AuthApiClient, AuthApiError
 from .config import AUTH_API_URL, auth_server_configured
 from .device import DeviceIdentity, current_device_identity
 from .models import AuthSession, AuthUser
+from .runtime import AuthRuntime
 from .storage import AuthTokenStore
 
 __all__ = [
     "AUTH_API_URL",
     "AuthApiClient",
     "AuthApiError",
+    "AuthRuntime",
     "AuthSession",
     "AuthTokenStore",
     "AuthUser",

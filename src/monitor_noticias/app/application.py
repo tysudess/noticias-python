@@ -42,7 +42,7 @@ class Application:
                 "1",
             )
 
-        from PySide6.QtWidgets import QApplication
+        from PySide6.QtWidgets import QApplication, QDialog
         from monitor_noticias.app.composition import AppContainer
 
         from monitor_noticias.ui.extractor_proxy_patch import (
@@ -87,7 +87,6 @@ class Application:
         install_news_extractor_proxy_patch()
         install_news_direct_link_patch()
         install_cross_platform_runtime_patch()
-
         install_pdf_export_quality_fix()
 
         from monitor_noticias.ui.main_window import MainWindow
@@ -130,6 +129,41 @@ class Application:
         if not app_icon.isNull():
             qt_app.setWindowIcon(app_icon)
 
+        auth_runtime = None
+        auth_session = None
+
+        from monitor_noticias.auth.config import auth_server_configured
+
+        if auth_server_configured():
+            from monitor_noticias.auth.runtime import AuthRuntime
+            from monitor_noticias.ui.login_dialog import LoginDialog
+
+            auth_runtime = AuthRuntime(self.paths)
+
+            login = LoginDialog(
+                auth_runtime,
+                app_icon=app_icon,
+            )
+
+            result = login.exec()
+
+            if (
+                result != QDialog.DialogCode.Accepted
+                or login.session is None
+            ):
+                log.info(
+                    "Acesso não autenticado. Aplicação encerrada."
+                )
+                return 0
+
+            auth_session = login.session
+
+        else:
+            log.warning(
+                "Servidor de autenticação ainda não configurado. "
+                "Login obrigatório permanece desativado."
+            )
+
         container = AppContainer.build(self.paths)
 
         window = MainWindow(
@@ -145,6 +179,17 @@ class Application:
         install_demands_news_actions(window)
         install_home_dashboard_patch(window)
         install_visual_refinement_patch(qt_app, window)
+
+        if auth_runtime is not None and auth_session is not None:
+            from monitor_noticias.ui.auth_window_integration import (
+                install_authenticated_window,
+            )
+
+            install_authenticated_window(
+                window,
+                auth_runtime,
+                auth_session,
+            )
 
         window.show()
 
