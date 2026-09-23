@@ -13,6 +13,7 @@ from PySide6.QtWidgets import QFileDialog
 
 from pypdf import PageObject, PdfWriter
 from pypdf.generic import (
+    BooleanObject,
     DictionaryObject,
     EncodedStreamObject,
     NameObject,
@@ -20,7 +21,6 @@ from pypdf.generic import (
 )
 
 from monitor_noticias.pdf_editor.core import (
-    PDF_PAGE_WIDTH_PT,
     PdfEditorModel,
     PdfExportQuality,
     PdfItemKind,
@@ -32,25 +32,124 @@ log = logging.getLogger(__name__)
 
 _INSTALLED = False
 
+DEFAULT_IMAGE_DPI = 300.0
+MIN_VALID_DPI = 36.0
+MAX_VALID_DPI = 1200.0
 
-def _image_page(
-    writer: PdfWriter,
+
+def _safe_dpi(
+    value,
+    fallback: float = DEFAULT_IMAGE_DPI,
+) -> float:
+    try:
+        dpi = float(value)
+
+        if (
+            MIN_VALID_DPI
+            <= dpi
+            <= MAX_VALID_DPI
+        ):
+            return dpi
+
+    except Exception:
+        pass
+
+    return float(
+        fallback
+    )
+
+
+def _image_dpi(
+    image: Image.Image,
+) -> tuple[float, float]:
+    raw = image.info.get(
+        "dpi"
+    )
+
+    if (
+        isinstance(
+            raw,
+            (tuple, list),
+        )
+        and len(raw) >= 2
+    ):
+        return (
+            _safe_dpi(
+                raw[0]
+            ),
+            _safe_dpi(
+                raw[1]
+            ),
+        )
+
+    if isinstance(
+        raw,
+        (int, float),
+    ):
+        dpi = _safe_dpi(
+            raw
+        )
+        return (
+            dpi,
+            dpi,
+        )
+
+    return (
+        DEFAULT_IMAGE_DPI,
+        DEFAULT_IMAGE_DPI,
+    )
+
+
+def _page_for_pixels(
     width_px: int,
     height_px: int,
+    dpi_x: float,
+    dpi_y: float,
 ) -> PageObject:
-    width_px = max(1, int(width_px))
-    height_px = max(1, int(height_px))
+    width_px = max(
+        1,
+        int(
+            width_px
+        ),
+    )
+    height_px = max(
+        1,
+        int(
+            height_px
+        ),
+    )
 
-    page_width = PDF_PAGE_WIDTH_PT
-    page_height = (
-        page_width
-        * float(height_px)
-        / float(width_px)
+    dpi_x = _safe_dpi(
+        dpi_x
+    )
+    dpi_y = _safe_dpi(
+        dpi_y
+    )
+
+    width_pt = (
+        float(
+            width_px
+        )
+        / dpi_x
+        * 72.0
+    )
+    height_pt = (
+        float(
+            height_px
+        )
+        / dpi_y
+        * 72.0
     )
 
     return PageObject.create_blank_page(
-        width=page_width,
-        height=page_height,
+        width=max(
+            1.0,
+            width_pt,
+        ),
+        height=max(
+            1.0,
+            height_pt,
+        ),
     )
 
 
@@ -92,11 +191,13 @@ def _attach_image_xobject(
 
     commands = (
         "q\n"
-        f"{page_width:.6f} 0 0 "
-        f"{page_height:.6f} 0 0 cm\n"
+        f"{page_width:.8f} 0 0 "
+        f"{page_height:.8f} 0 0 cm\n"
         "/Im0 Do\n"
         "Q\n"
-    ).encode("ascii")
+    ).encode(
+        "ascii"
+    )
 
     content._data = zlib.compress(
         commands,
@@ -116,44 +217,106 @@ def _attach_image_xobject(
     )
 
 
+def _write_export_log(
+    self: PdfEditorModel,
+    lines: list[str],
+) -> None:
+    try:
+        target = (
+            self.data_dir
+            / "pdf_export_quality.log"
+        )
+
+        target.parent.mkdir(
+            parents=True,
+            exist_ok=True,
+        )
+
+        target.write_text(
+            "\n".join(
+                lines
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+
+    except Exception:
+        log.exception(
+            "Não foi possível gravar o log de qualidade do PDF."
+        )
+
+
 def _append_original_jpeg(
     self: PdfEditorModel,
     writer: PdfWriter,
     source: Path,
+    diagnostics: list[str] | None = None,
 ) -> bool:
-    """Insere JPEG original sem decodificar/recomprimir."""
-
-    source = Path(source)
+    source = Path(
+        source
+    )
 
     if (
         source.suffix.lower()
-        not in {".jpg", ".jpeg"}
+        not in {
+            ".jpg",
+            ".jpeg",
+        }
         or not source.is_file()
     ):
         return False
 
     try:
-        with Image.open(source) as image:
+        with Image.open(
+            source
+        ) as image:
             image.verify()
 
-        with Image.open(source) as image:
-            width = int(image.width)
-            height = int(image.height)
-            mode = str(image.mode).upper()
+        with Image.open(
+            source
+        ) as image:
+            width = int(
+                image.width
+            )
+            height = int(
+                image.height
+            )
+            mode = str(
+                image.mode
+            ).upper()
+
+            dpi_x, dpi_y = (
+                _image_dpi(
+                    image
+                )
+            )
 
             if mode == "RGB":
-                color_space = "/DeviceRGB"
+                color_space = (
+                    "/DeviceRGB"
+                )
             elif mode == "L":
-                color_space = "/DeviceGray"
+                color_space = (
+                    "/DeviceGray"
+                )
             else:
                 return False
 
             try:
-                orientation = image.getexif().get(274, 1)
+                orientation = (
+                    image.getexif()
+                    .get(
+                        274,
+                        1,
+                    )
+                )
             except Exception:
                 orientation = 1
 
-            if orientation not in {None, 1}:
+            if orientation not in {
+                None,
+                1,
+            }:
                 return False
 
         raw = source.read_bytes()
@@ -161,31 +324,57 @@ def _append_original_jpeg(
         if len(raw) < 4:
             return False
 
-        page = _image_page(
-            writer,
+        page = _page_for_pixels(
             width,
             height,
+            dpi_x,
+            dpi_y,
         )
 
-        stream = EncodedStreamObject()
+        stream = (
+            EncodedStreamObject()
+        )
+
+        # JPEG ORIGINAL: nenhuma recompressão.
         stream._data = raw
 
         stream.update(
             {
                 NameObject("/Type"):
-                    NameObject("/XObject"),
+                    NameObject(
+                        "/XObject"
+                    ),
                 NameObject("/Subtype"):
-                    NameObject("/Image"),
+                    NameObject(
+                        "/Image"
+                    ),
                 NameObject("/Width"):
-                    NumberObject(width),
+                    NumberObject(
+                        width
+                    ),
                 NameObject("/Height"):
-                    NumberObject(height),
+                    NumberObject(
+                        height
+                    ),
                 NameObject("/ColorSpace"):
-                    NameObject(color_space),
+                    NameObject(
+                        color_space
+                    ),
                 NameObject("/BitsPerComponent"):
-                    NumberObject(8),
+                    NumberObject(
+                        8
+                    ),
                 NameObject("/Filter"):
-                    NameObject("/DCTDecode"),
+                    NameObject(
+                        "/DCTDecode"
+                    ),
+
+                # Evita que o visualizador aplique suavização que deixa
+                # screenshots/textos pequenos aparentemente borrados.
+                NameObject("/Interpolate"):
+                    BooleanObject(
+                        False
+                    ),
             }
         )
 
@@ -195,38 +384,111 @@ def _append_original_jpeg(
             stream,
         )
 
-        writer.add_page(page)
+        writer.add_page(
+            page
+        )
+
+        if diagnostics is not None:
+            diagnostics.append(
+                (
+                    f"JPEG ORIGINAL | {source.name} | "
+                    f"{width}x{height} px -> "
+                    f"{width}x{height} px | "
+                    f"DPI {dpi_x:.2f}x{dpi_y:.2f} | "
+                    "sem recompressao | interpolate=false"
+                )
+            )
+
         return True
 
     except Exception:
         log.exception(
-            "Falha ao inserir JPEG original; "
-            "usando fallback lossless."
+            "Falha ao inserir JPEG original; usando fallback lossless."
         )
         return False
 
 
-def _append_raster_lossless_fast(
+def _flatten_to_rgb(
+    image: Image.Image,
+) -> Image.Image:
+    if image.mode == "RGB":
+        return image.copy()
+
+    if image.mode in {
+        "RGBA",
+        "LA",
+    } or (
+        image.mode == "P"
+        and "transparency"
+        in image.info
+    ):
+        rgba = image.convert(
+            "RGBA"
+        )
+
+        background = Image.new(
+            "RGBA",
+            rgba.size,
+            (
+                255,
+                255,
+                255,
+                255,
+            ),
+        )
+
+        background.alpha_composite(
+            rgba
+        )
+
+        return background.convert(
+            "RGB"
+        )
+
+    return image.convert(
+        "RGB"
+    )
+
+
+def _append_raster_native(
     self: PdfEditorModel,
     writer: PdfWriter,
     image: Image.Image,
+    *,
+    source_name: str = "imagem",
+    diagnostics: list[str] | None = None,
 ) -> None:
-    """Mantém todos os pixels; zlib level=1 só reduz tempo de CPU."""
+    """Insere todos os pixels da imagem, sem resize/downsample."""
 
-    rgb = (
+    dpi_x, dpi_y = (
+        _image_dpi(
+            image
+        )
+    )
+
+    rgb = _flatten_to_rgb(
         image
-        if image.mode == "RGB"
-        else image.convert("RGB")
     )
 
-    page = _image_page(
-        writer,
-        rgb.width,
-        rgb.height,
+    width = int(
+        rgb.width
+    )
+    height = int(
+        rgb.height
     )
 
-    stream = EncodedStreamObject()
+    page = _page_for_pixels(
+        width,
+        height,
+        dpi_x,
+        dpi_y,
+    )
 
+    stream = (
+        EncodedStreamObject()
+    )
+
+    # Flate é lossless. level=1 altera apenas tamanho/tempo, nunca pixels.
     stream._data = zlib.compress(
         rgb.tobytes(),
         level=1,
@@ -235,19 +497,37 @@ def _append_raster_lossless_fast(
     stream.update(
         {
             NameObject("/Type"):
-                NameObject("/XObject"),
+                NameObject(
+                    "/XObject"
+                ),
             NameObject("/Subtype"):
-                NameObject("/Image"),
+                NameObject(
+                    "/Image"
+                ),
             NameObject("/Width"):
-                NumberObject(rgb.width),
+                NumberObject(
+                    width
+                ),
             NameObject("/Height"):
-                NumberObject(rgb.height),
+                NumberObject(
+                    height
+                ),
             NameObject("/ColorSpace"):
-                NameObject("/DeviceRGB"),
+                NameObject(
+                    "/DeviceRGB"
+                ),
             NameObject("/BitsPerComponent"):
-                NumberObject(8),
+                NumberObject(
+                    8
+                ),
             NameObject("/Filter"):
-                NameObject("/FlateDecode"),
+                NameObject(
+                    "/FlateDecode"
+                ),
+            NameObject("/Interpolate"):
+                BooleanObject(
+                    False
+                ),
         }
     )
 
@@ -257,27 +537,52 @@ def _append_raster_lossless_fast(
         stream,
     )
 
-    writer.add_page(page)
+    writer.add_page(
+        page
+    )
+
+    if diagnostics is not None:
+        diagnostics.append(
+            (
+                f"RASTER LOSSLESS | {source_name} | "
+                f"{width}x{height} px -> "
+                f"{width}x{height} px | "
+                f"DPI {dpi_x:.2f}x{dpi_y:.2f} | "
+                "sem downsample | interpolate=false"
+            )
+        )
 
 
 def _save_config_actual_cover(
     self: PdfEditorModel,
 ) -> None:
-    data: dict[str, str] = {}
+    data: dict[
+        str,
+        str,
+    ] = {}
 
     if self.custom_cover is not None:
         try:
             relative = (
-                Path(self.custom_cover)
+                Path(
+                    self.custom_cover
+                )
                 .resolve()
                 .relative_to(
                     self.app_root.resolve()
                 )
             )
-            data["custom_cover"] = relative.as_posix()
+
+            data[
+                "custom_cover"
+            ] = (
+                relative.as_posix()
+            )
 
         except Exception:
-            data["custom_cover"] = (
+            data[
+                "custom_cover"
+            ] = (
                 "data/"
                 + Path(
                     self.custom_cover
@@ -298,17 +603,24 @@ def _save_custom_cover_original(
     self: PdfEditorModel,
     source: Path,
 ) -> None:
-    """Copia a capa sem conversão, resize ou reencode."""
-
-    source = Path(source)
+    source = Path(
+        source
+    )
 
     if not source.is_file():
-        raise FileNotFoundError(source)
+        raise FileNotFoundError(
+            source
+        )
 
-    with Image.open(source) as image:
+    with Image.open(
+        source
+    ) as image:
         image.verify()
 
-    suffix = source.suffix.lower() or ".png"
+    suffix = (
+        source.suffix.lower()
+        or ".png"
+    )
 
     target = (
         self.data_dir
@@ -328,35 +640,48 @@ def _save_custom_cover_original(
         target,
     )
 
-    self.custom_cover = target
+    self.custom_cover = (
+        target
+    )
 
     _save_config_actual_cover(
         self
     )
 
 
-def _export_full_quality(
+def _export_native_quality(
     self: PdfEditorModel,
     output: Path,
     *,
     include_cover: bool = True,
-    quality: PdfExportQuality = PdfExportQuality.HIGH,
+    quality:
+        PdfExportQuality
+        = PdfExportQuality.HIGH,
     title: str = "",
     author: str = "",
 ) -> Path:
-    """Exporta sem reduzir resolução de imagens."""
-
-    if not self.pages and not include_cover:
+    if (
+        not self.pages
+        and not include_cover
+    ):
         raise ValueError(
             "Adicione ao menos uma página "
             "ou mantenha a capa ativada."
         )
 
-    output = Path(output)
+    output = Path(
+        output
+    )
 
-    if output.suffix.lower() != ".pdf":
-        output = output.with_name(
-            output.name + ".pdf"
+    if (
+        output.suffix.lower()
+        != ".pdf"
+    ):
+        output = (
+            output.with_name(
+                output.name
+                + ".pdf"
+            )
         )
 
     output.parent.mkdir(
@@ -366,40 +691,76 @@ def _export_full_quality(
 
     writer = PdfWriter()
 
-    metadata: dict[str, str] = {}
+    diagnostics: list[str] = [
+        "EXPORTACAO PDF - QUALIDADE NATIVA",
+        f"arquivo={output}",
+        (
+            "regra=nenhuma imagem raster e reduzida "
+            "antes de entrar no PDF"
+        ),
+        "",
+    ]
+
+    metadata: dict[
+        str,
+        str,
+    ] = {}
 
     if title.strip():
-        metadata["/Title"] = title.strip()
+        metadata[
+            "/Title"
+        ] = title.strip()
 
     if author.strip():
-        metadata["/Author"] = author.strip()
+        metadata[
+            "/Author"
+        ] = author.strip()
 
     if metadata:
-        writer.add_metadata(metadata)
+        writer.add_metadata(
+            metadata
+        )
 
     if include_cover:
         cover_inserted = False
 
         if (
             self.custom_cover
-            and Path(self.custom_cover).is_file()
+            and Path(
+                self.custom_cover
+            ).is_file()
         ):
-            cover_inserted = _append_original_jpeg(
-                self,
-                writer,
-                Path(self.custom_cover),
+            cover_inserted = (
+                _append_original_jpeg(
+                    self,
+                    writer,
+                    Path(
+                        self.custom_cover
+                    ),
+                    diagnostics,
+                )
             )
 
         if not cover_inserted:
-            _append_raster_lossless_fast(
-                self,
-                writer,
-                self.current_cover_image(),
+            cover_image = (
+                self.current_cover_image()
             )
 
-    for data in self.pages:
+            _append_raster_native(
+                self,
+                writer,
+                cover_image,
+                source_name="capa",
+                diagnostics=diagnostics,
+            )
+
+    for index, data in enumerate(
+        self.pages,
+        start=1,
+    ):
         if (
-            data.kind is PdfItemKind.PDF
+            data.kind
+            is PdfItemKind.PDF
             and data.rotation == 0
             and not data.flip_x
             and data.crop is None
@@ -408,30 +769,57 @@ def _export_full_quality(
                 writer,
                 data,
             )
+
+            diagnostics.append(
+                (
+                    f"PAGINA {index} | PDF VETORIAL | "
+                    f"{Path(data.path).name} | "
+                    "sem rasterizacao"
+                )
+            )
+
             continue
 
         if (
-            data.kind is PdfItemKind.IMAGE
+            data.kind
+            is PdfItemKind.IMAGE
             and data.rotation == 0
             and not data.flip_x
             and data.crop is None
             and _append_original_jpeg(
                 self,
                 writer,
-                Path(data.path),
+                Path(
+                    data.path
+                ),
+                diagnostics,
             )
         ):
             continue
 
-        rendered = self.render_final_page(
-            data,
-            quality.dpi,
+        rendered = (
+            self.render_final_page(
+                data,
+                quality.dpi,
+            )
         )
 
-        _append_raster_lossless_fast(
+        source_name = (
+            Path(
+                data.path
+            ).name
+            if data.path
+            else (
+                f"pagina-{index}"
+            )
+        )
+
+        _append_raster_native(
             self,
             writer,
             rendered,
+            source_name=source_name,
+            diagnostics=diagnostics,
         )
 
     temporary = (
@@ -446,10 +834,16 @@ def _export_full_quality(
     )
 
     try:
-        with temporary.open("wb") as stream:
-            writer.write(stream)
+        with temporary.open(
+            "wb"
+        ) as stream:
+            writer.write(
+                stream
+            )
 
-        temporary.replace(output)
+        temporary.replace(
+            output
+        )
 
     finally:
         try:
@@ -458,14 +852,22 @@ def _export_full_quality(
         except Exception:
             pass
 
+    diagnostics.append("")
+    diagnostics.append(
+        f"resultado={output}"
+    )
+
+    _write_export_log(
+        self,
+        diagnostics,
+    )
+
     return output
 
 
-def _export_without_blocking_success_dialog(
+def _export_without_blocking_dialog(
     self,
 ) -> None:
-    """Exporta em thread e não abre popup modal de sucesso."""
-
     if (
         not self.model.pages
         and not self.include_cover.isChecked()
@@ -477,8 +879,10 @@ def _export_without_blocking_success_dialog(
         return
 
     if (
-        self._export_thread is not None
-        and self._export_thread.isRunning()
+        self._export_thread
+        is not None
+        and self._export_thread
+        .isRunning()
     ):
         self.status.setText(
             "A exportação já está em andamento."
@@ -491,11 +895,13 @@ def _export_without_blocking_success_dialog(
         else "documento.pdf"
     )
 
-    name, _ = QFileDialog.getSaveFileName(
-        self,
-        "Salvar PDF",
-        default_name,
-        "PDF (*.pdf)",
+    name, _ = (
+        QFileDialog.getSaveFileName(
+            self,
+            "Salvar PDF",
+            default_name,
+            "PDF (*.pdf)",
+        )
     )
 
     if not name:
@@ -505,36 +911,58 @@ def _export_without_blocking_success_dialog(
         update_status=False
     )
 
-    self.export_button.setEnabled(False)
+    self.export_button.setEnabled(
+        False
+    )
 
     self.status.setText(
-        "Gerando PDF em qualidade original..."
+        "Gerando PDF com os pixels originais..."
     )
 
-    thread = QThread(self)
-
-    worker = pdf_page_module._ExportWorker(
-        self.model,
-        Path(name),
-        self.include_cover.isChecked(),
+    thread = QThread(
+        self
     )
 
-    worker.moveToThread(thread)
+    worker = (
+        pdf_page_module
+        ._ExportWorker(
+            self.model,
+            Path(
+                name
+            ),
+            self.include_cover.isChecked(),
+        )
+    )
+
+    worker.moveToThread(
+        thread
+    )
 
     thread.started.connect(
         worker.run
     )
 
-    def success(path: str) -> None:
-        self.export_button.setEnabled(True)
-
-        self.status.setText(
-            "PDF gerado com sucesso - qualidade original: "
-            + path
+    def success(
+        path: str,
+    ) -> None:
+        self.export_button.setEnabled(
+            True
         )
 
-    def failure(message: str) -> None:
-        self.export_button.setEnabled(True)
+        self.status.setText(
+            (
+                "PDF gerado sem redução de resolução. "
+                "Qualidade nativa preservada: "
+                + path
+            )
+        )
+
+    def failure(
+        message: str,
+    ) -> None:
+        self.export_button.setEnabled(
+            True
+        )
 
         self.status.setText(
             "Erro ao gerar PDF: "
@@ -545,11 +973,19 @@ def _export_without_blocking_success_dialog(
         self._export_thread = None
         self._export_worker = None
 
-    worker.done.connect(success)
-    worker.failed.connect(failure)
+    worker.done.connect(
+        success
+    )
+    worker.failed.connect(
+        failure
+    )
 
-    worker.done.connect(thread.quit)
-    worker.failed.connect(thread.quit)
+    worker.done.connect(
+        thread.quit
+    )
+    worker.failed.connect(
+        thread.quit
+    )
 
     thread.finished.connect(
         worker.deleteLater
@@ -561,8 +997,12 @@ def _export_without_blocking_success_dialog(
         thread.deleteLater
     )
 
-    self._export_thread = thread
-    self._export_worker = worker
+    self._export_thread = (
+        thread
+    )
+    self._export_worker = (
+        worker
+    )
 
     thread.start()
 
@@ -574,19 +1014,23 @@ def install_pdf_export_quality_fix() -> None:
         return
 
     PdfEditorModel._append_raster = (
-        _append_raster_lossless_fast
+        _append_raster_native
     )
+
     PdfEditorModel.save_custom_cover = (
         _save_custom_cover_original
     )
+
     PdfEditorModel._save_config = (
         _save_config_actual_cover
     )
+
     PdfEditorModel.export_pdf = (
-        _export_full_quality
+        _export_native_quality
     )
+
     pdf_page_module.PdfEditorPage._export = (
-        _export_without_blocking_success_dialog
+        _export_without_blocking_dialog
     )
 
     _INSTALLED = True
