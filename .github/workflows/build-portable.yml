@@ -10,6 +10,8 @@ on:
       - "portable/**"
       - "tools/news_extractor/**"
       - "tools/spreadsheet_automation/**"
+      - "tools/globoplay-login-helper.py"
+      - "tools/build-globoplay-login-helper.py"
       - "run.py"
       - "requirements*.txt"
       - "pyproject.toml"
@@ -27,9 +29,6 @@ concurrency:
 env:
   PORTABLE_NAME: MonitorDeNoticias-Windows-Portable-x64.zip
   ARTIFACT_NAME: monitor-portable-release
-
-  # Runtime externo da Automação de Planilhas.
-  # O EXE de ~85 MB fica como asset de uma Release, não dentro do Git.
   PLANILHAS_RUNTIME_TAG: planilhas-runtime-v1.0.4
   PLANILHAS_RUNTIME_ASSET: AutomacaoPlanilhas-Windows-Portable-v1.0.4.exe
 
@@ -66,7 +65,6 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install -r requirements.txt -r requirements-build.txt
 
-          # Garante explicitamente o backend de áudio do sistema.
           python -m pip install `
             --upgrade `
             --only-binary=:all: `
@@ -80,15 +78,49 @@ jobs:
           python -c "import pyaudiowpatch; import _portaudiowpatch; print('PyAudioWPatch OK:', pyaudiowpatch.__file__)"
           python -m pip show PyAudioWPatch
 
+      - name: Gerar helper de login Globoplay
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          python tools/build-globoplay-login-helper.py
+
+          $helper = "resources/globoplay-login-helper/GloboplayLoginHelper.exe"
+
+          if (-not (Test-Path $helper)) {
+            throw "GloboplayLoginHelper.exe não foi gerado."
+          }
+
+          $helperSize = (Get-Item $helper).Length
+
+          if ($helperSize -lt 20MB) {
+            throw "GloboplayLoginHelper.exe parece incompleto: $helperSize bytes."
+          }
+
+          Write-Host "Helper Globoplay gerado: $helper"
+          Write-Host "Tamanho: $([math]::Round($helperSize / 1MB, 2)) MB"
+
+          & $helper --help
+
+          if ($LASTEXITCODE -ne 0) {
+            throw "GloboplayLoginHelper.exe não executou o teste --help."
+          }
+
       - name: Gerar Extrator de Notícias Electron
         shell: pwsh
         run: |
           Push-Location "tools/news_extractor"
+
           try {
             npm install --no-audit --no-fund
             npm run dist
 
-            $exe = Get-ChildItem "dist" -Filter "ExtratorMateriasPortable-V1.25.19.exe" -Recurse | Select-Object -First 1
+            $exe = Get-ChildItem `
+              "dist" `
+              -Filter "ExtratorMateriasPortable-V1.25.19.exe" `
+              -Recurse |
+              Select-Object -First 1
+
             if (-not $exe) {
               throw "ExtratorMateriasPortable-V1.25.19.exe não foi gerado."
             }
@@ -130,6 +162,8 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          $ErrorActionPreference = "Stop"
+
           $root = Resolve-Path "dist/MonitorDeNoticias"
 
           foreach ($dir in @(
@@ -150,6 +184,26 @@ jobs:
             Copy-Item "resources/*" (Join-Path $root "resources") -Recurse -Force
           }
 
+          $helperSource = "resources/globoplay-login-helper/GloboplayLoginHelper.exe"
+          $helperTargetDir = Join-Path $root "resources/globoplay-login-helper"
+          $helperTarget = Join-Path $helperTargetDir "GloboplayLoginHelper.exe"
+
+          if (-not (Test-Path $helperSource)) {
+            throw "Fonte GloboplayLoginHelper.exe ausente após o build."
+          }
+
+          New-Item -ItemType Directory -Force -Path $helperTargetDir | Out-Null
+
+          Copy-Item $helperSource $helperTarget -Force
+
+          if (-not (Test-Path $helperTarget)) {
+            throw "GloboplayLoginHelper.exe não foi copiado para o portable."
+          }
+
+          if ((Get-Item $helperTarget).Length -lt 20MB) {
+            throw "GloboplayLoginHelper.exe copiado para o portable está incompleto."
+          }
+
           $extractor = Get-ChildItem `
             "tools/news_extractor/dist" `
             -Filter "ExtratorMateriasPortable-V1.25.19.exe" `
@@ -165,9 +219,6 @@ jobs:
             (Join-Path $root "tools/news_extractor/ExtratorMateriasPortable-V1.25.19.exe") `
             -Force
 
-          # O executável standalone é grande demais para upload pela interface
-          # web do repositório. Ele é mantido como asset da Release fixa:
-          # planilhas-runtime-v1.0.4
           $sheetTargetDir = Join-Path $root "tools/spreadsheet_automation"
           $sheetTarget = Join-Path $sheetTargetDir $env:PLANILHAS_RUNTIME_ASSET
           $sheetConfig = "tools/spreadsheet_automation/config.json"
@@ -175,10 +226,6 @@ jobs:
           if (-not (Test-Path $sheetConfig)) {
             throw "config.json da Automação de Planilhas não foi encontrado no repositório."
           }
-
-          Write-Host "Baixando runtime da Automação de Planilhas..."
-          Write-Host "Tag: $env:PLANILHAS_RUNTIME_TAG"
-          Write-Host "Asset: $env:PLANILHAS_RUNTIME_ASSET"
 
           gh release download `
             $env:PLANILHAS_RUNTIME_TAG `
@@ -188,20 +235,16 @@ jobs:
             --clobber
 
           if ($LASTEXITCODE -ne 0) {
-            throw "Falha ao baixar o runtime da Automação de Planilhas da Release $env:PLANILHAS_RUNTIME_TAG."
+            throw "Falha ao baixar o runtime da Automação de Planilhas."
           }
 
           if (-not (Test-Path $sheetTarget)) {
-            throw "O asset $env:PLANILHAS_RUNTIME_ASSET não foi baixado da Release $env:PLANILHAS_RUNTIME_TAG."
+            throw "Runtime da Automação de Planilhas não foi baixado."
           }
-
-          $sheetSizeMB = [math]::Round((Get-Item $sheetTarget).Length / 1MB, 2)
 
           if ((Get-Item $sheetTarget).Length -lt 50MB) {
-            throw "O runtime baixado parece incompleto: $sheetSizeMB MB."
+            throw "Runtime da Automação de Planilhas parece incompleto."
           }
-
-          Write-Host "Runtime de Planilhas baixado com sucesso: $sheetSizeMB MB"
 
           Copy-Item `
             $sheetConfig `
@@ -257,25 +300,16 @@ jobs:
             throw "Pacote do Deno não foi baixado."
           }
 
-          Expand-Archive `
-            -Path $tmpZip `
-            -DestinationPath $tmpDir `
-            -Force
+          Expand-Archive -Path $tmpZip -DestinationPath $tmpDir -Force
 
-          $deno = Get-ChildItem `
-            $tmpDir `
-            -Filter "deno.exe" `
-            -Recurse |
+          $deno = Get-ChildItem $tmpDir -Filter "deno.exe" -Recurse |
             Select-Object -First 1
 
           if (-not $deno) {
             throw "deno.exe não foi encontrado após a extração."
           }
 
-          Copy-Item `
-            $deno.FullName `
-            (Join-Path $bin "deno.exe") `
-            -Force
+          Copy-Item $deno.FullName (Join-Path $bin "deno.exe") -Force
 
           $denoTarget = Join-Path $bin "deno.exe"
 
@@ -283,7 +317,6 @@ jobs:
             throw "deno.exe não foi copiado para bin."
           }
 
-          Write-Host "Deno incluído para o Extrator de Vídeos:"
           & $denoTarget --version
 
       - name: Baixar FFmpeg e FFprobe
@@ -339,8 +372,11 @@ jobs:
 
           Expand-Archive $tmpZip $tmpDir -Force
 
-          $ffmpeg = Get-ChildItem $tmpDir -Filter "ffmpeg.exe" -Recurse | Select-Object -First 1
-          $ffprobe = Get-ChildItem $tmpDir -Filter "ffprobe.exe" -Recurse | Select-Object -First 1
+          $ffmpeg = Get-ChildItem $tmpDir -Filter "ffmpeg.exe" -Recurse |
+            Select-Object -First 1
+
+          $ffprobe = Get-ChildItem $tmpDir -Filter "ffprobe.exe" -Recurse |
+            Select-Object -First 1
 
           if (-not $ffmpeg -or -not $ffprobe) {
             throw "FFmpeg/FFprobe não encontrados."
@@ -352,6 +388,8 @@ jobs:
       - name: Criar ZIP portable rápido
         shell: pwsh
         run: |
+          $ErrorActionPreference = "Stop"
+
           $zip = Join-Path $PWD $env:PORTABLE_NAME
 
           if (Test-Path $zip) {
@@ -385,11 +423,11 @@ jobs:
             throw "ZIP portable não foi gerado."
           }
 
-          Write-Host "ZIP criado: $zip"
-
       - name: Validar estrutura do ZIP
         shell: pwsh
         run: |
+          $ErrorActionPreference = "Stop"
+
           Add-Type -AssemblyName System.IO.Compression.FileSystem
 
           $zipPath = (Resolve-Path $env:PORTABLE_NAME).Path
@@ -423,7 +461,7 @@ jobs:
               Select-Object -First 1
 
             if (-not $deno) {
-              throw "Deno não está no ZIP final. O YouTube ficaria sem runtime JavaScript."
+              throw "Deno não está no ZIP final."
             }
 
             $ytdlp = $archive.Entries |
@@ -434,6 +472,21 @@ jobs:
 
             if (-not $ytdlp) {
               throw "yt-dlp.exe não está no ZIP final."
+            }
+
+            $globoplayHelper = $archive.Entries |
+              Where-Object {
+                $_.FullName.Replace("\", "/") -ieq `
+                  "resources/globoplay-login-helper/GloboplayLoginHelper.exe"
+              } |
+              Select-Object -First 1
+
+            if (-not $globoplayHelper) {
+              throw "GloboplayLoginHelper.exe não está no ZIP final."
+            }
+
+            if ($globoplayHelper.Length -lt 20MB) {
+              throw "GloboplayLoginHelper.exe no ZIP parece incompleto."
             }
 
             $newsExtractor = $archive.Entries |
