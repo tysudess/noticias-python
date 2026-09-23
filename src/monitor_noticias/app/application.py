@@ -94,6 +94,9 @@ class Application:
         from monitor_noticias.ui.whatsapp_browser_integration import (
             install_whatsapp_browser,
         )
+        from monitor_noticias.ui.demands_news_actions_integration import (
+            install_demands_news_actions,
+        )
 
         qt_app = (
             QApplication.instance()
@@ -112,6 +115,7 @@ class Application:
         container = AppContainer.build(
             self.paths
         )
+
         window = MainWindow(
             controller=container.controller,
             paths=self.paths,
@@ -121,6 +125,9 @@ class Application:
             window
         )
         install_whatsapp_browser(
+            window
+        )
+        install_demands_news_actions(
             window
         )
 
