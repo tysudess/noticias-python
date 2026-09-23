@@ -98,6 +98,9 @@ class Application:
         from monitor_noticias.ui.visual_refinement_patch import (
             install_visual_refinement_patch,
         )
+        from monitor_noticias.ui.app_icon_loader import (
+            load_app_icon,
+        )
 
         install_removed_integrations_guard(MainWindow)
 
@@ -106,12 +109,19 @@ class Application:
         qt_app.setApplicationDisplayName("Central Inteligente de Mídia")
         qt_app.setOrganizationName("Central Inteligente de Mídia")
 
+        app_icon = load_app_icon()
+        if not app_icon.isNull():
+            qt_app.setWindowIcon(app_icon)
+
         container = AppContainer.build(self.paths)
 
         window = MainWindow(
             controller=container.controller,
             paths=self.paths,
         )
+
+        if not app_icon.isNull():
+            window.setWindowIcon(app_icon)
 
         remove_legacy_pages(window)
         install_screen_recorder(window)
