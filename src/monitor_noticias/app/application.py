@@ -70,7 +70,7 @@ class Application:
         install_extractor_proxy_patch()
         install_settings_proxy_toggle_patch()
 
-        # Ordem das correções de Capas:
+        # Capas:
         # V35 = Proxy Geral / fluxo base.
         # V42 = captura do navegador para o fallback web.
         # V43 = Valor Econômico usa exclusivamente Gmail.
@@ -92,6 +92,9 @@ class Application:
             install_removed_integrations_guard,
             remove_legacy_pages,
         )
+        from monitor_noticias.ui.home_dashboard_patch import (
+            install_home_dashboard_patch,
+        )
 
         install_removed_integrations_guard(MainWindow)
 
@@ -110,6 +113,9 @@ class Application:
         remove_legacy_pages(window)
         install_screen_recorder(window)
         install_demands_news_actions(window)
+
+        # V44 — ajustes visuais e de layout da Home.
+        install_home_dashboard_patch(window)
 
         window.show()
 
