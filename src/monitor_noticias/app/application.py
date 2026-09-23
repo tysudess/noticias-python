@@ -95,6 +95,9 @@ class Application:
         from monitor_noticias.ui.home_dashboard_patch import (
             install_home_dashboard_patch,
         )
+        from monitor_noticias.ui.visual_refinement_patch import (
+            install_visual_refinement_patch,
+        )
 
         install_removed_integrations_guard(MainWindow)
 
@@ -116,6 +119,12 @@ class Application:
 
         # V44 — ajustes visuais e de layout da Home.
         install_home_dashboard_patch(window)
+
+        # V45 — refinamento visual global sem alterar funcionalidades.
+        install_visual_refinement_patch(
+            qt_app,
+            window,
+        )
 
         window.show()
 
