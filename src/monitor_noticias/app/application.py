@@ -74,7 +74,6 @@ class Application:
         )
 
         install_extractor_proxy_patch()
-
         install_settings_credentials_patch()
         install_settings_proxy_toggle_patch()
 
@@ -84,7 +83,6 @@ class Application:
 
         install_news_extractor_proxy_patch()
         install_news_direct_link_patch()
-
         install_cross_platform_runtime_patch()
 
         from monitor_noticias.ui.main_window import MainWindow
@@ -104,49 +102,32 @@ class Application:
         from monitor_noticias.ui.visual_refinement_patch import (
             install_visual_refinement_patch,
         )
-        from monitor_noticias.ui.app_icon_loader import (
-            load_app_icon,
-        )
+        from monitor_noticias.ui.app_icon_loader import load_app_icon
         from monitor_noticias.ui.linux_boot_patch import (
             install_linux_boot_patch,
         )
-
-        install_removed_integrations_guard(
-            MainWindow
+        from monitor_noticias.ui.screen_recorder_linux_patch import (
+            install_linux_screen_recorder_patch,
         )
 
-        # V50: aplica antes de criar qualquer página da MainWindow.
-        install_linux_boot_patch(
-            MainWindow
-        )
+        install_removed_integrations_guard(MainWindow)
+        install_linux_boot_patch(MainWindow)
 
-        qt_app = (
-            QApplication.instance()
-            or QApplication(
-                sys.argv
-            )
-        )
+        # V51: X11 + PulseAudio/PipeWire somente no Linux.
+        install_linux_screen_recorder_patch()
 
-        qt_app.setApplicationName(
-            "Central Inteligente de Mídia"
-        )
-        qt_app.setApplicationDisplayName(
-            "Central Inteligente de Mídia"
-        )
-        qt_app.setOrganizationName(
-            "Central Inteligente de Mídia"
-        )
+        qt_app = QApplication.instance() or QApplication(sys.argv)
+
+        qt_app.setApplicationName("Central Inteligente de Mídia")
+        qt_app.setApplicationDisplayName("Central Inteligente de Mídia")
+        qt_app.setOrganizationName("Central Inteligente de Mídia")
 
         app_icon = load_app_icon()
 
         if not app_icon.isNull():
-            qt_app.setWindowIcon(
-                app_icon
-            )
+            qt_app.setWindowIcon(app_icon)
 
-        container = AppContainer.build(
-            self.paths
-        )
+        container = AppContainer.build(self.paths)
 
         window = MainWindow(
             controller=container.controller,
@@ -154,26 +135,13 @@ class Application:
         )
 
         if not app_icon.isNull():
-            window.setWindowIcon(
-                app_icon
-            )
+            window.setWindowIcon(app_icon)
 
-        remove_legacy_pages(
-            window
-        )
-        install_screen_recorder(
-            window
-        )
-        install_demands_news_actions(
-            window
-        )
-        install_home_dashboard_patch(
-            window
-        )
-        install_visual_refinement_patch(
-            qt_app,
-            window,
-        )
+        remove_legacy_pages(window)
+        install_screen_recorder(window)
+        install_demands_news_actions(window)
+        install_home_dashboard_patch(window)
+        install_visual_refinement_patch(qt_app, window)
 
         window.show()
 
