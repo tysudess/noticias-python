@@ -182,16 +182,45 @@ class ProxyDialog(QDialog):
 
         if not self.enabled.isChecked():
             ok, message = self.runtime.client.test_server()
+
+            if ok:
+                post_ok, post_message = (
+                    self.runtime.client.test_post_transport()
+                )
+
+                if not post_ok:
+                    ok = False
+                    message = post_message
+                else:
+                    message = (
+                        "Servidor de autenticação acessível. "
+                        + post_message
+                    )
+
         else:
             ok, message = self.runtime.proxy_settings.test_connection()
 
             if ok:
                 server_ok, server_message = self.runtime.client.test_server()
+
                 if not server_ok:
                     ok = False
                     message = server_message
+
                 else:
-                    message = "Proxy conectado e servidor de autenticação acessível."
+                    post_ok, post_message = (
+                        self.runtime.client.test_post_transport()
+                    )
+
+                    if not post_ok:
+                        ok = False
+                        message = post_message
+                    else:
+                        message = (
+                            "Proxy conectado. "
+                            "GET do servidor OK. "
+                            + post_message
+                        )
 
         self.message.setText(("✓  " if ok else "✕  ") + message)
 
@@ -484,6 +513,10 @@ class LoginDialog(QDialog):
             "NETWORK_TIMEOUT",
             "PROXY_ERROR",
             "PROXY_NOT_READY",
+            "PROXY_AUTH_REQUIRED",
+            "AUTH_HTTP_BLOCKED",
+            "AUTH_UPSTREAM_ERROR",
+            "TLS_ERROR",
         }:
             prefix = (
                 "Não foi possível validar o acesso. "
