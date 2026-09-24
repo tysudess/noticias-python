@@ -1,4 +1,4 @@
-const AUTH_VERSION = "1.1.2";
+const AUTH_VERSION = "1.1.3";
 
 const SHEET_USERS = "USUARIOS";
 const SHEET_DEVICES = "DISPOSITIVOS";
@@ -29,17 +29,8 @@ const ALL_PERMISSIONS = [
 const PROFILE_PERMISSIONS = {
   ADMIN: ["*"],
 
-  OPERADOR: [
-    "home",
-    "news",
-    "videos",
-    "demands",
-    "sources",
-    "history",
-    "terms",
-    "stop",
-    "news_extractor",
-  ],
+  // V64: OPERADOR com todas as abas/funções ativas.
+  OPERADOR: ["*"],
 
   EDICAO: [
     "home",

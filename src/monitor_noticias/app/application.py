@@ -42,7 +42,10 @@ class Application:
                 "1",
             )
 
-        from PySide6.QtWidgets import QApplication, QDialog
+        from PySide6.QtWidgets import (
+            QApplication,
+            QDialog,
+        )
         from monitor_noticias.app.composition import AppContainer
 
         from monitor_noticias.ui.extractor_proxy_patch import (
@@ -113,32 +116,56 @@ class Application:
         from monitor_noticias.ui.screen_recorder_linux_patch import (
             install_linux_screen_recorder_patch,
         )
+        from monitor_noticias.ui.header_refinement_patch import (
+            install_header_refinement,
+        )
 
         install_removed_integrations_guard(MainWindow)
         install_linux_boot_patch(MainWindow)
         install_linux_screen_recorder_patch()
 
-        qt_app = QApplication.instance() or QApplication(sys.argv)
+        qt_app = (
+            QApplication.instance()
+            or QApplication(
+                sys.argv
+            )
+        )
 
-        qt_app.setApplicationName("Central Inteligente de Mídia")
-        qt_app.setApplicationDisplayName("Central Inteligente de Mídia")
-        qt_app.setOrganizationName("Central Inteligente de Mídia")
+        qt_app.setApplicationName(
+            "Central Inteligente de Mídia"
+        )
+        qt_app.setApplicationDisplayName(
+            "Central Inteligente de Mídia"
+        )
+        qt_app.setOrganizationName(
+            "Central Inteligente de Mídia"
+        )
 
         app_icon = load_app_icon()
 
         if not app_icon.isNull():
-            qt_app.setWindowIcon(app_icon)
+            qt_app.setWindowIcon(
+                app_icon
+            )
 
         auth_runtime = None
         auth_session = None
 
-        from monitor_noticias.auth.config import auth_server_configured
+        from monitor_noticias.auth.config import (
+            auth_server_configured,
+        )
 
         if auth_server_configured():
-            from monitor_noticias.auth.runtime import AuthRuntime
-            from monitor_noticias.ui.login_dialog import LoginDialog
+            from monitor_noticias.auth.runtime import (
+                AuthRuntime,
+            )
+            from monitor_noticias.ui.login_dialog import (
+                LoginDialog,
+            )
 
-            auth_runtime = AuthRuntime(self.paths)
+            auth_runtime = AuthRuntime(
+                self.paths
+            )
 
             login = LoginDialog(
                 auth_runtime,
@@ -148,7 +175,8 @@ class Application:
             result = login.exec()
 
             if (
-                result != QDialog.DialogCode.Accepted
+                result
+                != QDialog.DialogCode.Accepted
                 or login.session is None
             ):
                 log.info(
@@ -156,7 +184,9 @@ class Application:
                 )
                 return 0
 
-            auth_session = login.session
+            auth_session = (
+                login.session
+            )
 
         else:
             log.warning(
@@ -164,7 +194,9 @@ class Application:
                 "Login obrigatório permanece desativado."
             )
 
-        container = AppContainer.build(self.paths)
+        container = AppContainer.build(
+            self.paths
+        )
 
         window = MainWindow(
             controller=container.controller,
@@ -172,15 +204,31 @@ class Application:
         )
 
         if not app_icon.isNull():
-            window.setWindowIcon(app_icon)
+            window.setWindowIcon(
+                app_icon
+            )
 
-        remove_legacy_pages(window)
-        install_screen_recorder(window)
-        install_demands_news_actions(window)
-        install_home_dashboard_patch(window)
-        install_visual_refinement_patch(qt_app, window)
+        remove_legacy_pages(
+            window
+        )
+        install_screen_recorder(
+            window
+        )
+        install_demands_news_actions(
+            window
+        )
+        install_home_dashboard_patch(
+            window
+        )
+        install_visual_refinement_patch(
+            qt_app,
+            window,
+        )
 
-        if auth_runtime is not None and auth_session is not None:
+        if (
+            auth_runtime is not None
+            and auth_session is not None
+        ):
             from monitor_noticias.ui.auth_window_integration import (
                 install_authenticated_window,
             )
@@ -190,6 +238,8 @@ class Application:
                 auth_runtime,
                 auth_session,
             )
+
+        install_header_refinement(window)
 
         window.show()
 
