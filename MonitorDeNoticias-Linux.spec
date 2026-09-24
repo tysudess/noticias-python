@@ -15,6 +15,9 @@ keyring_datas, keyring_bins, keyring_hidden = collect_all(
 secret_datas, secret_bins, secret_hidden = collect_all(
     "secretstorage"
 )
+trust_datas, trust_bins, trust_hidden = collect_all(
+    "truststore"
+)
 
 CAPAS_ASSETS = (
     ROOT
@@ -66,6 +69,7 @@ hidden = list(
         pdfium_hidden
         + keyring_hidden
         + secret_hidden
+        + trust_hidden
         + [
             "PySide6.QtNetwork",
             "PySide6.QtMultimedia",
@@ -74,6 +78,7 @@ hidden = list(
             "PySide6.QtWebEngineWidgets",
             "keyring.backends.SecretService",
             "secretstorage",
+            "truststore",
         ]
     )
 )
@@ -85,11 +90,13 @@ a = Analysis(
         pdfium_bins
         + keyring_bins
         + secret_bins
+        + trust_bins
     ),
     datas=(
         pdfium_datas
         + keyring_datas
         + secret_datas
+        + trust_datas
         + capas_datas
         + app_datas
     ),
@@ -97,6 +104,7 @@ a = Analysis(
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[
+        "scripts/pyi_runtime_system_trust.py",
         "scripts/pyi_runtime_linux_validation.py",
     ],
     excludes=[

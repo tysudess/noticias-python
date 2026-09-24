@@ -276,6 +276,19 @@ class ProxySettings:
                 f"Proxy respondeu HTTP {response.status_code}.",
             )
 
+        except requests.exceptions.SSLError:
+            return (
+                False,
+                (
+                    "O proxy respondeu, mas o certificado HTTPS "
+                    "corporativo não é confiável no sistema. "
+                    "A Central já tenta usar os certificados nativos "
+                    "do Windows/Ubuntu. Se esta mensagem continuar, "
+                    "instale a CA raiz da organização no repositório "
+                    "de certificados confiáveis do sistema."
+                ),
+            )
+
         except Exception as exc:
             detail = str(exc) or exc.__class__.__name__
 

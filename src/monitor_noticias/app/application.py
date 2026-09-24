@@ -28,6 +28,29 @@ class Application:
             "Inicializando Central Inteligente de Mídia PySide6"
         )
 
+        # V66 — antes de importar componentes que usam requests/urllib3,
+        # substitui o bundle interno de CAs pelo trust store nativo do SO.
+        # Isso permite confiar em CAs corporativas instaladas no Windows
+        # Certificate Store ou no trust store do Ubuntu.
+        from monitor_noticias.platform.tls import (
+            install_system_trust_store,
+        )
+
+        tls_ok, tls_status = (
+            install_system_trust_store()
+        )
+
+        if tls_ok:
+            log.info(
+                "TLS: %s",
+                tls_status,
+            )
+        else:
+            log.warning(
+                "TLS: %s",
+                tls_status,
+            )
+
         if sys.platform.startswith("win"):
             os.environ.setdefault(
                 "QT_MEDIA_BACKEND",

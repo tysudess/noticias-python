@@ -4,6 +4,7 @@ from PyInstaller.utils.hooks import collect_all
 
 pdfium_datas, pdfium_bins, pdfium_hidden = collect_all("pypdfium2")
 pawp_datas, pawp_bins, pawp_hidden = collect_all("pyaudiowpatch")
+trust_datas, trust_bins, trust_hidden = collect_all("truststore")
 
 ROOT = Path(SPECPATH)
 CAPAS_ASSETS = ROOT / "src" / "monitor_noticias" / "capas_tool" / "assets"
@@ -15,9 +16,6 @@ capas_datas = [
     (str(CAPAS_ASSETS / "app_icon.ico"), "monitor_noticias/capas_tool/assets"),
 ]
 
-# O módulo nativo do PyAudioWPatch é importado dinamicamente pelo pacote.
-# Mantê-lo explicitamente evita builds que abrem normalmente mas mostram
-# "PyAudioWPatch não está disponível" somente no portable.
 audio_hidden = list(
     dict.fromkeys(
         pawp_hidden
@@ -28,17 +26,28 @@ audio_hidden = list(
     )
 )
 
+hidden = list(
+    dict.fromkeys(
+        pdfium_hidden
+        + audio_hidden
+        + trust_hidden
+    )
+)
+
 block_cipher = None
 
 a = Analysis(
     ["run.py"],
     pathex=["src"],
-    binaries=pdfium_bins + pawp_bins,
-    datas=pdfium_datas + pawp_datas + capas_datas,
-    hiddenimports=pdfium_hidden + audio_hidden,
+    binaries=pdfium_bins + pawp_bins + trust_bins,
+    datas=pdfium_datas + pawp_datas + trust_datas + capas_datas,
+    hiddenimports=hidden,
     hookspath=[],
     hooksconfig={},
-    runtime_hooks=["scripts/pyi_runtime_portable_validation.py"],
+    runtime_hooks=[
+        "scripts/pyi_runtime_system_trust.py",
+        "scripts/pyi_runtime_portable_validation.py",
+    ],
     excludes=["pytest"],
     noarchive=False,
     optimize=0,
