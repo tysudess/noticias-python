@@ -1,4 +1,4 @@
-const AUTH_VERSION = "1.1.0";
+const AUTH_VERSION = "1.1.1";
 
 const SHEET_USERS = "USUARIOS";
 const SHEET_DEVICES = "DISPOSITIVOS";
@@ -193,6 +193,12 @@ function setupCentralAuth() {
     );
   }
 
+  // V61: usuários que já possuíam senha antes da coluna TROCAR_SENHA
+  // devem ser obrigados a trocar no próximo acesso.
+  migratePasswordChangeFlags_(
+    users
+  );
+
   formatSheets_();
 
   SpreadsheetApp
@@ -298,22 +304,13 @@ function processarSenhasPendentes() {
       iterations
     );
 
-    const rawForceChange = row[14];
-    const forceChange = (
-      rawForceChange === ""
-      || rawForceChange === null
-    )
-      ? true
-      : asBoolean_(
-          rawForceChange,
-          true
-        );
-
+    // V61: toda senha definida pelo administrador é considerada
+    // temporária. O usuário precisa criar a própria senha no primeiro acesso.
     sheet.getRange(
       rowIndex + 1,
       15
     ).setValue(
-      forceChange
+      true
     );
 
     if (
@@ -1078,6 +1075,7 @@ function logout_(request) {
 
 function publicUser_(user) {
   return {
+    auth_server_version: AUTH_VERSION,
     username: user.username,
     name: user.name,
     profile: user.profile,
@@ -1349,6 +1347,94 @@ function userAccessError_(
 }
 
 
+function passwordChangeRequired_(
+  row
+) {
+  const raw = row[14];
+
+  if (
+    raw === ""
+    || raw === null
+    || typeof raw === "undefined"
+  ) {
+    return Boolean(
+      String(
+        row[5] || ""
+      ).trim()
+    );
+  }
+
+  return asBoolean_(
+    raw,
+    true
+  );
+}
+
+
+function migratePasswordChangeFlags_(
+  sheet
+) {
+  if (
+    !sheet
+    || sheet.getLastRow() <= 1
+  ) {
+    return 0;
+  }
+
+  const values = sheet
+    .getDataRange()
+    .getValues();
+
+  let migrated = 0;
+
+  for (
+    let i = 1;
+    i < values.length;
+    i++
+  ) {
+    const row = values[i];
+    const username = normalizeUsername_(
+      row[0]
+    );
+    const passwordHash = String(
+      row[5] || ""
+    ).trim();
+    const raw = row[14];
+
+    if (
+      !username
+      || !passwordHash
+    ) {
+      continue;
+    }
+
+    if (
+      raw === ""
+      || raw === null
+      || typeof raw === "undefined"
+    ) {
+      sheet.getRange(
+        i + 1,
+        15
+      ).setValue(
+        true
+      );
+
+      migrated++;
+
+      logEvent_(
+        "PASSWORD_CHANGE_REQUIRED_MIGRATION",
+        username,
+        "",
+        "Usuário existente marcado para troca obrigatória de senha."
+      );
+    }
+  }
+
+  return migrated;
+}
+
+
 function findUser_(
   username
 ) {
@@ -1410,9 +1496,8 @@ function findUser_(
       permissions: String(
         row[10] || ""
       ),
-      mustChangePassword: asBoolean_(
-        row[14],
-        false
+      mustChangePassword: passwordChangeRequired_(
+        row
       ),
     };
   }

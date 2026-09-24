@@ -84,7 +84,11 @@ class AuthApiClient:
                 raise ValueError("Resposta não é objeto JSON.")
 
             if bool(data.get("ok")) and str(data.get("status") or "").lower() == "online":
-                return True, "Servidor de autenticação acessível."
+                version = str(data.get("version") or "desconhecida")
+                return True, (
+                    "Servidor de autenticação acessível "
+                    f"(versão {version})."
+                )
 
             return False, "Servidor respondeu, mas não confirmou status online."
 
@@ -216,6 +220,35 @@ class AuthApiClient:
     @staticmethod
     def _session_from(data: dict[str, Any]) -> AuthSession:
         user_data = data.get("user") or {}
+
+        server_version = str(
+            user_data.get("auth_server_version") or ""
+        ).strip()
+
+        def version_tuple(value: str) -> tuple[int, int, int]:
+            parts: list[int] = []
+            for piece in value.split(".")[:3]:
+                try:
+                    parts.append(int(piece))
+                except ValueError:
+                    parts.append(0)
+            while len(parts) < 3:
+                parts.append(0)
+            return tuple(parts)
+
+        if (
+            not server_version
+            or version_tuple(server_version) < (1, 1, 1)
+        ):
+            raise AuthApiError(
+                (
+                    "O servidor de autenticação está desatualizado. "
+                    "Atualize a implantação do Google Apps Script "
+                    "para a versão V61 e tente novamente."
+                ),
+                code="SERVER_UPDATE_REQUIRED",
+            )
+
         raw_permissions = user_data.get("permissions") or []
 
         permissions = frozenset(
