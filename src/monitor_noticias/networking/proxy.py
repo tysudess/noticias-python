@@ -14,6 +14,11 @@ from monitor_noticias.platform.credentials import (
     create_proxy_secret_store,
     credential_backend_label,
 )
+from monitor_noticias.platform.tls import (
+    activate_custom_ca,
+    deactivate_custom_ca,
+    normalize_ca_certificate,
+)
 
 
 log = logging.getLogger(__name__)
@@ -58,7 +63,7 @@ class ProxyConfig:
 
 
 class ProxySettings:
-    """Proxy Geral com credenciais protegidas por plataforma."""
+    """Proxy Geral com credenciais e CA corporativa opcionais."""
 
     def __init__(
         self,
@@ -68,23 +73,158 @@ class ProxySettings:
         data_dir: Path | None = None,
     ) -> None:
         self.prefs = prefs
+        self.data_dir = (
+            Path(data_dir)
+            if data_dir is not None
+            else None
+        )
 
         if secret_store is None:
-            if data_dir is None:
+            if self.data_dir is None:
                 raise ValueError(
                     "data_dir é obrigatório quando secret_store "
                     "não é fornecido."
                 )
 
             secret_store = create_proxy_secret_store(
-                Path(data_dir)
+                self.data_dir
             )
 
         self.secret_store = secret_store
 
+        if self.data_dir is not None:
+            self.ca_dir = (
+                self.data_dir
+                / "prefs"
+                / "certificates"
+            )
+
+            self.custom_ca_file = (
+                self.ca_dir
+                / "proxy_corporate_ca.pem"
+            )
+
+            self.custom_ca_bundle = (
+                self.ca_dir
+                / "proxy_ca_bundle.pem"
+            )
+
+            self._activate_custom_ca_if_present()
+
+        else:
+            self.ca_dir = None
+            self.custom_ca_file = None
+            self.custom_ca_bundle = None
+
     @property
     def secure_backend_label(self) -> str:
         return credential_backend_label()
+
+    def _activate_custom_ca_if_present(
+        self,
+    ) -> None:
+        if (
+            self.custom_ca_file is None
+            or self.custom_ca_bundle is None
+        ):
+            return
+
+        if not self.custom_ca_file.is_file():
+            return
+
+        try:
+            activate_custom_ca(
+                self.custom_ca_file,
+                self.custom_ca_bundle,
+            )
+
+        except Exception:
+            log.exception(
+                "Falha ao ativar CA corporativa salva."
+            )
+
+    def custom_ca_installed(
+        self,
+    ) -> bool:
+        return bool(
+            self.custom_ca_file
+            and self.custom_ca_file.is_file()
+        )
+
+    def custom_ca_status(
+        self,
+    ) -> str:
+        if self.custom_ca_installed():
+            return "CA corporativa instalada"
+        return "Nenhum certificado personalizado"
+
+    def install_custom_ca(
+        self,
+        source_file: Path,
+    ) -> Path:
+        if (
+            self.custom_ca_file is None
+            or self.custom_ca_bundle is None
+        ):
+            raise RuntimeError(
+                "Armazenamento de certificado indisponível."
+            )
+
+        normalize_ca_certificate(
+            Path(source_file),
+            self.custom_ca_file,
+        )
+
+        return activate_custom_ca(
+            self.custom_ca_file,
+            self.custom_ca_bundle,
+        )
+
+    def remove_custom_ca(
+        self,
+    ) -> bool:
+        if (
+            self.custom_ca_bundle
+            is not None
+        ):
+            deactivate_custom_ca(
+                self.custom_ca_bundle
+            )
+
+        removed = False
+
+        for path in (
+            self.custom_ca_file,
+            self.custom_ca_bundle,
+        ):
+            if (
+                path is not None
+                and path.exists()
+            ):
+                path.unlink()
+                removed = True
+
+        return removed
+
+    def requests_verify(
+        self,
+    ) -> bool | str:
+        if (
+            self.custom_ca_bundle
+            is not None
+            and self.custom_ca_installed()
+        ):
+            if not self.custom_ca_bundle.is_file():
+                activate_custom_ca(
+                    self.custom_ca_file,
+                    self.custom_ca_bundle,
+                )
+
+            return str(
+                self.custom_ca_bundle
+            )
+
+        return True
 
     def migrate_host(self) -> None:
         saved = (
@@ -263,12 +403,20 @@ class ProxySettings:
                 timeout=12,
                 allow_redirects=True,
                 proxies=self.requests_proxies(cfg),
+                verify=self.requests_verify(),
             )
 
             if 200 <= response.status_code <= 399:
+                ca_suffix = (
+                    " CA corporativa personalizada ativa."
+                    if self.custom_ca_installed()
+                    else ""
+                )
+
                 return (
                     True,
-                    "Conexão pelo proxy realizada com sucesso.",
+                    "Conexão pelo proxy realizada com sucesso."
+                    + ca_suffix,
                 )
 
             return (
@@ -281,11 +429,9 @@ class ProxySettings:
                 False,
                 (
                     "O proxy respondeu, mas o certificado HTTPS "
-                    "corporativo não é confiável no sistema. "
-                    "A Central já tenta usar os certificados nativos "
-                    "do Windows/Ubuntu. Se esta mensagem continuar, "
-                    "instale a CA raiz da organização no repositório "
-                    "de certificados confiáveis do sistema."
+                    "corporativo ainda não é confiável. "
+                    "Importe a CA raiz da organização usando "
+                    "“Importar CA” ou solicite o certificado ao TI."
                 ),
             )
 

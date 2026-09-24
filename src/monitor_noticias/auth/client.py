@@ -76,10 +76,19 @@ class AuthApiClient:
         return self.proxy_settings.requests_proxies(config)
 
     def _request_kwargs(self) -> dict[str, Any]:
+        verify: bool | str = True
+
+        if self.proxy_settings is not None:
+            verify = (
+                self.proxy_settings
+                .requests_verify()
+            )
+
         return {
             "timeout": self.timeout,
             "allow_redirects": True,
             "proxies": self._proxies(),
+            "verify": verify,
             "headers": {
                 "User-Agent": "CentralInteligenteDeMidia/AuthClient-1.1",
                 "Accept": "application/json",
@@ -119,6 +128,12 @@ class AuthApiClient:
             return False, str(exc)
         except requests.ProxyError:
             return False, "Falha ao conectar através do Proxy Geral."
+        except requests.SSLError:
+            return False, (
+                "O servidor de login foi alcançado, mas a CA "
+                "corporativa do proxy não é confiável. "
+                "Abra Configurar proxy e importe a CA da organização."
+            )
         except requests.Timeout:
             return False, "Tempo limite ao acessar o servidor de autenticação."
         except requests.RequestException as exc:
@@ -146,6 +161,14 @@ class AuthApiClient:
             raise AuthApiError(
                 "Falha ao conectar através do Proxy Geral.",
                 code="PROXY_ERROR",
+            ) from exc
+        except requests.SSLError as exc:
+            raise AuthApiError(
+                (
+                    "A CA corporativa do proxy não é confiável. "
+                    "Abra Configurar proxy e importe a CA da organização."
+                ),
+                code="PROXY_CA_REQUIRED",
             ) from exc
         except requests.Timeout as exc:
             raise AuthApiError(
@@ -212,16 +235,11 @@ class AuthApiClient:
         try:
             data = self._post(
                 {
-                    "action":
-                        "change_password",
-                    "token":
-                        token,
-                    "device_id":
-                        self.device.device_id,
-                    "current_password":
-                        current_password,
-                    "new_password":
-                        new_password,
+                    "action": "change_password",
+                    "token": token,
+                    "device_id": self.device.device_id,
+                    "current_password": current_password,
+                    "new_password": new_password,
                 }
             )
         except AuthApiError as exc:
@@ -236,9 +254,7 @@ class AuthApiClient:
                 ) from exc
             raise
 
-        return self._session_from(
-            data
-        )
+        return self._session_from(data)
 
     def logout(self, token: str) -> None:
         if not token:
