@@ -2,10 +2,8 @@ from __future__ import annotations
 
 import types
 
-from PySide6.QtCore import QObject, QThread, QTimer, Signal
 from PySide6.QtWidgets import QLabel, QMessageBox, QPushButton
 
-from monitor_noticias.auth.client import AuthApiError
 from monitor_noticias.auth.models import AuthSession
 from monitor_noticias.auth.runtime import AuthRuntime
 from monitor_noticias.ui.sections import Section
@@ -30,35 +28,7 @@ SECTION_PERMISSION = {
 }
 
 
-class _ValidationWorker(QObject):
-    succeeded = Signal(object)
-    failed = Signal(str)
-    finished = Signal()
-
-    def __init__(self, runtime: AuthRuntime) -> None:
-        super().__init__()
-        self.runtime = runtime
-
-    def run(self) -> None:
-        try:
-            self.succeeded.emit(self.runtime.validate_current())
-        except AuthApiError as exc:
-            self.failed.emit(str(exc))
-        except Exception as exc:
-            self.failed.emit(str(exc) or exc.__class__.__name__)
-        finally:
-            self.finished.emit()
-
-
 def _find_layout_with_widget(layout, widget):
-    """Localiza o layout mesmo quando ele está dentro de QWidgets intermediários.
-
-    O cabeçalho da MainWindow fica dentro do QWidget ``content``. A versão
-    anterior só percorria QLayoutItem.layout(), então nunca entrava no layout
-    pertencente a esse QWidget e os botões Minha conta/Sair da conta não eram
-    inseridos.
-    """
-
     if layout is None:
         return None
 
@@ -75,8 +45,6 @@ def _find_layout_with_widget(layout, widget):
             if found is not None:
                 return found
 
-        # Importante: um layout pode estar instalado em um QWidget que, por sua
-        # vez, é apenas um item do layout pai (caso real do cabeçalho).
         if child_widget is not None:
             owned_layout = child_widget.layout()
             if owned_layout is not None:
@@ -103,7 +71,10 @@ def install_authenticated_window(
     runtime: AuthRuntime,
     session: AuthSession,
 ) -> None:
-    """Aplica permissões e identidade do usuário na MainWindow."""
+    """Aplica permissões e identidade do usuário na MainWindow.
+
+    V72: sem revalidação periódica de sessão em segundo plano.
+    """
 
     allowed = _allowed_sections(session)
 
@@ -120,8 +91,13 @@ def install_authenticated_window(
     original_navigate = window.navigate
 
     def authenticated_navigate(self, section):
-        if section in SECTION_PERMISSION and section not in self._auth_allowed_sections:
-            self.footer_right.setText("Acesso não permitido para este usuário.")
+        if (
+            section in SECTION_PERMISSION
+            and section not in self._auth_allowed_sections
+        ):
+            self.footer_right.setText(
+                "Acesso não permitido para este usuário."
+            )
 
             if self._current not in self._auth_allowed_sections:
                 return original_navigate(Section.HOME)
@@ -310,62 +286,7 @@ def install_authenticated_window(
 
         logout_action.triggered.connect(tray_logout)
 
-    timer = QTimer(window)
-    timer.setInterval(30 * 60 * 1000)
-
-    window._auth_validation_timer = timer
-    window._auth_validation_thread = None
-    window._auth_validation_worker = None
-
-    def validate_periodically():
-        current_thread = getattr(
-            window,
-            "_auth_validation_thread",
-            None,
-        )
-
-        if current_thread is not None and current_thread.isRunning():
-            return
-
-        thread = QThread(window)
-        worker = _ValidationWorker(runtime)
-        worker.moveToThread(thread)
-        thread.started.connect(worker.run)
-
-        def valid(new_session):
-            window._auth_session = new_session
-
-        def invalid(message: str):
-            runtime.token_store.clear()
-            timer.stop()
-
-            QMessageBox.critical(
-                window,
-                "Sessão encerrada",
-                "Seu acesso não pôde ser validado.\n\n"
-                + message
-                + "\n\nA Central será encerrada.",
-            )
-
-            window.exit_application()
-
-        worker.succeeded.connect(valid)
-        worker.failed.connect(invalid)
-        worker.finished.connect(thread.quit)
-        thread.finished.connect(worker.deleteLater)
-
-        def cleanup():
-            window._auth_validation_thread = None
-            window._auth_validation_worker = None
-
-        thread.finished.connect(cleanup)
-        thread.finished.connect(thread.deleteLater)
-
-        window._auth_validation_thread = thread
-        window._auth_validation_worker = worker
-        thread.start()
-
-    timer.timeout.connect(validate_periodically)
-    timer.start()
-
+    # V72: validação periódica removida.
+    # A sessão permanece válida durante a execução atual.
+    # Na próxima abertura, o token salvo será validado normalmente.
     window.navigate(Section.HOME)
