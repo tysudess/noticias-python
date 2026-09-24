@@ -13,6 +13,7 @@ from PySide6.QtWidgets import (
     QPushButton,
     QSpinBox,
     QVBoxLayout,
+    QWidget,
 )
 
 from monitor_noticias.auth.client import AuthApiError
@@ -51,7 +52,7 @@ class ProxyDialog(QDialog):
 
         self.setWindowTitle("Proxy Geral")
         self.setModal(True)
-        self.setMinimumWidth(470)
+        self.setMinimumWidth(520)
 
         cfg = runtime.proxy_settings.load()
 
@@ -84,14 +85,41 @@ class ProxyDialog(QDialog):
         self.port.setValue(cfg.port)
 
         self.username = QLineEdit(cfg.username)
+
+        # V67 — senha continua protegida/oculta por padrão,
+        # mas o usuário pode conferir o valor digitado antes de salvar.
         self.password = QLineEdit(cfg.password)
         self.password.setEchoMode(QLineEdit.EchoMode.Password)
+        self.password.setPlaceholderText("Digite a senha do proxy")
+
+        password_container = QWidget()
+        password_row = QHBoxLayout(password_container)
+        password_row.setContentsMargins(0, 0, 0, 0)
+        password_row.setSpacing(8)
+
+        password_row.addWidget(self.password, 1)
+
+        self.show_password = QCheckBox("Mostrar senha")
+        self.show_password.setChecked(False)
+        self.show_password.toggled.connect(
+            self._toggle_password_visibility
+        )
+        password_row.addWidget(self.show_password)
 
         form.addRow("Servidor:", self.host)
         form.addRow("Porta:", self.port)
         form.addRow("Usuário:", self.username)
-        form.addRow("Senha:", self.password)
+        form.addRow("Senha:", password_container)
         root.addLayout(form)
+
+        hint = QLabel(
+            "A senha só fica visível enquanto a opção “Mostrar senha” estiver marcada."
+        )
+        hint.setWordWrap(True)
+        hint.setStyleSheet(
+            "color:#71839b;font-size:11px;"
+        )
+        root.addWidget(hint)
 
         self.message = QLabel()
         self.message.setWordWrap(True)
@@ -115,6 +143,22 @@ class ProxyDialog(QDialog):
         buttons.addWidget(save)
 
         root.addLayout(buttons)
+
+    def _toggle_password_visibility(
+        self,
+        visible: bool,
+    ) -> None:
+        self.password.setEchoMode(
+            QLineEdit.EchoMode.Normal
+            if visible
+            else QLineEdit.EchoMode.Password
+        )
+
+        self.show_password.setText(
+            "Ocultar senha"
+            if visible
+            else "Mostrar senha"
+        )
 
     def _store(self) -> None:
         self.runtime.proxy_settings.save(
@@ -162,6 +206,8 @@ class ProxyDialog(QDialog):
             )
             return
 
+        # Ao fechar/salvar, volta a ocultar visualmente a senha.
+        self.show_password.setChecked(False)
         self.accept()
 
 
