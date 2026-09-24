@@ -312,39 +312,70 @@ jobs:
           ARCHIVE="${RUNNER_TEMP}/ffmpeg-static.tar.xz"
           EXTRACTED="${RUNNER_TEMP}/ffmpeg-static"
 
+          FFMPEG_URL="https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-linux64-gpl.tar.xz"
+
           rm -rf "$ARCHIVE" "$EXTRACTED"
           mkdir -p "$EXTRACTED"
+
+          echo "Baixando FFmpeg Linux x86_64:"
+          echo "$FFMPEG_URL"
 
           curl \
             --fail \
             --location \
-            --retry 4 \
+            --retry 5 \
             --retry-all-errors \
             --connect-timeout 30 \
-            --max-time 600 \
-            "https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-amd64-static.tar.xz" \
+            --max-time 900 \
+            "$FFMPEG_URL" \
             -o "$ARCHIVE"
+
+          test -f "$ARCHIVE"
+
+          SIZE="$(stat -c%s "$ARCHIVE")"
+
+          echo "Arquivo recebido: ${SIZE} bytes"
+          file "$ARCHIVE"
+
+          # O pacote real do BtbN possui mais de 100 MB.
+          # Se vier HTML/página de erro, normalmente terá apenas alguns KB.
+          if [ "$SIZE" -lt 50000000 ]; then
+            echo "Download do FFmpeg incompleto ou inválido: ${SIZE} bytes"
+            echo "Esperado: arquivo XZ com pelo menos 50 MB."
+            exit 1
+          fi
+
+          # Valida a integridade XZ ANTES de chamar tar.
+          # Isso evita o erro obscuro:
+          #   xz: File format not recognized
+          #   tar: Child returned status 1
+          xz -t "$ARCHIVE"
 
           tar -xJf "$ARCHIVE" -C "$EXTRACTED"
 
           FFMPEG="$(
             find "$EXTRACTED" \
               -type f \
-              -name ffmpeg \
-              -perm -u+x |
+              -name ffmpeg |
             head -n 1
           )"
 
           FFPROBE="$(
             find "$EXTRACTED" \
               -type f \
-              -name ffprobe \
-              -perm -u+x |
+              -name ffprobe |
             head -n 1
           )"
 
-          test -n "$FFMPEG"
-          test -n "$FFPROBE"
+          if [ -z "$FFMPEG" ] || [ ! -f "$FFMPEG" ]; then
+            echo "ffmpeg não foi localizado no pacote extraído."
+            exit 1
+          fi
+
+          if [ -z "$FFPROBE" ] || [ ! -f "$FFPROBE" ]; then
+            echo "ffprobe não foi localizado no pacote extraído."
+            exit 1
+          fi
 
           cp "$FFMPEG" "$ROOT/bin/ffmpeg"
           cp "$FFPROBE" "$ROOT/bin/ffprobe"
@@ -353,6 +384,7 @@ jobs:
             "$ROOT/bin/ffmpeg" \
             "$ROOT/bin/ffprobe"
 
+          echo "Validando executáveis copiados:"
           "$ROOT/bin/ffmpeg" -version | head -n 1
           "$ROOT/bin/ffprobe" -version | head -n 1
 
