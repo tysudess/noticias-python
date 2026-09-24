@@ -9,10 +9,7 @@ import requests
 from monitor_noticias.networking.proxy import ProxySettings
 
 from .device import DeviceIdentity
-from .models import (
-    AuthSession,
-    AuthUser,
-)
+from .models import AuthSession, AuthUser
 
 
 log = logging.getLogger(__name__)
@@ -58,36 +55,49 @@ class AuthApiClient:
         self.proxy_settings = proxy_settings
         self.timeout = float(timeout)
 
-    def _proxies(self) -> dict[str, str] | None:
+    def _proxy_config(self):
+        if self.proxy_settings is None:
+            return None
+        return self.proxy_settings.load()
+
+    def _proxies(
+        self,
+        config=None,
+    ) -> dict[str, str] | None:
         if self.proxy_settings is None:
             return None
 
-        config = self.proxy_settings.load()
+        cfg = (
+            config
+            if config is not None
+            else self.proxy_settings.load()
+        )
 
-        if not config.enabled:
+        if not cfg.enabled:
             return None
 
-        if not config.ready:
+        if not cfg.ready:
             raise AuthApiError(
                 "O Proxy Geral está ativo, mas usuário/senha não estão configurados.",
                 code="PROXY_NOT_READY",
             )
 
-        return self.proxy_settings.requests_proxies(config)
+        return self.proxy_settings.requests_proxies(cfg)
 
     def _request_kwargs(self) -> dict[str, Any]:
-        verify: bool | str = True
+        cfg = self._proxy_config()
+        verify = True
 
-        if self.proxy_settings is not None:
-            verify = (
-                self.proxy_settings
-                .requests_verify()
-            )
+        if (
+            self.proxy_settings is not None
+            and cfg is not None
+        ):
+            verify = self.proxy_settings.requests_verify(cfg)
 
         return {
             "timeout": self.timeout,
             "allow_redirects": True,
-            "proxies": self._proxies(),
+            "proxies": self._proxies(cfg),
             "verify": verify,
             "headers": {
                 "User-Agent": "CentralInteligenteDeMidia/AuthClient-1.1",
@@ -107,7 +117,10 @@ class AuthApiClient:
             if not isinstance(data, dict):
                 raise ValueError("Resposta não é objeto JSON.")
 
-            if bool(data.get("ok")) and str(data.get("status") or "").lower() == "online":
+            if (
+                bool(data.get("ok"))
+                and str(data.get("status") or "").lower() == "online"
+            ):
                 version = str(data.get("version") or "").strip()
 
                 if _version_tuple(version) < (1, 1, 2):
@@ -126,21 +139,25 @@ class AuthApiClient:
 
         except AuthApiError as exc:
             return False, str(exc)
-        except requests.ProxyError:
+
+        except requests.exceptions.ProxyError:
             return False, "Falha ao conectar através do Proxy Geral."
-        except requests.SSLError:
-            return False, (
-                "O servidor de login foi alcançado, mas a CA "
-                "corporativa do proxy não é confiável. "
-                "Abra Configurar proxy e importe a CA da organização."
-            )
-        except requests.Timeout:
+
+        except requests.exceptions.Timeout:
             return False, "Tempo limite ao acessar o servidor de autenticação."
-        except requests.RequestException as exc:
+
+        except requests.exceptions.SSLError:
+            return False, (
+                "Falha na validação HTTPS. O modo de compatibilidade "
+                "é restrito ao proxy corporativo autorizado."
+            )
+
+        except requests.exceptions.RequestException as exc:
             return False, (
                 "Não foi possível acessar o servidor de autenticação: "
                 + (str(exc) or exc.__class__.__name__)
             )
+
         except Exception as exc:
             return False, (
                 "Resposta inválida do servidor de autenticação: "
@@ -155,27 +172,29 @@ class AuthApiClient:
                 **self._request_kwargs(),
             )
             response.raise_for_status()
+
         except AuthApiError:
             raise
-        except requests.ProxyError as exc:
+
+        except requests.exceptions.ProxyError as exc:
             raise AuthApiError(
                 "Falha ao conectar através do Proxy Geral.",
                 code="PROXY_ERROR",
             ) from exc
-        except requests.SSLError as exc:
-            raise AuthApiError(
-                (
-                    "A CA corporativa do proxy não é confiável. "
-                    "Abra Configurar proxy e importe a CA da organização."
-                ),
-                code="PROXY_CA_REQUIRED",
-            ) from exc
-        except requests.Timeout as exc:
+
+        except requests.exceptions.Timeout as exc:
             raise AuthApiError(
                 "Tempo limite ao acessar o servidor de autenticação.",
                 code="NETWORK_TIMEOUT",
             ) from exc
-        except requests.RequestException as exc:
+
+        except requests.exceptions.SSLError as exc:
+            raise AuthApiError(
+                "Falha na validação HTTPS.",
+                code="TLS_ERROR",
+            ) from exc
+
+        except requests.exceptions.RequestException as exc:
             raise AuthApiError(
                 "Não foi possível conectar ao servidor de autenticação.",
                 code="NETWORK_ERROR",
@@ -243,7 +262,10 @@ class AuthApiClient:
                 }
             )
         except AuthApiError as exc:
-            if exc.code == "UNKNOWN_ACTION" or str(exc).strip().lower() == "ação inválida.":
+            if (
+                exc.code == "UNKNOWN_ACTION"
+                or str(exc).strip().lower() == "ação inválida."
+            ):
                 raise AuthApiError(
                     (
                         "O Apps Script publicado ainda é uma versão antiga e "
@@ -322,10 +344,7 @@ class AuthApiClient:
             profile=str(user_data.get("profile") or ""),
             permissions=permissions,
             must_change_password=bool(
-                user_data.get(
-                    "must_change_password",
-                    False,
-                )
+                user_data.get("must_change_password", False)
             ),
         )
 

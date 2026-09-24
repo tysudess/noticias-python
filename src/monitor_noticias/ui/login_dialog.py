@@ -1,12 +1,9 @@
 from __future__ import annotations
 
-from pathlib import Path
-
 from PySide6.QtCore import QObject, QThread, Signal, Qt
 from PySide6.QtWidgets import (
     QCheckBox,
     QDialog,
-    QFileDialog,
     QFormLayout,
     QFrame,
     QHBoxLayout,
@@ -22,6 +19,7 @@ from PySide6.QtWidgets import (
 from monitor_noticias.auth.client import AuthApiError
 from monitor_noticias.auth.models import AuthSession
 from monitor_noticias.auth.runtime import AuthRuntime
+from monitor_noticias.networking.proxy import corporate_tls_compatibility
 from monitor_noticias.ui.password_change_dialog import PasswordChangeDialog
 
 
@@ -55,7 +53,7 @@ class ProxyDialog(QDialog):
 
         self.setWindowTitle("Proxy Geral")
         self.setModal(True)
-        self.setMinimumWidth(590)
+        self.setMinimumWidth(520)
 
         cfg = runtime.proxy_settings.load()
 
@@ -89,6 +87,8 @@ class ProxyDialog(QDialog):
 
         self.username = QLineEdit(cfg.username)
 
+        # V67 — senha continua protegida/oculta por padrão,
+        # mas o usuário pode conferir o valor digitado antes de salvar.
         self.password = QLineEdit(cfg.password)
         self.password.setEchoMode(QLineEdit.EchoMode.Password)
         self.password.setPlaceholderText("Digite a senha do proxy")
@@ -111,44 +111,10 @@ class ProxyDialog(QDialog):
         form.addRow("Porta:", self.port)
         form.addRow("Usuário:", self.username)
         form.addRow("Senha:", password_container)
-
-        ca_container = QWidget()
-        ca_row = QHBoxLayout(ca_container)
-        ca_row.setContentsMargins(0, 0, 0, 0)
-        ca_row.setSpacing(8)
-
-        self.ca_status = QLabel()
-        self.ca_status.setWordWrap(True)
-        ca_row.addWidget(
-            self.ca_status,
-            1,
-        )
-
-        import_ca = QPushButton("Importar CA")
-        import_ca.clicked.connect(
-            self._import_ca
-        )
-        ca_row.addWidget(import_ca)
-
-        self.remove_ca_button = QPushButton("Remover CA")
-        self.remove_ca_button.clicked.connect(
-            self._remove_ca
-        )
-        ca_row.addWidget(
-            self.remove_ca_button
-        )
-
-        form.addRow(
-            "Certificado CA:",
-            ca_container,
-        )
-
         root.addLayout(form)
 
         hint = QLabel(
-            "Use apenas a CA raiz fornecida pela sua organização/TI. "
-            "Formatos aceitos: .cer, .crt e .pem. "
-            "A validação HTTPS continuará ativa."
+            "A senha só fica visível enquanto a opção “Mostrar senha” estiver marcada."
         )
         hint.setWordWrap(True)
         hint.setStyleSheet(
@@ -179,8 +145,6 @@ class ProxyDialog(QDialog):
 
         root.addLayout(buttons)
 
-        self._refresh_ca_status()
-
     def _toggle_password_visibility(
         self,
         visible: bool,
@@ -195,144 +159,6 @@ class ProxyDialog(QDialog):
             "Ocultar senha"
             if visible
             else "Mostrar senha"
-        )
-
-    def _refresh_ca_status(
-        self,
-    ) -> None:
-        installed = (
-            self.runtime
-            .proxy_settings
-            .custom_ca_installed()
-        )
-
-        self.ca_status.setText(
-            (
-                "✓ CA corporativa instalada"
-                if installed
-                else "Nenhum certificado personalizado"
-            )
-        )
-
-        self.ca_status.setStyleSheet(
-            (
-                "color:#13784c;font-weight:700;"
-                if installed
-                else "color:#71839b;"
-            )
-        )
-
-        self.remove_ca_button.setEnabled(
-            installed
-        )
-
-    def _import_ca(
-        self,
-    ) -> None:
-        filename, _ = QFileDialog.getOpenFileName(
-            self,
-            "Selecionar certificado CA",
-            "",
-            (
-                "Certificados (*.cer *.crt *.pem);;"
-                "Todos os arquivos (*)"
-            ),
-        )
-
-        if not filename:
-            return
-
-        answer = QMessageBox.question(
-            self,
-            "Confiar neste certificado?",
-            (
-                "A Central passará a confiar no certificado CA "
-                "selecionado para conexões HTTPS.\n\n"
-                "Importe somente um certificado fornecido pela "
-                "sua organização/TI.\n\n"
-                "Deseja continuar?"
-            ),
-            QMessageBox.StandardButton.Yes
-            | QMessageBox.StandardButton.No,
-            QMessageBox.StandardButton.No,
-        )
-
-        if (
-            answer
-            != QMessageBox.StandardButton.Yes
-        ):
-            return
-
-        try:
-            self.runtime.proxy_settings.install_custom_ca(
-                Path(filename)
-            )
-
-        except Exception as exc:
-            QMessageBox.warning(
-                self,
-                "Certificado CA",
-                (
-                    "Não foi possível importar o certificado.\n\n"
-                    + (
-                        str(exc)
-                        or exc.__class__.__name__
-                    )
-                ),
-            )
-            return
-
-        self._refresh_ca_status()
-
-        self.message.setText(
-            (
-                "✓ Certificado CA importado. "
-                "Clique em Testar para validar o proxy."
-            )
-        )
-
-    def _remove_ca(
-        self,
-    ) -> None:
-        answer = QMessageBox.question(
-            self,
-            "Remover certificado CA",
-            (
-                "Deseja remover o certificado CA personalizado "
-                "usado pela Central?"
-            ),
-            QMessageBox.StandardButton.Yes
-            | QMessageBox.StandardButton.No,
-            QMessageBox.StandardButton.No,
-        )
-
-        if (
-            answer
-            != QMessageBox.StandardButton.Yes
-        ):
-            return
-
-        try:
-            self.runtime.proxy_settings.remove_custom_ca()
-
-        except Exception as exc:
-            QMessageBox.warning(
-                self,
-                "Certificado CA",
-                (
-                    "Não foi possível remover o certificado.\n\n"
-                    + (
-                        str(exc)
-                        or exc.__class__.__name__
-                    )
-                ),
-            )
-            return
-
-        self._refresh_ca_status()
-
-        self.message.setText(
-            "Certificado CA personalizado removido."
         )
 
     def _store(self) -> None:
@@ -381,6 +207,7 @@ class ProxyDialog(QDialog):
             )
             return
 
+        # Ao fechar/salvar, volta a ocultar visualmente a senha.
         self.show_password.setChecked(False)
         self.accept()
 
@@ -544,8 +371,8 @@ class LoginDialog(QDialog):
 
         if cfg.enabled:
             suffix = (
-                " • CA personalizada"
-                if self.runtime.proxy_settings.custom_ca_installed()
+                " • Compatibilidade SSL corporativa"
+                if corporate_tls_compatibility(cfg)
                 else ""
             )
 
@@ -657,7 +484,6 @@ class LoginDialog(QDialog):
             "NETWORK_TIMEOUT",
             "PROXY_ERROR",
             "PROXY_NOT_READY",
-            "PROXY_CA_REQUIRED",
         }:
             prefix = (
                 "Não foi possível validar o acesso. "

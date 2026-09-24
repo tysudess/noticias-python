@@ -7,17 +7,13 @@ from typing import Protocol
 from urllib.parse import quote
 
 import requests
+import urllib3
 
 from monitor_noticias.app.preferences import SharedPreferences
 from monitor_noticias.platform.credentials import (
     CredentialStoreUnavailable,
     create_proxy_secret_store,
     credential_backend_label,
-)
-from monitor_noticias.platform.tls import (
-    activate_custom_ca,
-    deactivate_custom_ca,
-    normalize_ca_certificate,
 )
 
 
@@ -26,6 +22,10 @@ log = logging.getLogger(__name__)
 DEFAULT_PROXY_HOST = "proxy-7dn.mb"
 LEGACY_PROXY_HOST = "proxy-7db.mb"
 DEFAULT_PROXY_PORT = 6060
+
+CORPORATE_TLS_COMPAT_HOST = "proxy-7dn.mb"
+CORPORATE_TLS_COMPAT_PORT = 6060
+
 PROXY_TEST_URL = "https://www.google.com/generate_204"
 PROXY_TEST_USER_AGENT = "Mozilla/5.0 MonitorDeNoticias/4.0.2"
 
@@ -62,8 +62,23 @@ class ProxyConfig:
         return "Proxy pronto" if self.ready else "Proxy requer configuração"
 
 
+def corporate_tls_compatibility(config: ProxyConfig) -> bool:
+    host = (
+        str(config.host or "")
+        .strip()
+        .lower()
+        .rstrip(".")
+    )
+
+    return bool(
+        config.enabled
+        and host == CORPORATE_TLS_COMPAT_HOST
+        and int(config.port) == CORPORATE_TLS_COMPAT_PORT
+    )
+
+
 class ProxySettings:
-    """Proxy Geral com credenciais e CA corporativa opcionais."""
+    """Proxy Geral com credenciais protegidas por plataforma."""
 
     def __init__(
         self,
@@ -73,158 +88,21 @@ class ProxySettings:
         data_dir: Path | None = None,
     ) -> None:
         self.prefs = prefs
-        self.data_dir = (
-            Path(data_dir)
-            if data_dir is not None
-            else None
-        )
 
         if secret_store is None:
-            if self.data_dir is None:
+            if data_dir is None:
                 raise ValueError(
                     "data_dir é obrigatório quando secret_store "
                     "não é fornecido."
                 )
 
-            secret_store = create_proxy_secret_store(
-                self.data_dir
-            )
+            secret_store = create_proxy_secret_store(Path(data_dir))
 
         self.secret_store = secret_store
-
-        if self.data_dir is not None:
-            self.ca_dir = (
-                self.data_dir
-                / "prefs"
-                / "certificates"
-            )
-
-            self.custom_ca_file = (
-                self.ca_dir
-                / "proxy_corporate_ca.pem"
-            )
-
-            self.custom_ca_bundle = (
-                self.ca_dir
-                / "proxy_ca_bundle.pem"
-            )
-
-            self._activate_custom_ca_if_present()
-
-        else:
-            self.ca_dir = None
-            self.custom_ca_file = None
-            self.custom_ca_bundle = None
 
     @property
     def secure_backend_label(self) -> str:
         return credential_backend_label()
-
-    def _activate_custom_ca_if_present(
-        self,
-    ) -> None:
-        if (
-            self.custom_ca_file is None
-            or self.custom_ca_bundle is None
-        ):
-            return
-
-        if not self.custom_ca_file.is_file():
-            return
-
-        try:
-            activate_custom_ca(
-                self.custom_ca_file,
-                self.custom_ca_bundle,
-            )
-
-        except Exception:
-            log.exception(
-                "Falha ao ativar CA corporativa salva."
-            )
-
-    def custom_ca_installed(
-        self,
-    ) -> bool:
-        return bool(
-            self.custom_ca_file
-            and self.custom_ca_file.is_file()
-        )
-
-    def custom_ca_status(
-        self,
-    ) -> str:
-        if self.custom_ca_installed():
-            return "CA corporativa instalada"
-        return "Nenhum certificado personalizado"
-
-    def install_custom_ca(
-        self,
-        source_file: Path,
-    ) -> Path:
-        if (
-            self.custom_ca_file is None
-            or self.custom_ca_bundle is None
-        ):
-            raise RuntimeError(
-                "Armazenamento de certificado indisponível."
-            )
-
-        normalize_ca_certificate(
-            Path(source_file),
-            self.custom_ca_file,
-        )
-
-        return activate_custom_ca(
-            self.custom_ca_file,
-            self.custom_ca_bundle,
-        )
-
-    def remove_custom_ca(
-        self,
-    ) -> bool:
-        if (
-            self.custom_ca_bundle
-            is not None
-        ):
-            deactivate_custom_ca(
-                self.custom_ca_bundle
-            )
-
-        removed = False
-
-        for path in (
-            self.custom_ca_file,
-            self.custom_ca_bundle,
-        ):
-            if (
-                path is not None
-                and path.exists()
-            ):
-                path.unlink()
-                removed = True
-
-        return removed
-
-    def requests_verify(
-        self,
-    ) -> bool | str:
-        if (
-            self.custom_ca_bundle
-            is not None
-            and self.custom_ca_installed()
-        ):
-            if not self.custom_ca_bundle.is_file():
-                activate_custom_ca(
-                    self.custom_ca_file,
-                    self.custom_ca_bundle,
-                )
-
-            return str(
-                self.custom_ca_bundle
-            )
-
-        return True
 
     def migrate_host(self) -> None:
         saved = (
@@ -379,6 +257,25 @@ class ProxySettings:
             "https": url,
         }
 
+    def requests_verify(
+        self,
+        config: ProxyConfig | None = None,
+    ) -> bool:
+        cfg = config or self.load()
+
+        if corporate_tls_compatibility(cfg):
+            urllib3.disable_warnings(
+                urllib3.exceptions.InsecureRequestWarning
+            )
+            log.warning(
+                "Compatibilidade TLS corporativa ativa somente para %s:%s.",
+                cfg.host,
+                cfg.port,
+            )
+            return False
+
+        return True
+
     def test_connection(
         self,
         *,
@@ -403,20 +300,20 @@ class ProxySettings:
                 timeout=12,
                 allow_redirects=True,
                 proxies=self.requests_proxies(cfg),
-                verify=self.requests_verify(),
+                verify=self.requests_verify(cfg),
             )
 
             if 200 <= response.status_code <= 399:
-                ca_suffix = (
-                    " CA corporativa personalizada ativa."
-                    if self.custom_ca_installed()
+                suffix = (
+                    " Compatibilidade SSL corporativa ativa."
+                    if corporate_tls_compatibility(cfg)
                     else ""
                 )
 
                 return (
                     True,
                     "Conexão pelo proxy realizada com sucesso."
-                    + ca_suffix,
+                    + suffix,
                 )
 
             return (
@@ -424,15 +321,18 @@ class ProxySettings:
                 f"Proxy respondeu HTTP {response.status_code}.",
             )
 
+        except requests.exceptions.ProxyError:
+            return False, "Falha ao conectar ao servidor de proxy."
+
+        except requests.exceptions.Timeout:
+            return False, "Tempo limite ao testar o proxy."
+
         except requests.exceptions.SSLError:
             return (
                 False,
-                (
-                    "O proxy respondeu, mas o certificado HTTPS "
-                    "corporativo ainda não é confiável. "
-                    "Importe a CA raiz da organização usando "
-                    "“Importar CA” ou solicite o certificado ao TI."
-                ),
+                "Falha de certificado HTTPS. "
+                "O modo de compatibilidade só é permitido em "
+                f"{CORPORATE_TLS_COMPAT_HOST}:{CORPORATE_TLS_COMPAT_PORT}.",
             )
 
         except Exception as exc:
