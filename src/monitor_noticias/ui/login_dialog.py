@@ -18,6 +18,7 @@ from PySide6.QtWidgets import (
 from monitor_noticias.auth.client import AuthApiError
 from monitor_noticias.auth.models import AuthSession
 from monitor_noticias.auth.runtime import AuthRuntime
+from monitor_noticias.ui.password_change_dialog import PasswordChangeDialog
 
 
 class _AuthWorker(QObject):
@@ -361,10 +362,45 @@ class LoginDialog(QDialog):
         self._worker = worker
         thread.start()
 
-    def _saved_session_ok(self, session: AuthSession) -> None:
+    def _complete_session(self, session: AuthSession) -> None:
         self.runtime.session = session
+
+        if session.user.must_change_password:
+            self.message.setText(
+                "Sua senha é temporária. Altere-a para continuar."
+            )
+
+            dialog = PasswordChangeDialog(
+                self.runtime,
+                forced=True,
+                parent=self,
+            )
+
+            if (
+                dialog.exec()
+                == QDialog.DialogCode.Accepted
+                and dialog.session is not None
+            ):
+                self.session = dialog.session
+                self.accept()
+                return
+
+            try:
+                self.runtime.logout()
+            except Exception:
+                self.runtime.token_store.clear()
+                self.runtime.session = None
+
+            self.message.setText(
+                "A alteração da senha temporária é obrigatória para entrar."
+            )
+            return
+
         self.session = session
         self.accept()
+
+    def _saved_session_ok(self, session: AuthSession) -> None:
+        self._complete_session(session)
 
     def _login(self) -> None:
         username = self.username.text().strip()
@@ -387,8 +423,7 @@ class LoginDialog(QDialog):
         )
 
     def _login_ok(self, session: AuthSession) -> None:
-        self.session = session
-        self.accept()
+        self._complete_session(session)
 
     def _auth_failed(self, code: str, message: str) -> None:
         if code in {

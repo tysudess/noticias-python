@@ -13,6 +13,7 @@ class AuthUser:
     name: str
     profile: str
     permissions: frozenset[str]
+    must_change_password: bool = False
 
     def can(
         self,

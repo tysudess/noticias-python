@@ -176,6 +176,31 @@ class AuthApiClient:
         )
         return self._session_from(data)
 
+    def change_password(
+        self,
+        token: str,
+        current_password: str,
+        new_password: str,
+    ) -> AuthSession:
+        data = self._post(
+            {
+                "action":
+                    "change_password",
+                "token":
+                    token,
+                "device_id":
+                    self.device.device_id,
+                "current_password":
+                    current_password,
+                "new_password":
+                    new_password,
+            }
+        )
+
+        return self._session_from(
+            data
+        )
+
     def logout(self, token: str) -> None:
         if not token:
             return
@@ -223,6 +248,12 @@ class AuthApiClient:
             name=str(user_data.get("name") or ""),
             profile=str(user_data.get("profile") or ""),
             permissions=permissions,
+            must_change_password=bool(
+                user_data.get(
+                    "must_change_password",
+                    False,
+                )
+            ),
         )
 
         return AuthSession(

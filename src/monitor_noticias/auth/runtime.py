@@ -83,6 +83,40 @@ class AuthRuntime:
         self.session = session
         return session
 
+    def change_password(
+        self,
+        current_password: str,
+        new_password: str,
+    ) -> AuthSession:
+        if self.session is None:
+            raise AuthApiError(
+                "Nenhuma sessão autenticada.",
+                code="SESSION_MISSING",
+            )
+
+        old_token = self.session.token
+        saved_token = self.saved_token()
+        persist = bool(
+            saved_token
+            and saved_token == old_token
+        )
+
+        session = self.client.change_password(
+            old_token,
+            current_password,
+            new_password,
+        )
+
+        if persist:
+            self.token_store.save(
+                session.token
+            )
+        else:
+            self.token_store.clear()
+
+        self.session = session
+        return session
+
     def logout(self) -> None:
         token = (
             self.session.token

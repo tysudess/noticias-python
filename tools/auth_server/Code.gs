@@ -1,4 +1,4 @@
-const AUTH_VERSION = "1.0.0";
+const AUTH_VERSION = "1.1.0";
 
 const SHEET_USERS = "USUARIOS";
 const SHEET_DEVICES = "DISPOSITIVOS";
@@ -100,6 +100,7 @@ function setupCentralAuth() {
       "CRIADO_EM",
       "ULTIMO_LOGIN",
       "OBSERVACOES",
+      "TROCAR_SENHA",
     ]
   );
 
@@ -187,6 +188,7 @@ function setupCentralAuth() {
         new Date(),
         "",
         "Digite uma senha na coluna NOVA_SENHA e use o menu Central Auth.",
+        true,
       ]
     );
   }
@@ -200,8 +202,9 @@ function setupCentralAuth() {
       (
         "Estrutura criada.\n\n"
         + "1. Na aba USUARIOS, informe uma senha na coluna NOVA_SENHA.\n"
-        + "2. Use Central Auth > Processar senhas pendentes.\n"
-        + "3. Depois publique este Apps Script como Web App."
+        + "2. Deixe TROCAR_SENHA vazio/TRUE para exigir troca no primeiro acesso.\n"
+        + "3. Use Central Auth > Processar senhas pendentes.\n"
+        + "4. Atualize a implantação do Web App."
       ),
       SpreadsheetApp.getUi().ButtonSet.OK
     );
@@ -293,6 +296,24 @@ function processarSenhasPendentes() {
       7
     ).setValue(
       iterations
+    );
+
+    const rawForceChange = row[14];
+    const forceChange = (
+      rawForceChange === ""
+      || rawForceChange === null
+    )
+      ? true
+      : asBoolean_(
+          rawForceChange,
+          true
+        );
+
+    sheet.getRange(
+      rowIndex + 1,
+      15
+    ).setValue(
+      forceChange
     );
 
     if (
@@ -408,6 +429,14 @@ function doPost(e) {
     if (action === "logout") {
       return jsonResponse_(
         logout_(
+          request
+        )
+      );
+    }
+
+    if (action === "change_password") {
+      return jsonResponse_(
+        changePassword_(
           request
         )
       );
@@ -750,6 +779,257 @@ function validateSession_(request) {
 }
 
 
+
+function changePassword_(request) {
+  const lock = LockService.getScriptLock();
+
+  lock.waitLock(
+    20000
+  );
+
+  try {
+    const token = String(
+      request.token || ""
+    );
+
+    const deviceId = normalizeDeviceId_(
+      request.device_id
+    );
+
+    const currentPassword = String(
+      request.current_password || ""
+    );
+
+    const newPassword = String(
+      request.new_password || ""
+    );
+
+    if (
+      !token
+      || !deviceId
+      || !currentPassword
+      || !newPassword
+    ) {
+      return {
+        ok: false,
+        code: "INVALID_REQUEST",
+        message: "Informe a senha atual e a nova senha.",
+      };
+    }
+
+    if (newPassword.length < 8) {
+      return {
+        ok: false,
+        code: "PASSWORD_TOO_SHORT",
+        message: "A nova senha precisa ter pelo menos 8 caracteres.",
+      };
+    }
+
+    if (newPassword === currentPassword) {
+      return {
+        ok: false,
+        code: "PASSWORD_REUSED",
+        message: "A nova senha precisa ser diferente da senha atual.",
+      };
+    }
+
+    const session = findSessionByToken_(
+      token
+    );
+
+    if (!session) {
+      return {
+        ok: false,
+        code: "SESSION_INVALID",
+        message: "Sessão inválida ou encerrada.",
+      };
+    }
+
+    if (
+      session.revoked
+      || session.deviceId !== deviceId
+    ) {
+      return {
+        ok: false,
+        code: "SESSION_REVOKED",
+        message: "Sessão revogada.",
+      };
+    }
+
+    const now = new Date();
+
+    if (
+      session.expiresAt.getTime()
+      <= now.getTime()
+    ) {
+      setSessionRevoked_(
+        session.row,
+        true
+      );
+
+      return {
+        ok: false,
+        code: "SESSION_EXPIRED",
+        message: "Sessão expirada. Faça login novamente.",
+      };
+    }
+
+    const user = findUser_(
+      session.username
+    );
+
+    if (!user) {
+      setSessionRevoked_(
+        session.row,
+        true
+      );
+
+      return {
+        ok: false,
+        code: "USER_NOT_FOUND",
+        message: "Usuário não encontrado.",
+      };
+    }
+
+    const accessError = userAccessError_(
+      user
+    );
+
+    if (accessError) {
+      return {
+        ok: false,
+        code: accessError.code,
+        message: accessError.message,
+      };
+    }
+
+    const currentHash = hashPassword_(
+      currentPassword,
+      user.salt,
+      user.iterations
+    );
+
+    if (
+      !secureEqual_(
+        currentHash,
+        user.passwordHash
+      )
+    ) {
+      return {
+        ok: false,
+        code: "CURRENT_PASSWORD_INVALID",
+        message: "A senha atual está incorreta.",
+      };
+    }
+
+    const iterations = getPasswordIterations_();
+    const salt = randomHex_(24);
+    const passwordHash = hashPassword_(
+      newPassword,
+      salt,
+      iterations
+    );
+
+    const users = getSheet_(
+      SHEET_USERS
+    );
+
+    users.getRange(
+      user.row,
+      4
+    ).setValue("");
+
+    users.getRange(
+      user.row,
+      5
+    ).setValue(
+      salt
+    );
+
+    users.getRange(
+      user.row,
+      6
+    ).setValue(
+      passwordHash
+    );
+
+    users.getRange(
+      user.row,
+      7
+    ).setValue(
+      iterations
+    );
+
+    users.getRange(
+      user.row,
+      15
+    ).setValue(
+      false
+    );
+
+    // Derruba todas as sessões anteriores, inclusive a usada para a troca.
+    revokeSessionsForUser_(
+      user.username
+    );
+
+    const newToken = createSessionToken_();
+    const tokenHash = hashToken_(
+      newToken
+    );
+
+    const expires = new Date(
+      now.getTime()
+      + getSessionHours_()
+      * 60
+      * 60
+      * 1000
+    );
+
+    getSheet_(
+      SHEET_SESSIONS
+    ).appendRow(
+      [
+        tokenHash,
+        user.username,
+        deviceId,
+        now,
+        expires,
+        false,
+        now,
+      ]
+    );
+
+    touchDevice_(
+      user.username,
+      deviceId,
+      now
+    );
+
+    logEvent_(
+      "PASSWORD_CHANGED_SELF",
+      user.username,
+      deviceId,
+      "Senha alterada pelo próprio usuário no aplicativo."
+    );
+
+    const refreshedUser = findUser_(
+      user.username
+    );
+
+    return {
+      ok: true,
+      token: newToken,
+      expires_at: expires.toISOString(),
+      user: publicUser_(
+        refreshedUser
+      ),
+    };
+
+  } finally {
+    lock.releaseLock();
+  }
+}
+
 function logout_(request) {
   const lock = LockService.getScriptLock();
 
@@ -804,6 +1084,9 @@ function publicUser_(user) {
     permissions: resolvePermissions_(
       user.profile,
       user.permissions
+    ),
+    must_change_password: Boolean(
+      user.mustChangePassword
     ),
   };
 }
@@ -1126,6 +1409,10 @@ function findUser_(
       ),
       permissions: String(
         row[10] || ""
+      ),
+      mustChangePassword: asBoolean_(
+        row[14],
+        false
       ),
     };
   }
