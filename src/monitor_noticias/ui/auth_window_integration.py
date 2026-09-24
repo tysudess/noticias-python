@@ -51,13 +51,22 @@ class _ValidationWorker(QObject):
 
 
 def _find_layout_with_widget(layout, widget):
+    """Localiza o layout mesmo quando ele está dentro de QWidgets intermediários.
+
+    O cabeçalho da MainWindow fica dentro do QWidget ``content``. A versão
+    anterior só percorria QLayoutItem.layout(), então nunca entrava no layout
+    pertencente a esse QWidget e os botões Minha conta/Sair da conta não eram
+    inseridos.
+    """
+
     if layout is None:
         return None
 
     for index in range(layout.count()):
         item = layout.itemAt(index)
+        child_widget = item.widget()
 
-        if item.widget() is widget:
+        if child_widget is widget:
             return layout
 
         child_layout = item.layout()
@@ -65,6 +74,15 @@ def _find_layout_with_widget(layout, widget):
             found = _find_layout_with_widget(child_layout, widget)
             if found is not None:
                 return found
+
+        # Importante: um layout pode estar instalado em um QWidget que, por sua
+        # vez, é apenas um item do layout pai (caso real do cabeçalho).
+        if child_widget is not None:
+            owned_layout = child_widget.layout()
+            if owned_layout is not None:
+                found = _find_layout_with_widget(owned_layout, widget)
+                if found is not None:
+                    return found
 
     return None
 

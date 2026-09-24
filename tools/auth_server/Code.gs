@@ -1,4 +1,4 @@
-const AUTH_VERSION = "1.1.1";
+const AUTH_VERSION = "1.1.2";
 
 const SHEET_USERS = "USUARIOS";
 const SHEET_DEVICES = "DISPOSITIVOS";

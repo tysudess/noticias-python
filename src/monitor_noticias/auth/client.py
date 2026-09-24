@@ -18,6 +18,21 @@ from .models import (
 log = logging.getLogger(__name__)
 
 
+def _version_tuple(value: str) -> tuple[int, int, int]:
+    parts: list[int] = []
+
+    for piece in str(value or "").split(".")[:3]:
+        try:
+            parts.append(int(piece))
+        except ValueError:
+            parts.append(0)
+
+    while len(parts) < 3:
+        parts.append(0)
+
+    return tuple(parts)
+
+
 class AuthApiError(RuntimeError):
     def __init__(
         self,
@@ -84,7 +99,15 @@ class AuthApiClient:
                 raise ValueError("Resposta não é objeto JSON.")
 
             if bool(data.get("ok")) and str(data.get("status") or "").lower() == "online":
-                version = str(data.get("version") or "desconhecida")
+                version = str(data.get("version") or "").strip()
+
+                if _version_tuple(version) < (1, 1, 2):
+                    return False, (
+                        "Servidor de autenticação desatualizado "
+                        f"(versão {version or 'desconhecida'}). "
+                        "Atualize e reimplante o Apps Script V62."
+                    )
+
                 return True, (
                     "Servidor de autenticação acessível "
                     f"(versão {version})."
@@ -186,20 +209,32 @@ class AuthApiClient:
         current_password: str,
         new_password: str,
     ) -> AuthSession:
-        data = self._post(
-            {
-                "action":
-                    "change_password",
-                "token":
-                    token,
-                "device_id":
-                    self.device.device_id,
-                "current_password":
-                    current_password,
-                "new_password":
-                    new_password,
-            }
-        )
+        try:
+            data = self._post(
+                {
+                    "action":
+                        "change_password",
+                    "token":
+                        token,
+                    "device_id":
+                        self.device.device_id,
+                    "current_password":
+                        current_password,
+                    "new_password":
+                        new_password,
+                }
+            )
+        except AuthApiError as exc:
+            if exc.code == "UNKNOWN_ACTION" or str(exc).strip().lower() == "ação inválida.":
+                raise AuthApiError(
+                    (
+                        "O Apps Script publicado ainda é uma versão antiga e "
+                        "não possui a troca de senha. Atualize o Code.gs para "
+                        "a V62 e crie uma NOVA versão da implantação do Web App."
+                    ),
+                    code="SERVER_UPDATE_REQUIRED",
+                ) from exc
+            raise
 
         return self._session_from(
             data
@@ -225,26 +260,15 @@ class AuthApiClient:
             user_data.get("auth_server_version") or ""
         ).strip()
 
-        def version_tuple(value: str) -> tuple[int, int, int]:
-            parts: list[int] = []
-            for piece in value.split(".")[:3]:
-                try:
-                    parts.append(int(piece))
-                except ValueError:
-                    parts.append(0)
-            while len(parts) < 3:
-                parts.append(0)
-            return tuple(parts)
-
         if (
             not server_version
-            or version_tuple(server_version) < (1, 1, 1)
+            or _version_tuple(server_version) < (1, 1, 2)
         ):
             raise AuthApiError(
                 (
                     "O servidor de autenticação está desatualizado. "
                     "Atualize a implantação do Google Apps Script "
-                    "para a versão V61 e tente novamente."
+                    "para a versão V62 e tente novamente."
                 ),
                 code="SERVER_UPDATE_REQUIRED",
             )
