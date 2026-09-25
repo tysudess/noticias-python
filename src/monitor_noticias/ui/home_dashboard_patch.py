@@ -1,8 +1,6 @@
 from __future__ import annotations
 
-from typing import Iterable
-
-from PySide6.QtCore import QTimer, Qt
+from PySide6.QtCore import QTimer
 from PySide6.QtWidgets import (
     QAbstractButton,
     QFrame,
@@ -40,10 +38,7 @@ def _all_texts(widget: QWidget) -> list[str]:
     return texts
 
 
-def _find_first_label(
-    root: QWidget,
-    *options: str,
-) -> QLabel | None:
+def _find_first_label(root: QWidget, *options: str) -> QLabel | None:
     wanted = {_norm(item) for item in options if item}
 
     for label in root.findChildren(QLabel):
@@ -53,10 +48,7 @@ def _find_first_label(
     return None
 
 
-def _card_ancestor(
-    child: QWidget | None,
-    root: QWidget,
-) -> QWidget | None:
+def _card_ancestor(child: QWidget | None, root: QWidget) -> QWidget | None:
     current = child
 
     while current is not None and current is not root:
@@ -65,11 +57,8 @@ def _card_ancestor(
         if parent is root:
             return current
 
-        layout = current.layout()
-
-        if isinstance(current, (QFrame, QGroupBox)) and layout is not None:
+        if isinstance(current, (QFrame, QGroupBox)) and current.layout() is not None:
             texts = _all_texts(current)
-
             if len(texts) >= 2:
                 return current
 
@@ -79,222 +68,162 @@ def _card_ancestor(
 
 
 def _top_level_child_cards(root: QWidget) -> list[QWidget]:
-    result: list[QWidget] = []
-
-    for child in root.findChildren(QWidget):
-        if child.parentWidget() is root:
-            result.append(child)
-
-    return result
+    return [child for child in root.findChildren(QWidget) if child.parentWidget() is root]
 
 
-def _find_card_by_heading(
-    root: QWidget,
-    *headings: str,
-) -> QWidget | None:
+def _find_card_by_heading(root: QWidget, *headings: str) -> QWidget | None:
     label = _find_first_label(root, *headings)
-
     if label is not None:
         card = _card_ancestor(label, root)
         if card is not None:
             return card
 
     wanted = {_norm(item) for item in headings if item}
-
     for candidate in _top_level_child_cards(root):
         texts = _all_texts(candidate)
-
         if any(text in wanted for text in texts):
             return candidate
-
     return None
 
 
 def _font_point_size(widget: QWidget) -> float:
     font = widget.font()
     size = float(font.pointSizeF())
-
     if size <= 0:
         size = float(font.pointSize())
-
     if size <= 0:
         size = 10.0
-
     return size
 
 
-def _set_point_size(
-    widget: QWidget,
-    size: float,
-    bold: bool | None = None,
-) -> None:
+def _set_point_size(widget: QWidget, size: float, bold: bool | None = None) -> None:
     font = widget.font()
     font.setPointSizeF(float(size))
-
     if bold is not None:
         font.setBold(bool(bold))
-
     widget.setFont(font)
 
 
 def _enlarge_home_fonts(page: QWidget) -> None:
-    # Títulos dos cards e seções.
+    title_tokens = {
+        "monitoramento",
+        "ações rápidas",
+        "acoes rápidas",
+        "ações rapidas",
+        "acoes rapidas",
+        "agendamento automático",
+        "agendamento automatico",
+        "top 10 veículos",
+        "top 10 veiculos",
+        "últimas atividades",
+        "ultimas atividades",
+        "dicas",
+        "notícias 24h",
+        "videos armazenados",
+        "vídeos armazenados",
+        "videos hoje",
+        "vídeos hoje",
+        "demandas",
+        "fontes",
+        "status: pronto",
+    }
+
     for label in page.findChildren(QLabel):
         text = _norm(label.text())
         size = _font_point_size(label)
-
         if not text:
             continue
 
-        if text in {
-            "monitoramento",
-            "central pronta para monitorar",
-            "ações rápidas",
-            "agendamento automático",
-            "top 10 veículos",
-            "últimas atividades",
-            "ultimas atividades",
-            "dicas",
-            "notícias 24h",
-            "videos armazenados",
-            "vídeos armazenados",
-            "videos hoje",
-            "vídeos hoje",
-            "demandas",
-            "fontes",
-            "status: pronto",
-        }:
-            if size < 15:
-                _set_point_size(label, 15, bold=True)
+        if text in title_tokens:
+            if size < 15.8:
+                _set_point_size(label, 16.2, bold=True)
             continue
 
-        # Subtítulos e textos informativos pequenos.
-        if size < 9.8:
-            _set_point_size(label, 10.8)
-        elif size < 11:
-            _set_point_size(label, 11.2)
+        if text == "início" or text == "inicio":
+            _set_point_size(label, 24, bold=True)
+            continue
+
+        if size < 10.0:
+            _set_point_size(label, 10.9)
+        elif size < 11.0:
+            _set_point_size(label, 11.4)
 
     for button in page.findChildren(QAbstractButton):
         size = _font_point_size(button)
         text = _norm(button.text())
-
         if not text:
             continue
-
-        if size < 11.5:
-            _set_point_size(button, 11.8, bold=True)
-
-    # Ajuste do texto de busca no topo da Home, se estiver dentro da página.
-    for candidate in page.findChildren(QWidget):
-        if hasattr(candidate, "placeholderText"):
-            try:
-                font = candidate.font()
-                size = float(font.pointSizeF() or font.pointSize() or 10.0)
-                if size < 11:
-                    font.setPointSizeF(11.0)
-                    candidate.setFont(font)
-            except Exception:
-                pass
+        if size < 11.6:
+            _set_point_size(button, 12.0, bold=True)
+        if button.minimumHeight() < 42:
+            button.setMinimumHeight(42)
 
 
 def _replace_monitoring_title(page: QWidget) -> None:
-    label = _find_first_label(
-        page,
-        "central pronta para monitorar",
-        "monitoramento",
-    )
-
+    label = _find_first_label(page, "central pronta para monitorar", "monitoramento")
     if label is None:
         return
-
     label.setText("Monitoramento")
-    _set_point_size(label, 18, bold=True)
+    _set_point_size(label, 18.5, bold=True)
 
 
-def _hide_summary_card(page: QWidget) -> None:
-    card = _find_card_by_heading(
-        page,
-        "resumo do dia",
-    )
-
+def _hide_card(page: QWidget, *headings: str) -> QWidget | None:
+    card = _find_card_by_heading(page, *headings)
     if card is None:
-        return
+        return None
 
     card.hide()
     card.setVisible(False)
 
     parent = card.parentWidget()
     layout = parent.layout() if parent else None
-
     if isinstance(layout, (QGridLayout, QVBoxLayout)):
         try:
             layout.invalidate()
         except Exception:
             pass
 
+    return card
 
-def _expand_schedule_card(page: QWidget) -> None:
-    schedule = _find_card_by_heading(
-        page,
-        "agendamento automático",
-    )
 
-    if schedule is None:
+def _expand_card_across_grid(card: QWidget | None) -> None:
+    if card is None:
         return
-
-    schedule.setSizePolicy(
-        QSizePolicy.Policy.Expanding,
-        QSizePolicy.Policy.Preferred,
-    )
-
-    parent = schedule.parentWidget()
+    parent = card.parentWidget()
     if parent is None:
         return
-
     layout = parent.layout()
-
     if isinstance(layout, QGridLayout):
-        index = layout.indexOf(schedule)
-
+        index = layout.indexOf(card)
         if index >= 0:
-            row, col, row_span, col_span = layout.getItemPosition(index)
-
-            # Faz o card ocupar a largura da linha inteira.
-            total_columns = max(
-                2,
-                layout.columnCount(),
-            )
-
-            layout.addWidget(
-                schedule,
-                row,
-                0,
-                row_span,
-                total_columns,
-            )
-
+            row, _col, row_span, _col_span = layout.getItemPosition(index)
+            total_columns = max(2, layout.columnCount())
+            layout.addWidget(card, row, 0, row_span, total_columns)
             for column in range(total_columns):
                 try:
                     layout.setColumnStretch(column, 1)
                 except Exception:
                     pass
-
         layout.invalidate()
+
+    card.setSizePolicy(
+        QSizePolicy.Policy.Expanding,
+        QSizePolicy.Policy.Preferred,
+    )
+
+
+def _expand_schedule_card(page: QWidget) -> None:
+    schedule = _find_card_by_heading(page, "agendamento automático", "agendamento automatico")
+    _expand_card_across_grid(schedule)
 
 
 def _hide_monitor_placeholder(page: QWidget) -> None:
-    card = _find_card_by_heading(
-        page,
-        "monitoramento",
-        "central pronta para monitorar",
-    )
-
+    card = _find_card_by_heading(page, "monitoramento", "central pronta para monitorar")
     if card is None:
         return
 
     keep_tokens = {
         "monitoramento",
-        "central pronta para monitorar",
         "status: pronto",
         "status",
         "pronto",
@@ -311,47 +240,35 @@ def _hide_monitor_placeholder(page: QWidget) -> None:
     for widget in card.findChildren(QWidget):
         if widget is card:
             continue
-
-        if widget.parentWidget() is None:
+        parent = widget.parentWidget()
+        if parent is None:
             continue
-
-        if widget.parentWidget() is not card and widget.parentWidget().parentWidget() is not card:
+        if parent is not card and parent.parentWidget() is not card:
             continue
-
         texts = _all_texts(widget)
-
         if any(text in keep_tokens for text in texts):
             continue
-
-        # Ignora botões e controles reais.
         if widget.findChildren(QAbstractButton):
             continue
-
         geometry = widget.geometry()
         area = max(0, geometry.width()) * max(0, geometry.height())
-
-        # Procuramos a maior área ilustrativa vazia.
-        if area >= 30000:
+        if area >= 25000 and area > best_area:
             best_candidate = widget
             best_area = area
 
     if best_candidate is not None:
         best_candidate.hide()
         best_candidate.setVisible(False)
-
         parent = best_candidate.parentWidget()
         layout = parent.layout() if parent else None
-
         if layout is not None:
             try:
                 layout.invalidate()
             except Exception:
                 pass
 
-    # Como reforço, aumentamos a largura dos blocos informativos restantes.
     for widget in card.findChildren(QWidget):
         texts = _all_texts(widget)
-
         if any(text in keep_tokens for text in texts):
             widget.setSizePolicy(
                 QSizePolicy.Policy.Expanding,
@@ -360,42 +277,88 @@ def _hide_monitor_placeholder(page: QWidget) -> None:
 
 
 def _tune_status_box(page: QWidget) -> None:
-    status_label = _find_first_label(
-        page,
-        "status: pronto",
-    )
-
+    status_label = _find_first_label(page, "status: pronto")
     if status_label is None:
         return
 
-    _set_point_size(status_label, 14, bold=True)
-
+    _set_point_size(status_label, 14.4, bold=True)
     parent = status_label.parentWidget()
     if parent is not None:
         for label in parent.findChildren(QLabel):
             text = _norm(label.text())
-            if text and text != "status: pronto":
-                if _font_point_size(label) < 11:
-                    _set_point_size(label, 11.2)
+            if text and text != "status: pronto" and _font_point_size(label) < 11.2:
+                _set_point_size(label, 11.3)
+
+
+def _reflow_bottom_cards(page: QWidget) -> None:
+    activities = _find_card_by_heading(page, "últimas atividades", "ultimas atividades")
+    top10 = _find_card_by_heading(page, "top 10 veículos", "top 10 veiculos")
+    tips = _find_card_by_heading(page, "dicas")
+
+    _hide_card(page, "dicas")
+
+    if activities is None:
+        return
+
+    parent = activities.parentWidget()
+    if parent is None:
+        return
+    layout = parent.layout()
+    if not isinstance(layout, QGridLayout):
+        activities.setSizePolicy(
+            QSizePolicy.Policy.Expanding,
+            QSizePolicy.Policy.Preferred,
+        )
+        return
+
+    index_activities = layout.indexOf(activities)
+    if index_activities < 0:
+        return
+
+    row_a, col_a, row_span_a, _col_span_a = layout.getItemPosition(index_activities)
+    total_columns = max(2, layout.columnCount())
+
+    if top10 is not None:
+        index_top = layout.indexOf(top10)
+        if index_top >= 0:
+            row_t, col_t, row_span_t, col_span_t = layout.getItemPosition(index_top)
+            if row_t == row_a:
+                start_col = min(col_a, col_t)
+                if start_col == col_t:
+                    span = max(1, total_columns - col_t - col_span_t)
+                    layout.addWidget(activities, row_a, col_t + col_span_t, row_span_a, span)
+                    activities.setSizePolicy(
+                        QSizePolicy.Policy.Expanding,
+                        QSizePolicy.Policy.Preferred,
+                    )
+                    layout.invalidate()
+                    return
+
+    # fallback: deixa atividades ocupar a linha toda
+    layout.addWidget(activities, row_a, 0, row_span_a, total_columns)
+    activities.setSizePolicy(
+        QSizePolicy.Policy.Expanding,
+        QSizePolicy.Policy.Preferred,
+    )
+    layout.invalidate()
 
 
 def _apply_home_dashboard(window: QWidget) -> None:
     pages = getattr(window, "pages", None)
-
     if not isinstance(pages, dict):
         return
 
     page = pages.get(Section.HOME)
-
     if page is None:
         return
 
     _replace_monitoring_title(page)
     _enlarge_home_fonts(page)
-    _hide_summary_card(page)
+    _hide_card(page, "resumo do dia")
     _expand_schedule_card(page)
     _hide_monitor_placeholder(page)
     _tune_status_box(page)
+    _reflow_bottom_cards(page)
 
     try:
         page.updateGeometry()
@@ -406,15 +369,9 @@ def _apply_home_dashboard(window: QWidget) -> None:
 
 def install_home_dashboard_patch(window: QWidget) -> None:
     global _INSTALLED
-
     if _INSTALLED:
         return
-
     _INSTALLED = True
 
-    # Reaplicações leves para pegar widgets criados um pouco depois.
-    for delay in (0, 150, 600):
-        QTimer.singleShot(
-            delay,
-            lambda w=window: _apply_home_dashboard(w),
-        )
+    for delay in (0, 150, 600, 1200):
+        QTimer.singleShot(delay, lambda w=window: _apply_home_dashboard(w))

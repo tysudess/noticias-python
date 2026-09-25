@@ -28,10 +28,6 @@ class Application:
             "Inicializando Central Inteligente de Mídia PySide6"
         )
 
-        # V66 — antes de importar componentes que usam requests/urllib3,
-        # substitui o bundle interno de CAs pelo trust store nativo do SO.
-        # Isso permite confiar em CAs corporativas instaladas no Windows
-        # Certificate Store ou no trust store do Ubuntu.
         from monitor_noticias.platform.tls import (
             install_system_trust_store,
         )
@@ -95,6 +91,9 @@ class Application:
         from monitor_noticias.ui.news_direct_link_patch import (
             install_news_direct_link_patch,
         )
+        from monitor_noticias.ui.news_extractor_speed_patch import (
+            install_news_extractor_speed_patch,
+        )
         from monitor_noticias.ui.cross_platform_runtime_patch import (
             install_cross_platform_runtime_patch,
         )
@@ -112,6 +111,7 @@ class Application:
 
         install_news_extractor_proxy_patch()
         install_news_direct_link_patch()
+        install_news_extractor_speed_patch()
         install_cross_platform_runtime_patch()
         install_pdf_export_quality_fix()
 
@@ -141,6 +141,9 @@ class Application:
         )
         from monitor_noticias.ui.header_refinement_patch import (
             install_header_refinement,
+        )
+        from monitor_noticias.ui.sources_bahia_patch import (
+            install_sources_bahia_patch,
         )
 
         install_removed_integrations_guard(MainWindow)
@@ -246,6 +249,9 @@ class Application:
         install_visual_refinement_patch(
             qt_app,
             window,
+        )
+        install_sources_bahia_patch(
+            window
         )
 
         if (
