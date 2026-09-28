@@ -23,6 +23,8 @@ class DigitalNewspaperProvider:
     pagewise_min_pages: int = 8
     pagewise_max_pages: int = 120
     pagewise_stop_after_misses: int = 4
+    entry_urls: tuple[str, ...] = ()
+    dated_edition_url_template: str = ""
 
     @property
     def can_try_download(self) -> bool:
@@ -39,39 +41,59 @@ class DigitalNewspaperProvider:
     def supports_pagewise_pdf(self) -> bool:
         return bool(self.page_pdf_templates)
 
+    def _date_values(self, target_date: date) -> dict[str, object]:
+        return {
+            "year": f"{target_date.year:04d}",
+            "month": f"{target_date.month:02d}",
+            "day": f"{target_date.day:02d}",
+            "iso": target_date.isoformat(),
+            "br": target_date.strftime("%d-%m-%Y"),
+            "yyyymmdd": target_date.strftime("%Y%m%d"),
+        }
+
     def direct_pdf_url(self, target_date: date) -> str:
         template = self.direct_pdf_template.strip()
         if not template:
             return ""
+        return template.format(**self._date_values(target_date))
 
-        return template.format(
-            year=f"{target_date.year:04d}",
-            month=f"{target_date.month:02d}",
-            day=f"{target_date.day:02d}",
-            iso=target_date.isoformat(),
-            br=target_date.strftime("%d-%m-%Y"),
-        )
+    def edition_urls(self, target_date: date) -> tuple[str, ...]:
+        """Pontos de entrada oficiais, priorizados para o fluxo automático."""
+        candidates: list[str] = []
+
+        dated = self.dated_edition_url_template.strip()
+        if dated:
+            candidates.append(
+                dated.format(**self._date_values(target_date))
+            )
+
+        candidates.append(self.edition_url)
+        candidates.extend(self.entry_urls)
+
+        seen: set[str] = set()
+        out: list[str] = []
+        for raw in candidates:
+            value = str(raw or "").strip()
+            if not value or value in seen:
+                continue
+            seen.add(value)
+            out.append(value)
+        return tuple(out)
 
     def page_pdf_urls(
         self,
         target_date: date,
         page: int,
     ) -> tuple[str, ...]:
+        values = self._date_values(target_date)
+        values["page"] = int(page)
+
         out: list[str] = []
         for template in self.page_pdf_templates:
             text = str(template or "").strip()
             if not text:
                 continue
-            out.append(
-                text.format(
-                    year=f"{target_date.year:04d}",
-                    month=f"{target_date.month:02d}",
-                    day=f"{target_date.day:02d}",
-                    iso=target_date.isoformat(),
-                    br=target_date.strftime("%d-%m-%Y"),
-                    page=int(page),
-                )
-            )
+            out.append(text.format(**values))
         return tuple(out)
 
     def output_filename(self, target_date: date) -> str:
@@ -132,10 +154,8 @@ class CorreioBrazilienseProvider(DigitalNewspaperProvider):
             pagewise_max_pages=80,
             pagewise_stop_after_misses=5,
             note=(
-                "A edição certificada possui PDF integral. A V79 primeiro tenta "
-                "reconstituir a edição página a página para evitar falhas como "
-                "saltos 2→4; se não houver páginas individuais válidas, cai para o "
-                "all.pdf oficial sem recompressão."
+                "A V80 mantém a correção V79: tenta a sequência de PDFs oficiais "
+                "por página para evitar saltos e usa o all.pdf oficial como fallback."
             ),
         )
 
@@ -145,15 +165,18 @@ class EstadoMinasProvider(DigitalNewspaperProvider):
         super().__init__(
             id="estado-de-minas",
             name="Estado de Minas",
-            edition_url="https://digital.em.com.br/",
+            edition_url="https://digital.em.com.br/estadodeminas",
+            dated_edition_url_template=(
+                "https://digital.em.com.br/estadodeminas/{day}/{month}/{year}/p1"
+            ),
+            entry_urls=("https://digital.em.com.br/",),
             domains=("em.com.br", "digital.em.com.br"),
             edition_kind="Edição diária em PDF",
             download_strategy="official_pdf",
             official_pdf_documented=True,
             note=(
-                "O Estado de Minas oferece a edição diária em PDF para assinantes. "
-                "A V78 tenta o fluxo autorizado em segundo plano e só pede renovação "
-                "de sessão quando o site exigir autenticação."
+                "A V80 abre diretamente o leitor Estado de Minas e procura o PDF/"
+                "download oferecido ao assinante, inclusive em viewer/iframe."
             ),
         )
 
@@ -173,8 +196,8 @@ class GazetaPovoProvider(DigitalNewspaperProvider):
             official_pdf_documented=True,
             date_selection="weekly",
             note=(
-                "A Gazeta Revista é disponibilizada aos assinantes para download em PDF. "
-                "Não representa uma réplica diária do antigo jornal impresso."
+                "A Gazeta Revista é semanal e oferece PDF a assinantes. A V80 segue "
+                "automaticamente o link da edição/PDF dentro do site oficial."
             ),
         )
 
@@ -184,17 +207,21 @@ class FolhaProvider(DigitalNewspaperProvider):
         super().__init__(
             id="folha",
             name="Folha de S.Paulo",
-            edition_url="https://edicaodigital.folha.uol.com.br/",
+            edition_url="https://acervo.folha.uol.com.br/digital/index.do",
+            entry_urls=(
+                "https://edicaodigital.folha.uol.com.br/",
+            ),
             domains=(
                 "folha.uol.com.br",
                 "www1.folha.uol.com.br",
                 "edicaodigital.folha.uol.com.br",
+                "acervo.folha.uol.com.br",
             ),
             edition_kind="Edição Folha / réplica impressa",
             download_strategy="authorized_export",
             note=(
-                "A réplica impressa é confirmada. A V78 tenta silenciosamente apenas "
-                "PDF/download/exportação oferecidos pelo visualizador oficial."
+                "A V80 entra pela Edição Folha/Acervo Digital e procura somente "
+                "exportação ou PDF disponibilizado ao assinante pelo leitor oficial."
             ),
         )
 
@@ -204,13 +231,18 @@ class EstadaoProvider(DigitalNewspaperProvider):
         super().__init__(
             id="estadao",
             name="Estadão",
-            edition_url="https://www.estadao.com.br/",
-            domains=("estadao.com.br", "www.estadao.com.br"),
+            edition_url="https://digital.estadao.com.br/o-estado-de-s-paulo/",
+            dated_edition_url_template=(
+                "https://digital.estadao.com.br/o-estado-de-s-paulo/{yyyymmdd}"
+            ),
+            entry_urls=("https://www.estadao.com.br/",),
+            domains=("estadao.com.br",),
             edition_kind="Estadão Digital / réplica",
             download_strategy="authorized_export",
+            date_selection="direct_url",
             note=(
-                "A V78 usa a sessão oficial do assinante em segundo plano e só aciona "
-                "download ou impressão disponibilizados pelo próprio serviço."
+                "A V80 abre diretamente a réplica do Estadão na data selecionada e "
+                "procura PDF/exportação oferecidos pelo leitor oficial."
             ),
         )
 
@@ -220,13 +252,14 @@ class GloboProvider(DigitalNewspaperProvider):
         super().__init__(
             id="o-globo",
             name="O Globo",
-            edition_url="https://oglobo.globo.com/",
-            domains=("oglobo.globo.com", "globo.com"),
+            edition_url="https://jornaldigital.oglobo.globo.com/",
+            entry_urls=("https://oglobo.globo.com/",),
+            domains=("globo.com",),
             edition_kind="Jornal digitalizado",
             download_strategy="authorized_export",
             note=(
-                "A assinatura inclui edição digitalizada. A V78 não presume PDF integral; "
-                "tenta somente exportação autorizada do serviço."
+                "A V80 entra pelo Jornal Digital do GLOBO, preserva a sessão Globo e "
+                "procura apenas PDF/exportação autorizados pelo visualizador."
             ),
         )
 
@@ -236,13 +269,17 @@ class ValorProvider(DigitalNewspaperProvider):
         super().__init__(
             id="valor-economico",
             name="Valor Econômico",
-            edition_url="https://valor.globo.com/",
-            domains=("valor.globo.com", "globo.com"),
+            edition_url="https://jornaldigital.valor.globo.com/",
+            entry_urls=(
+                "https://jornaldigital.valor.globo.com/revista-valor/",
+                "https://valor.globo.com/",
+            ),
+            domains=("globo.com",),
             edition_kind="Jornal impresso digitalizado",
             download_strategy="authorized_export",
             note=(
-                "O plano digital inclui a edição do impresso digitalizada. O PDF integral "
-                "só é salvo se o visualizador oferecer essa opção ao assinante."
+                "A V80 usa o Jornal Digital do Valor como ponto de entrada e segue "
+                "somente recursos de download/exportação disponibilizados ao assinante."
             ),
         )
 
@@ -252,13 +289,14 @@ class ATardeProvider(DigitalNewspaperProvider):
         super().__init__(
             id="a-tarde",
             name="A Tarde",
-            edition_url="https://atarde.com.br/",
+            edition_url="https://flip.atarde.com.br/edicaodehoje/",
+            entry_urls=("https://atarde.com.br/",),
             domains=("atarde.com.br",),
             edition_kind="Edição digital",
             download_strategy="authorized_export",
             note=(
-                "A edição digital pode ser lida no computador. A V78 trabalha em segundo "
-                "plano e não tenta extrair recursos protegidos do visualizador."
+                "A V80 tenta primeiro o leitor Flip A TARDE e depois o portal oficial, "
+                "procurando apenas edição/PDF/exportação permitidos."
             ),
         )
 
@@ -268,17 +306,27 @@ class GZHProvider(DigitalNewspaperProvider):
         super().__init__(
             id="gzh-zero-hora",
             name="Gaúcha / Zero Hora / GZH",
-            edition_url="https://gauchazh.clicrbs.com.br/",
+            edition_url=(
+                "https://flipzh.clicrbs.com.br/jornal-digital/pub/gruporbs/"
+            ),
+            dated_edition_url_template=(
+                "https://flipzh.clicrbs.com.br/jornal-digital/pub/gruporbs/"
+                "?numero={yyyymmdd}"
+            ),
+            entry_urls=(
+                "https://gauchazh.clicrbs.com.br/",
+                "https://www.gauchazh.com.br/",
+            ),
             domains=(
-                "gauchazh.clicrbs.com.br",
-                "gzh.rs",
                 "clicrbs.com.br",
+                "gzh.rs",
+                "gauchazh.com.br",
             ),
             edition_kind="Réplica completa de Zero Hora",
             download_strategy="authorized_export",
             note=(
-                "A réplica completa está disponível a assinantes no site GZH. O download "
-                "só é acionado quando o próprio serviço o disponibiliza."
+                "A V80 entra diretamente no leitor de Zero Hora e passa a preservar "
+                "também a sessão do domínio gauchazh.com.br."
             ),
         )
 
@@ -288,18 +336,22 @@ class NYTimesProvider(DigitalNewspaperProvider):
         super().__init__(
             id="new-york-times",
             name="The New York Times",
-            edition_url="https://nytimes.pressreader.com/the-new-york-times",
+            edition_url=(
+                "https://eeditionnytimes.newspaperdirect.com/epaper/viewer.aspx"
+            ),
+            entry_urls=(
+                "https://nytimes.pressreader.com/the-new-york-times",
+            ),
             domains=(
-                "nytimes.pressreader.com",
-                "pressreader.com",
                 "newspaperdirect.com",
+                "pressreader.com",
                 "nytimes.com",
             ),
             edition_kind="Replica Edition / PressReader",
             download_strategy="authorized_export",
             note=(
-                "A Replica Edition é operada pelo PressReader. A V78 usa somente "
-                "impressão/download oferecidos pela plataforma ao assinante."
+                "A V80 usa o viewer oficial da Replica Edition e o PressReader como "
+                "fallback, limitando-se aos recursos de impressão/download disponíveis."
             ),
         )
 
@@ -315,8 +367,8 @@ class WashingtonPostProvider(DigitalNewspaperProvider):
             download_strategy="app_only",
             browser_supported=True,
             note=(
-                "A documentação atual concentra a Print Edition no aplicativo. "
-                "A V78 abre a conta web, mas não tenta extrair o pacote offline do app."
+                "A Print Edition continua documentada no aplicativo oficial. A V80 não "
+                "extrai pacotes offline do app nem anuncia PDF desktop inexistente."
             ),
         )
 

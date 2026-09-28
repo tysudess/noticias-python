@@ -5,6 +5,7 @@ from datetime import date
 import json
 from pathlib import Path
 import shutil
+from urllib.parse import urlparse
 
 import requests
 
@@ -62,105 +63,115 @@ DOWNLOAD_PROBE_JS = r"""
       .trim();
   }
 
-  var nodes = Array.prototype.slice.call(
-    document.querySelectorAll(
-      'a[href], button, [role="button"], [download], input[type="button"], input[type="submit"]'
-    )
-  );
+  function cleanUrl(v){
+    try{
+      var u = new URL(String(v || ''), document.baseURI);
+      if(u.protocol !== 'http:' && u.protocol !== 'https:') return '';
+      return u.href;
+    }catch(e){
+      return '';
+    }
+  }
+
+  var pageText = norm((document.body && document.body.innerText) || '');
+  var here = norm(location.href || '');
+  var password = document.querySelector('input[type="password"]');
+
+  if(password || /(?:^|[\/?#&=_-])(login|signin|sign-in|auth)(?:$|[\/?#&=_-])/.test(here)){
+    return JSON.stringify({ok:false, reason:'login_required'});
+  }
+
+  var phrases = [
+    'baixar pdf', 'download pdf', 'baixar edicao', 'baixar edição',
+    'download edition', 'download edicao', 'download edição',
+    'edicao pdf', 'edição pdf', 'jornal em pdf', 'full edition pdf',
+    'edition pdf', 'edicao completa', 'edição completa', 'full edition',
+    'replica edition', 'print edition', 'jornal digital', 'edicao digital',
+    'edição digital', 'ler edicao', 'ler edição', 'read edition', 'epaper'
+  ];
+  var urlHints = [
+    'edition', 'edicao', 'edicao-digital', 'digital', 'epaper', 'e-paper',
+    'viewer', 'flip', 'replica', 'jornal-digital', 'gazeta-revista', 'newspaper', 'pressreader', 'acervo'
+  ];
 
   var ranked = [];
-  var phrases = [
-    'baixar pdf',
-    'download pdf',
-    'baixar edicao',
-    'baixar edição',
-    'download edition',
-    'edicao pdf',
-    'edição pdf',
-    'jornal em pdf',
-    'full edition pdf',
-    'edition pdf',
-    'download edição',
-    'download edicao'
-  ];
+  var nodes = Array.prototype.slice.call(document.querySelectorAll(
+    'a[href], button, [role="button"], [download], input[type="button"], input[type="submit"]'
+  ));
 
   for(var i=0;i<nodes.length;i++){
     var n = nodes[i];
     var text = norm(
-      (n.innerText || '') + ' ' +
-      (n.textContent || '') + ' ' +
-      (n.value || '') + ' ' +
-      (n.getAttribute('aria-label') || '') + ' ' +
+      (n.innerText || '') + ' ' + (n.textContent || '') + ' ' +
+      (n.value || '') + ' ' + (n.getAttribute('aria-label') || '') + ' ' +
       (n.getAttribute('title') || '')
     );
-    var href = '';
-    try{
-      href = n.href ? String(n.href) : '';
-    }catch(e){}
-
+    var href = cleanUrl(n.href || n.getAttribute('href') || '');
+    var lowHref = norm(href);
     var score = 0;
 
-    if(/\.pdf(?:$|[?#])/i.test(href)) score += 5000;
-    if(n.hasAttribute && n.hasAttribute('download')) score += 900;
+    if(href && /\.pdf(?:$|[?#])/i.test(href)) score += 5200;
+    if(n.hasAttribute && n.hasAttribute('download')) score += 1000;
 
     for(var p=0;p<phrases.length;p++){
-      if(text.indexOf(phrases[p]) >= 0){
-        score += 1200 - (p * 35);
-      }
+      if(text.indexOf(phrases[p]) >= 0) score += 1500 - (p * 20);
+    }
+    for(var h=0;h<urlHints.length;h++){
+      if(lowHref.indexOf(urlHints[h]) >= 0) score += 1050 - (h * 15);
     }
 
-    // Evita escolher PDF/botão de uma única página quando a intenção é a edição inteira.
-    if(
-      text.indexOf('pagina') >= 0 ||
-      text.indexOf('página') >= 0 ||
-      text.indexOf('page ') >= 0
-    ){
-      score -= 1200;
-    }
+    if(text.indexOf('assine') >= 0 || text.indexOf('subscribe') >= 0) score -= 900;
+    if(text.indexOf('pagina') >= 0 || text.indexOf('página') >= 0 || text.indexOf('single page') >= 0) score -= 4200;
+    if(/(?:page|pagina|pag)[=_\/-]?\d+/i.test(href)) score -= 4200;
 
     if(score > 0){
       ranked.push({
-        index: i,
-        score: score,
-        href: href,
-        text: text.slice(0, 220)
+        kind:'node', index:i, score:score, href:href,
+        text:text.slice(0,240)
       });
     }
   }
 
-  ranked.sort(function(a,b){return b.score-a.score;});
+  var frames = Array.prototype.slice.call(
+    document.querySelectorAll('iframe[src], frame[src], embed[src], object[data]')
+  );
+  for(var j=0;j<frames.length;j++){
+    var f = frames[j];
+    var src = cleanUrl(f.src || f.data || f.getAttribute('src') || f.getAttribute('data') || '');
+    if(!src) continue;
+    var low = norm(src);
+    var s = /\.pdf(?:$|[?#])/i.test(src) ? 5400 : 500;
+    for(var q=0;q<urlHints.length;q++){
+      if(low.indexOf(urlHints[q]) >= 0) s += 900 - (q * 15);
+    }
+    ranked.push({kind:'resource', index:j, score:s, href:src, text:'viewer/frame'});
+  }
 
+  ranked.sort(function(a,b){return b.score-a.score;});
   if(!ranked.length || ranked[0].score < 900){
-    return JSON.stringify({ok:false, reason:'not_found'});
+    return JSON.stringify({ok:false, reason:'not_found', title:document.title || ''});
   }
 
   var best = ranked[0];
-  var node = nodes[best.index];
-
   if(best.href && /\.pdf(?:$|[?#])/i.test(best.href)){
-    return JSON.stringify({
-      ok:true,
-      mode:'direct_pdf',
-      href:best.href,
-      text:best.text
-    });
+    return JSON.stringify({ok:true, mode:'direct_pdf', href:best.href, text:best.text});
+  }
+
+  if(best.kind === 'resource' && best.href){
+    return JSON.stringify({ok:true, mode:'navigate', href:best.href, text:best.text});
+  }
+
+  var node = nodes[best.index];
+  if(best.href && best.score >= 1100){
+    return JSON.stringify({ok:true, mode:'navigate', href:best.href, text:best.text});
   }
 
   try{
     node.scrollIntoView({block:'center', inline:'center'});
     node.click();
-    return JSON.stringify({
-      ok:true,
-      mode:'clicked',
-      href:best.href || '',
-      text:best.text
-    });
+    return JSON.stringify({ok:true, mode:'clicked', href:best.href || '', text:best.text});
   }catch(e){
-    return JSON.stringify({
-      ok:false,
-      reason:'click_failed',
-      detail:String(e || '')
-    });
+    return JSON.stringify({ok:false, reason:'click_failed', detail:String(e || '')});
   }
 })()
 """
@@ -619,6 +630,13 @@ class DigitalNewspaperBrowserDialog(QDialog):
         self._download_in_progress = False
         self._pending_method = "Download autorizado"
         self._auto_download_requested = False
+        self._auto_download_active = False
+        self._auto_entry_urls: tuple[str, ...] = ()
+        self._auto_entry_index = -1
+        self._auto_seen_urls: set[str] = set()
+        self._auto_probe_attempts = 0
+        self._auto_navigation_depth = 0
+        self._auto_login_seen = False
         self._direct_thread: DirectPdfDownloadThread | None = None
 
         self.setWindowTitle(
@@ -987,13 +1005,73 @@ class DigitalNewspaperBrowserDialog(QDialog):
         self.target_date = target_date
 
     def open_edition(self) -> None:
-        self.view.load(
-            QUrl(self.provider.edition_url)
-        )
+        urls = self.provider.edition_urls(self.target_date)
+        target = urls[0] if urls else self.provider.edition_url
+        self.view.load(QUrl(target))
 
     def prepare_manual_login(self) -> None:
         self._auto_download_requested = False
+        self._auto_download_active = False
+        self._auto_entry_urls = ()
+        self._auto_entry_index = -1
+        self.download_button.setEnabled(self.provider.can_try_download)
         self.open_edition()
+
+    def _navigation_allowed(self, raw_url: str) -> bool:
+        try:
+            parsed = urlparse(str(raw_url or "").strip())
+        except Exception:
+            return False
+        if parsed.scheme.lower() not in {"http", "https"}:
+            return False
+        host = str(parsed.hostname or "").strip().lower()
+        return bool(host and self.provider.domain_allowed(host))
+
+    def _finish_auto_not_found(self) -> None:
+        self._auto_download_active = False
+        self._auto_download_requested = False
+        self.download_button.setEnabled(self.provider.can_try_download)
+
+        if self._auto_login_seen:
+            self._emit_status(
+                f"{self.provider.name}: autenticação necessária ou sessão expirada. "
+                "Use “Entrar / renovar sessão” uma vez e depois clique no jornal novamente."
+            )
+            return
+
+        self._emit_status(
+            f"{self.provider.name}: nenhum PDF completo ou exportação autorizada foi "
+            "localizado automaticamente nos leitores oficiais testados. Se o serviço "
+            "oferecer download somente após login, use “Entrar / renovar sessão”."
+        )
+
+    def _advance_auto_entry(self) -> None:
+        if not self._auto_download_active:
+            return
+
+        while True:
+            self._auto_entry_index += 1
+            if self._auto_entry_index >= len(self._auto_entry_urls):
+                self._finish_auto_not_found()
+                return
+
+            raw = self._auto_entry_urls[self._auto_entry_index]
+            url = str(raw or "").strip()
+            if not url or url in self._auto_seen_urls:
+                continue
+            if not self._navigation_allowed(url):
+                continue
+
+            self._auto_seen_urls.add(url)
+            self._auto_probe_attempts = 0
+            self._auto_navigation_depth = 0
+            self._auto_download_requested = True
+            self._emit_status(
+                f"{self.provider.name}: verificando leitor oficial "
+                f"{self._auto_entry_index + 1}/{len(self._auto_entry_urls)}…"
+            )
+            self.view.load(QUrl(url))
+            return
 
     def start_automatic_download(self) -> None:
         if not self.provider.can_try_download:
@@ -1007,17 +1085,26 @@ class DigitalNewspaperBrowserDialog(QDialog):
             self._start_direct_pdf_download(direct_url)
             return
 
-        self._auto_download_requested = True
         self._pending_method = (
             "PDF oficial"
             if self.provider.official_pdf_documented
             else "Exportação/download autorizado"
         )
+        self._auto_download_active = True
+        self._auto_download_requested = True
+        self._auto_entry_urls = self.provider.edition_urls(self.target_date)
+        self._auto_entry_index = -1
+        self._auto_seen_urls.clear()
+        self._auto_probe_attempts = 0
+        self._auto_navigation_depth = 0
+        self._auto_login_seen = False
+        self.download_button.setEnabled(False)
+
         self._emit_status(
             f"{self.provider.name}: procurando a edição de "
-            f"{self.target_date.strftime('%d/%m/%Y')} em segundo plano…"
+            f"{self.target_date.strftime('%d/%m/%Y')} nos leitores oficiais…"
         )
-        self.open_edition()
+        self._advance_auto_entry()
 
     def _start_direct_pdf_download(self, url: str) -> None:
         if self._direct_thread is not None and self._direct_thread.isRunning():
@@ -1066,17 +1153,22 @@ class DigitalNewspaperBrowserDialog(QDialog):
 
     def _load_finished(self, ok: bool) -> None:
         if not ok:
-            self._auto_download_requested = False
+            if self._auto_download_active:
+                self._advance_auto_entry()
+                return
             self._emit_status(
                 "A página não concluiu o carregamento. Verifique internet, Proxy Geral "
                 "ou autenticação do site."
             )
             return
 
-        if self._auto_download_requested:
-            self._auto_download_requested = False
+        if self._auto_download_active:
+            current = self.page.url().toString().strip()
+            if current:
+                self._auto_seen_urls.add(current)
+            self._auto_probe_attempts = 0
             QTimer.singleShot(
-                900,
+                1200,
                 self.try_download_edition,
             )
             return
@@ -1093,6 +1185,9 @@ class DigitalNewspaperBrowserDialog(QDialog):
             )
             return
 
+        if self._download_in_progress:
+            return
+
         self._pending_method = (
             "PDF oficial"
             if self.provider.official_pdf_documented
@@ -1100,34 +1195,53 @@ class DigitalNewspaperBrowserDialog(QDialog):
         )
         self.download_button.setEnabled(False)
         self._emit_status(
-            "Procurando automaticamente PDF ou exportação autorizada da edição…"
+            f"{self.provider.name}: analisando PDF, edição, viewer e exportação autorizada…"
         )
         self.page.runJavaScript(
             DOWNLOAD_PROBE_JS,
             self._download_probe_result,
         )
 
-    def _download_probe_result(self, raw) -> None:
-        self.download_button.setEnabled(
-            self.provider.can_try_download
-        )
+    def _reprobe_after_click(self) -> None:
+        if not self._auto_download_active or self._download_in_progress:
+            return
+        if self._auto_probe_attempts >= 3:
+            self._advance_auto_entry()
+            return
+        self.try_download_edition()
 
+    def _download_probe_result(self, raw) -> None:
         try:
             data = json.loads(str(raw or ""))
         except Exception:
             data = {}
 
         if not data.get("ok"):
-            self._emit_status(
-                "Nenhum PDF completo autorizado foi localizado automaticamente. "
-                "A sessão pode precisar ser renovada em “Entrar / renovar sessão”."
-            )
+            reason = str(data.get("reason") or "")
+            if reason == "login_required":
+                self._auto_login_seen = True
+
+            if (
+                self._auto_download_active
+                and reason == "not_found"
+                and self._auto_probe_attempts < 2
+            ):
+                self._auto_probe_attempts += 1
+                QTimer.singleShot(1500, self.try_download_edition)
+                return
+
+            if self._auto_download_active:
+                self._advance_auto_entry()
+            else:
+                self.download_button.setEnabled(self.provider.can_try_download)
             return
 
         mode = str(data.get("mode") or "")
         href = str(data.get("href") or "").strip()
 
         if mode == "direct_pdf" and href:
+            self._auto_download_active = False
+            self._auto_download_requested = False
             self._emit_status(
                 "PDF autorizado localizado. Iniciando o download original…"
             )
@@ -1149,15 +1263,40 @@ class DigitalNewspaperBrowserDialog(QDialog):
             self.page.runJavaScript(script)
             return
 
+        if mode == "navigate" and href:
+            if (
+                self._auto_download_active
+                and self._navigation_allowed(href)
+                and href not in self._auto_seen_urls
+                and self._auto_navigation_depth < 5
+            ):
+                self._auto_navigation_depth += 1
+                self._auto_seen_urls.add(href)
+                self._emit_status(
+                    f"{self.provider.name}: seguindo o leitor oficial da edição…"
+                )
+                self.view.load(QUrl(href))
+                return
+
+            if self._auto_download_active:
+                self._advance_auto_entry()
+            return
+
         if mode == "clicked":
+            self._auto_probe_attempts += 1
             self._emit_status(
-                "Comando oficial de download/exportação acionado. Aguardando o PDF…"
+                "Comando oficial de edição/download acionado. Aguardando resposta do leitor…"
+            )
+            QTimer.singleShot(
+                1700,
+                self._reprobe_after_click,
             )
             return
 
-        self._emit_status(
-            "O visualizador respondeu, mas não iniciou um PDF completo autorizado."
-        )
+        if self._auto_download_active:
+            self._advance_auto_entry()
+        else:
+            self.download_button.setEnabled(self.provider.can_try_download)
 
     def _download_requested(
         self,
@@ -1188,7 +1327,12 @@ class DigitalNewspaperBrowserDialog(QDialog):
                 "O site tentou baixar um arquivo que não é PDF. Ele não foi tratado "
                 "como edição completa."
             )
+            if self._auto_download_active:
+                QTimer.singleShot(500, self._advance_auto_entry)
             return
+
+        self._auto_download_active = False
+        self._auto_download_requested = False
 
         target = _output_target(
             self.paths,
@@ -1228,6 +1372,7 @@ class DigitalNewspaperBrowserDialog(QDialog):
 
         if state == QWebEngineDownloadRequest.DownloadState.DownloadCompleted:
             self._download_in_progress = False
+            self.download_button.setEnabled(self.provider.can_try_download)
 
             try:
                 with target.open("rb") as handle:
@@ -1262,6 +1407,7 @@ class DigitalNewspaperBrowserDialog(QDialog):
             QWebEngineDownloadRequest.DownloadState.DownloadInterrupted,
         }:
             self._download_in_progress = False
+            self.download_button.setEnabled(self.provider.can_try_download)
             self._emit_status(
                 "O download foi cancelado ou interrompido pelo site/navegador."
             )
