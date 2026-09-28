@@ -18,12 +18,30 @@ class DigitalNewspaperProvider:
     browser_supported: bool = True
     date_selection: str = "viewer"
     note: str = ""
+    direct_pdf_template: str = ""
 
     @property
     def can_try_download(self) -> bool:
         return bool(
             self.browser_supported
             and self.download_strategy != "app_only"
+        )
+
+    @property
+    def supports_direct_pdf(self) -> bool:
+        return bool(self.direct_pdf_template.strip())
+
+    def direct_pdf_url(self, target_date: date) -> str:
+        template = self.direct_pdf_template.strip()
+        if not template:
+            return ""
+
+        return template.format(
+            year=f"{target_date.year:04d}",
+            month=f"{target_date.month:02d}",
+            day=f"{target_date.day:02d}",
+            iso=target_date.isoformat(),
+            br=target_date.strftime("%d-%m-%Y"),
         )
 
     def output_filename(self, target_date: date) -> str:
@@ -50,14 +68,24 @@ class CorreioBrazilienseProvider(DigitalNewspaperProvider):
         super().__init__(
             id="correio-braziliense",
             name="Correio Braziliense",
-            edition_url="https://www.correiobraziliense.com.br/",
-            domains=("correiobraziliense.com.br",),
+            edition_url="https://flip.correiobraziliense.com.br/",
+            domains=(
+                "correiobraziliense.com.br",
+                "flip.correiobraziliense.com.br",
+                "edicao.correiobraziliense.com.br",
+            ),
             edition_kind="Edição diária / íntegra do impresso",
             download_strategy="official_pdf",
             official_pdf_documented=True,
+            date_selection="direct_url",
+            direct_pdf_template=(
+                "https://edicao.correiobraziliense.com.br/"
+                "correiobraziliense/{year}/{month}/{day}/all.pdf"
+            ),
             note=(
-                "A assinatura digital anuncia a íntegra do jornal impresso em PDF. "
-                "A V77 procura o download autorizado dentro da sessão do assinante."
+                "A edição certificada possui PDF integral. A V78 usa o arquivo "
+                "oficial da data selecionada diretamente, sem abrir navegador e "
+                "sem recompressão."
             ),
         )
 
@@ -73,8 +101,9 @@ class EstadoMinasProvider(DigitalNewspaperProvider):
             download_strategy="official_pdf",
             official_pdf_documented=True,
             note=(
-                "O FAQ do Estado de Minas orienta a leitura do jornal em PDF em "
-                "digital.em.com.br, mediante login de assinante."
+                "O Estado de Minas oferece a edição diária em PDF para assinantes. "
+                "A V78 tenta o fluxo autorizado em segundo plano e só pede renovação "
+                "de sessão quando o site exigir autenticação."
             ),
         )
 
@@ -114,8 +143,8 @@ class FolhaProvider(DigitalNewspaperProvider):
             edition_kind="Edição Folha / réplica impressa",
             download_strategy="authorized_export",
             note=(
-                "A réplica impressa é confirmada. PDF integral não é presumido: "
-                "a V77 usa somente download/exportação oferecida pelo visualizador."
+                "A réplica impressa é confirmada. A V78 tenta silenciosamente apenas "
+                "PDF/download/exportação oferecidos pelo visualizador oficial."
             ),
         )
 
@@ -130,7 +159,7 @@ class EstadaoProvider(DigitalNewspaperProvider):
             edition_kind="Estadão Digital / réplica",
             download_strategy="authorized_export",
             note=(
-                "A integração abre a sessão oficial do assinante e só usa recursos de "
+                "A V78 usa a sessão oficial do assinante em segundo plano e só aciona "
                 "download ou impressão disponibilizados pelo próprio serviço."
             ),
         )
@@ -146,8 +175,8 @@ class GloboProvider(DigitalNewspaperProvider):
             edition_kind="Jornal digitalizado",
             download_strategy="authorized_export",
             note=(
-                "A assinatura inclui edição digitalizada. A V77 não assume que exista "
-                "PDF integral; procura apenas exportação autorizada na sessão."
+                "A assinatura inclui edição digitalizada. A V78 não presume PDF integral; "
+                "tenta somente exportação autorizada do serviço."
             ),
         )
 
@@ -163,7 +192,7 @@ class ValorProvider(DigitalNewspaperProvider):
             download_strategy="authorized_export",
             note=(
                 "O plano digital inclui a edição do impresso digitalizada. O PDF integral "
-                "só será usado se o visualizador oferecer essa opção ao assinante."
+                "só é salvo se o visualizador oferecer essa opção ao assinante."
             ),
         )
 
@@ -178,8 +207,8 @@ class ATardeProvider(DigitalNewspaperProvider):
             edition_kind="Edição digital",
             download_strategy="authorized_export",
             note=(
-                "A edição digital pode ser lida no computador. A V77 preserva o login "
-                "oficial e não tenta extrair recursos protegidos do visualizador."
+                "A edição digital pode ser lida no computador. A V78 trabalha em segundo "
+                "plano e não tenta extrair recursos protegidos do visualizador."
             ),
         )
 
@@ -198,8 +227,8 @@ class GZHProvider(DigitalNewspaperProvider):
             edition_kind="Réplica completa de Zero Hora",
             download_strategy="authorized_export",
             note=(
-                "A réplica completa está disponível a assinantes no site GZH. "
-                "O download só é acionado se aparecer como recurso autorizado."
+                "A réplica completa está disponível a assinantes no site GZH. O download "
+                "só é acionado quando o próprio serviço o disponibiliza."
             ),
         )
 
@@ -219,8 +248,8 @@ class NYTimesProvider(DigitalNewspaperProvider):
             edition_kind="Replica Edition / PressReader",
             download_strategy="authorized_export",
             note=(
-                "A Replica Edition é operada pelo PressReader. A V77 pode manter a "
-                "sessão e usar apenas impressão/download oferecidos pela plataforma."
+                "A Replica Edition é operada pelo PressReader. A V78 usa somente "
+                "impressão/download oferecidos pela plataforma ao assinante."
             ),
         )
 
@@ -236,8 +265,8 @@ class WashingtonPostProvider(DigitalNewspaperProvider):
             download_strategy="app_only",
             browser_supported=True,
             note=(
-                "A documentação atual concentra a Print Edition no aplicativo. "
-                "A V77 abre a conta web, mas não tenta extrair o pacote offline do app."
+                "A documentação atual concentra a Print Edition no aplicativo. A V78 "
+                "não tenta extrair o pacote offline do app."
             ),
         )
 

@@ -8,12 +8,18 @@ trust_datas, trust_bins, trust_hidden = collect_all("truststore")
 
 ROOT = Path(SPECPATH)
 CAPAS_ASSETS = ROOT / "src" / "monitor_noticias" / "capas_tool" / "assets"
+APP_ASSETS = ROOT / "src" / "monitor_noticias" / "assets"
 
 capas_datas = [
     (str(CAPAS_ASSETS / "newspapers.json"), "monitor_noticias/capas_tool/assets"),
     (str(CAPAS_ASSETS / "principais_capas_cover.png"), "monitor_noticias/capas_tool/assets"),
     (str(CAPAS_ASSETS / "app_icon.png"), "monitor_noticias/capas_tool/assets"),
     (str(CAPAS_ASSETS / "app_icon.ico"), "monitor_noticias/capas_tool/assets"),
+]
+
+app_datas = [
+    (str(APP_ASSETS / "app_icon.png"), "monitor_noticias/assets"),
+    (str(APP_ASSETS / "app_icon.ico"), "monitor_noticias/assets"),
 ]
 
 audio_hidden = list(
@@ -40,7 +46,13 @@ a = Analysis(
     ["run.py"],
     pathex=["src"],
     binaries=pdfium_bins + pawp_bins + trust_bins,
-    datas=pdfium_datas + pawp_datas + trust_datas + capas_datas,
+    datas=(
+        pdfium_datas
+        + pawp_datas
+        + trust_datas
+        + capas_datas
+        + app_datas
+    ),
     hiddenimports=hidden,
     hookspath=[],
     hooksconfig={},
@@ -61,6 +73,7 @@ exe = EXE(
     [],
     exclude_binaries=True,
     name="MonitorDeNoticias",
+    icon=str(APP_ASSETS / "app_icon.ico"),
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,

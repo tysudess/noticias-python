@@ -5,7 +5,16 @@ from datetime import date
 import json
 from pathlib import Path
 
-from PySide6.QtCore import QDateTime, QByteArray, QTimer, QUrl, Signal
+import requests
+
+from PySide6.QtCore import (
+    QDateTime,
+    QByteArray,
+    QThread,
+    QTimer,
+    QUrl,
+    Signal,
+)
 from PySide6.QtNetwork import QNetworkCookie
 from PySide6.QtWebEngineCore import (
     QWebEngineDownloadRequest,
@@ -24,10 +33,14 @@ from PySide6.QtWidgets import (
 )
 
 from monitor_noticias.app.paths import AppPaths
+from monitor_noticias.app.preferences import SharedPreferences
 from monitor_noticias.capas_tool.app import network as covers_network
 from monitor_noticias.digital_newspapers.providers import DigitalNewspaperProvider
 from monitor_noticias.digital_newspapers.storage import SecureSessionStore
-from monitor_noticias.networking.proxy import corporate_tls_compatibility
+from monitor_noticias.networking.proxy import (
+    ProxySettings,
+    corporate_tls_compatibility,
+)
 
 
 class DigitalNewspaperPage(QWebEnginePage):
@@ -65,7 +78,9 @@ DOWNLOAD_PROBE_JS = r"""
     'edição pdf',
     'jornal em pdf',
     'full edition pdf',
-    'edition pdf'
+    'edition pdf',
+    'download edição',
+    'download edicao'
   ];
 
   for(var i=0;i<nodes.length;i++){
@@ -82,7 +97,6 @@ DOWNLOAD_PROBE_JS = r"""
       href = n.href ? String(n.href) : '';
     }catch(e){}
 
-    var lowHref = norm(href);
     var score = 0;
 
     if(/\.pdf(?:$|[?#])/i.test(href)) score += 5000;
@@ -90,12 +104,17 @@ DOWNLOAD_PROBE_JS = r"""
 
     for(var p=0;p<phrases.length;p++){
       if(text.indexOf(phrases[p]) >= 0){
-        score += 1200 - (p * 40);
+        score += 1200 - (p * 35);
       }
     }
 
-    if(text.indexOf('pagina') >= 0 || text.indexOf('page') >= 0){
-      score -= 250;
+    // Evita escolher PDF/botão de uma única página quando a intenção é a edição inteira.
+    if(
+      text.indexOf('pagina') >= 0 ||
+      text.indexOf('página') >= 0 ||
+      text.indexOf('page ') >= 0
+    ){
+      score -= 1200;
     }
 
     if(score > 0){
@@ -110,7 +129,7 @@ DOWNLOAD_PROBE_JS = r"""
 
   ranked.sort(function(a,b){return b.score-a.score;});
 
-  if(!ranked.length){
+  if(!ranked.length || ranked[0].score < 900){
     return JSON.stringify({ok:false, reason:'not_found'});
   }
 
@@ -146,7 +165,210 @@ DOWNLOAD_PROBE_JS = r"""
 """
 
 
+def _output_target(
+    paths: AppPaths,
+    provider: DigitalNewspaperProvider,
+    target_date: date,
+) -> Path:
+    output_dir = (
+        Path(paths.state_root)
+        / "JornaisDigitais"
+        / provider.id
+        / target_date.isoformat()
+    )
+    output_dir.mkdir(parents=True, exist_ok=True)
+    return output_dir / provider.output_filename(target_date)
+
+
+class DirectPdfDownloadThread(QThread):
+    """Baixa um PDF oficial conhecido sem abrir janela/navegador visível."""
+
+    status_changed = Signal(str)
+    completed = Signal(str, int, str)
+    failed = Signal(str)
+
+    def __init__(
+        self,
+        *,
+        paths: AppPaths,
+        provider: DigitalNewspaperProvider,
+        target_date: date,
+        url: str,
+        parent=None,
+    ) -> None:
+        super().__init__(parent)
+        self.paths = paths
+        self.provider = provider
+        self.target_date = target_date
+        self.url = str(url)
+
+    def _proxy_settings(self) -> tuple[ProxySettings, object]:
+        prefs = SharedPreferences(
+            self.paths.data
+            / "prefs"
+            / "monitor_prefs.properties"
+        )
+        settings = ProxySettings(
+            prefs,
+            data_dir=self.paths.data,
+        )
+        return settings, settings.load()
+
+    def _restore_requests_cookies(
+        self,
+        session: requests.Session,
+    ) -> None:
+        vault = SecureSessionStore(
+            self.paths,
+            self.provider.id,
+        )
+        rows = vault.load_json(default=[])
+        if not isinstance(rows, list):
+            return
+
+        for item in rows:
+            if not isinstance(item, dict):
+                continue
+            try:
+                name = str(item.get("name") or "")
+                domain = str(item.get("domain") or "").lstrip(".")
+                path = str(item.get("path") or "/")
+                if not name or not self.provider.domain_allowed(domain):
+                    continue
+                value = base64.b64decode(
+                    str(item.get("value") or ""),
+                    validate=False,
+                ).decode("utf-8", "ignore")
+                session.cookies.set(
+                    name,
+                    value,
+                    domain=domain,
+                    path=path,
+                )
+            except Exception:
+                continue
+
+    def run(self) -> None:
+        target = _output_target(
+            self.paths,
+            self.provider,
+            self.target_date,
+        )
+        part = target.with_suffix(target.suffix + ".part")
+
+        try:
+            settings, config = self._proxy_settings()
+            proxies = settings.requests_proxies(config)
+            verify = settings.requests_verify(config)
+
+            with requests.Session() as session:
+                session.trust_env = False
+                self._restore_requests_cookies(session)
+
+                self.status_changed.emit(
+                    f"{self.provider.name}: baixando a edição de "
+                    f"{self.target_date.strftime('%d/%m/%Y')} em segundo plano…"
+                )
+
+                response = session.get(
+                    self.url,
+                    headers={
+                        "User-Agent": (
+                            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                            "AppleWebKit/537.36 Chrome/151 Safari/537.36"
+                        ),
+                        "Accept": "application/pdf,*/*;q=0.8",
+                        "Referer": self.provider.edition_url,
+                    },
+                    stream=True,
+                    allow_redirects=True,
+                    timeout=(15, 180),
+                    proxies=proxies,
+                    verify=verify,
+                )
+
+                if response.status_code in {401, 403}:
+                    raise RuntimeError(
+                        "Autenticação necessária. Use “Entrar / renovar sessão” "
+                        "uma vez e tente novamente."
+                    )
+
+                if response.status_code == 404:
+                    raise RuntimeError(
+                        "A edição desta data ainda não está disponível no servidor oficial."
+                    )
+
+                if response.status_code < 200 or response.status_code >= 300:
+                    raise RuntimeError(
+                        f"O servidor do jornal respondeu HTTP {response.status_code}."
+                    )
+
+                part.parent.mkdir(parents=True, exist_ok=True)
+                try:
+                    part.unlink()
+                except FileNotFoundError:
+                    pass
+
+                received = 0
+                with part.open("wb") as handle:
+                    for chunk in response.iter_content(chunk_size=1024 * 512):
+                        if self.isInterruptionRequested():
+                            raise RuntimeError("Download cancelado.")
+                        if not chunk:
+                            continue
+                        handle.write(chunk)
+                        received += len(chunk)
+                        if received and received % (5 * 1024 * 1024) < len(chunk):
+                            self.status_changed.emit(
+                                f"{self.provider.name}: {received / (1024 * 1024):.1f} MB recebidos…"
+                            )
+
+            with part.open("rb") as handle:
+                signature = handle.read(5)
+
+            if signature != b"%PDF-":
+                raise RuntimeError(
+                    "O endereço oficial não retornou um PDF. A sessão pode ter expirado."
+                )
+
+            pages = 0
+            try:
+                from pypdf import PdfReader
+
+                pages = len(PdfReader(str(part)).pages)
+            except Exception as exc:
+                raise RuntimeError(
+                    "O arquivo recebido não passou na validação de PDF."
+                ) from exc
+
+            try:
+                target.unlink()
+            except FileNotFoundError:
+                pass
+
+            part.replace(target)
+            self.completed.emit(
+                str(target),
+                pages,
+                "PDF oficial direto",
+            )
+
+        except Exception as exc:
+            try:
+                part.unlink()
+            except Exception:
+                pass
+            self.failed.emit(str(exc) or exc.__class__.__name__)
+
+
 class DigitalNewspaperBrowserDialog(QDialog):
+    """Sessão WebEngine dos jornais.
+
+    Na V78 o diálogo NÃO é exibido no fluxo normal. O clique no jornal tenta o
+    PDF automaticamente em segundo plano. Esta janela só é mostrada quando o
+    usuário escolhe explicitamente “Entrar / renovar sessão”.
+    """
+
     status_changed = Signal(str)
     session_changed = Signal(bool)
     pdf_completed = Signal(str, int, str)
@@ -176,9 +398,11 @@ class DigitalNewspaperBrowserDialog(QDialog):
         )
         self._download_in_progress = False
         self._pending_method = "Download autorizado"
+        self._auto_download_requested = False
+        self._direct_thread: DirectPdfDownloadThread | None = None
 
         self.setWindowTitle(
-            f"Jornais Digitais • {provider.name}"
+            f"Entrar / renovar sessão • {provider.name}"
         )
         self.resize(1320, 860)
         self.setMinimumSize(980, 650)
@@ -186,7 +410,6 @@ class DigitalNewspaperBrowserDialog(QDialog):
         self._build_browser()
         self._build_ui()
         self._restore_cookie_vault()
-        self.open_edition()
 
     def _build_browser(self) -> None:
         try:
@@ -266,7 +489,7 @@ class DigitalNewspaperBrowserDialog(QDialog):
             else None
         )
         self.view.loadStarted.connect(
-            lambda: self._emit_status("Abrindo edição…")
+            lambda: self._emit_status("Abrindo serviço do jornal…")
         )
         self.view.loadFinished.connect(
             self._load_finished
@@ -299,15 +522,11 @@ class DigitalNewspaperBrowserDialog(QDialog):
         self.address.setReadOnly(True)
         toolbar.addWidget(self.address, 1)
 
-        open_button = QPushButton("Abrir edição")
-        open_button.clicked.connect(self.open_edition)
-        toolbar.addWidget(open_button)
-
         self.download_button = QPushButton(
             "Baixar edição completa"
         )
         self.download_button.clicked.connect(
-            self.try_download_edition
+            self.start_automatic_download
         )
         self.download_button.setEnabled(
             self.provider.can_try_download
@@ -317,8 +536,9 @@ class DigitalNewspaperBrowserDialog(QDialog):
         root.addLayout(toolbar)
 
         self.info = QLabel(
-            "Use somente sua própria assinatura. A Central não armazena a senha "
-            "do jornal e não contorna paywall, CAPTCHA, DRM ou proteção técnica."
+            "Esta tela existe somente para autenticação quando a sessão expirar. "
+            "No uso normal, clique no nome do jornal na aba Jornais Digitais e o "
+            "download acontece sem abrir esta janela. A Central não armazena sua senha."
         )
         self.info.setWordWrap(True)
         self.info.setObjectName("digitalBrowserInfo")
@@ -416,10 +636,6 @@ class DigitalNewspaperBrowserDialog(QDialog):
     def _cookie_to_dict(self, cookie: QNetworkCookie) -> dict | None:
         try:
             domain = str(cookie.domain() or "").strip()
-            # QNetworkCookie não informa a origem de um cookie host-only.
-            # Para não atribuir por engano um cookie de terceiro ao domínio
-            # visível da página, cookies sem domínio explícito ficam somente
-            # na memória do Chromium e não entram no cofre persistente.
             if not domain or not self.provider.domain_allowed(domain):
                 return None
 
@@ -514,9 +730,6 @@ class DigitalNewspaperBrowserDialog(QDialog):
 
         if restored:
             self.session_changed.emit(True)
-            self._emit_status(
-                f"Sessão protegida restaurada ({restored} cookies)."
-            )
 
     def _save_cookie_vault(self) -> None:
         if not self._cookies:
@@ -558,17 +771,100 @@ class DigitalNewspaperBrowserDialog(QDialog):
             QUrl(self.provider.edition_url)
         )
 
-    def _load_finished(self, ok: bool) -> None:
-        if ok:
+    def prepare_manual_login(self) -> None:
+        self._auto_download_requested = False
+        self.open_edition()
+
+    def start_automatic_download(self) -> None:
+        if not self.provider.can_try_download:
             self._emit_status(
-                "Página carregada. Faça login normalmente, abra a edição desejada "
-                "e use “Baixar edição completa”."
+                "Este provedor não oferece um fluxo web confirmado para baixar a edição."
             )
-        else:
+            return
+
+        direct_url = self.provider.direct_pdf_url(self.target_date)
+        if direct_url:
+            self._start_direct_pdf_download(direct_url)
+            return
+
+        self._auto_download_requested = True
+        self._pending_method = (
+            "PDF oficial"
+            if self.provider.official_pdf_documented
+            else "Exportação/download autorizado"
+        )
+        self._emit_status(
+            f"{self.provider.name}: procurando a edição de "
+            f"{self.target_date.strftime('%d/%m/%Y')} em segundo plano…"
+        )
+        self.open_edition()
+
+    def _start_direct_pdf_download(self, url: str) -> None:
+        if self._direct_thread is not None and self._direct_thread.isRunning():
+            self._emit_status("O download desta edição já está em andamento.")
+            return
+
+        thread = DirectPdfDownloadThread(
+            paths=self.paths,
+            provider=self.provider,
+            target_date=self.target_date,
+            url=url,
+            parent=self,
+        )
+        thread.status_changed.connect(self._emit_status)
+        thread.failed.connect(self._direct_failed)
+        thread.completed.connect(self._direct_completed)
+        thread.finished.connect(self._direct_thread_finished)
+        self._direct_thread = thread
+        thread.start()
+
+    def _direct_failed(self, message: str) -> None:
+        self._emit_status(
+            f"{self.provider.name}: {message}"
+        )
+
+    def _direct_completed(
+        self,
+        path: str,
+        pages: int,
+        method: str,
+    ) -> None:
+        self._emit_status(
+            f"PDF concluído sem recompressão: {path}"
+        )
+        self.pdf_completed.emit(
+            path,
+            pages,
+            method,
+        )
+
+    def _direct_thread_finished(self) -> None:
+        thread = self._direct_thread
+        self._direct_thread = None
+        if thread is not None:
+            thread.deleteLater()
+
+    def _load_finished(self, ok: bool) -> None:
+        if not ok:
+            self._auto_download_requested = False
             self._emit_status(
                 "A página não concluiu o carregamento. Verifique internet, Proxy Geral "
                 "ou autenticação do site."
             )
+            return
+
+        if self._auto_download_requested:
+            self._auto_download_requested = False
+            QTimer.singleShot(
+                900,
+                self.try_download_edition,
+            )
+            return
+
+        self._emit_status(
+            "Página de autenticação carregada. Entre normalmente. A senha não é "
+            "armazenada; somente a sessão/cookies permitidos podem ser protegidos localmente."
+        )
 
     def try_download_edition(self) -> None:
         if not self.provider.can_try_download:
@@ -584,7 +880,7 @@ class DigitalNewspaperBrowserDialog(QDialog):
         )
         self.download_button.setEnabled(False)
         self._emit_status(
-            "Procurando na página atual um PDF ou botão de exportação autorizado…"
+            "Procurando automaticamente PDF ou exportação autorizada da edição…"
         )
         self.page.runJavaScript(
             DOWNLOAD_PROBE_JS,
@@ -603,8 +899,8 @@ class DigitalNewspaperBrowserDialog(QDialog):
 
         if not data.get("ok"):
             self._emit_status(
-                "Nenhum download autorizado foi localizado nesta tela. "
-                "Abra a edição correta e tente novamente."
+                "Nenhum PDF completo autorizado foi localizado automaticamente. "
+                "A sessão pode precisar ser renovada em “Entrar / renovar sessão”."
             )
             return
 
@@ -622,8 +918,6 @@ class DigitalNewspaperBrowserDialog(QDialog):
                 )
                 return
             except Exception:
-                # Alguns builds do Qt não expõem Page.download. O clique direto
-                # continua sendo tentado abaixo, sem contornar o site.
                 pass
 
             script = (
@@ -637,12 +931,12 @@ class DigitalNewspaperBrowserDialog(QDialog):
 
         if mode == "clicked":
             self._emit_status(
-                "Comando de download/exportação acionado. Aguardando o site iniciar o arquivo…"
+                "Comando oficial de download/exportação acionado. Aguardando o PDF…"
             )
             return
 
         self._emit_status(
-            "O visualizador respondeu, mas não iniciou um PDF autorizado."
+            "O visualizador respondeu, mas não iniciou um PDF completo autorizado."
         )
 
     def _download_requested(
@@ -671,29 +965,22 @@ class DigitalNewspaperBrowserDialog(QDialog):
             except Exception:
                 pass
             self._emit_status(
-                "O site tentou baixar um arquivo que não é PDF. A V77 não o tratou "
-                "como edição completa para evitar perda de qualidade ou arquivo incorreto."
+                "O site tentou baixar um arquivo que não é PDF. Ele não foi tratado "
+                "como edição completa."
             )
             return
 
-        output_dir = (
-            Path(self.paths.state_root)
-            / "JornaisDigitais"
-            / self.provider.id
-            / self.target_date.isoformat()
+        target = _output_target(
+            self.paths,
+            self.provider,
+            self.target_date,
         )
-        output_dir.mkdir(parents=True, exist_ok=True)
+        output_dir = target.parent
 
-        filename = self.provider.output_filename(self.target_date)
-        target = output_dir / filename
-        base_stem = target.stem
-        suffix = target.suffix
-        counter = 2
-        while target.exists():
-            target = output_dir / (
-                f"{base_stem}-{counter}{suffix}"
-            )
-            counter += 1
+        try:
+            target.unlink()
+        except FileNotFoundError:
+            pass
 
         try:
             download.setDownloadDirectory(str(output_dir))
@@ -721,13 +1008,24 @@ class DigitalNewspaperBrowserDialog(QDialog):
 
         if state == QWebEngineDownloadRequest.DownloadState.DownloadCompleted:
             self._download_in_progress = False
-            pages = 0
+
             try:
+                with target.open("rb") as handle:
+                    if handle.read(5) != b"%PDF-":
+                        raise ValueError("assinatura PDF inválida")
+
                 from pypdf import PdfReader
 
                 pages = len(PdfReader(str(target)).pages)
             except Exception:
-                pages = 0
+                try:
+                    target.unlink()
+                except Exception:
+                    pass
+                self._emit_status(
+                    "O arquivo recebido não era um PDF válido da edição e foi descartado."
+                )
+                return
 
             self._emit_status(
                 f"PDF concluído sem recompressão: {target}"
@@ -752,8 +1050,20 @@ class DigitalNewspaperBrowserDialog(QDialog):
         self.status.setText(text)
         self.status_changed.emit(text)
 
-    def closeEvent(self, event) -> None:  # noqa: N802
+    def shutdown(self) -> None:
+        if self._direct_thread is not None and self._direct_thread.isRunning():
+            self._direct_thread.requestInterruption()
+            self._direct_thread.wait(1500)
+
         if self._cookie_save_timer.isActive():
             self._cookie_save_timer.stop()
             self._save_cookie_vault()
+
+        try:
+            self.page.triggerAction(QWebEnginePage.WebAction.Stop)
+        except Exception:
+            pass
+
+    def closeEvent(self, event) -> None:  # noqa: N802
+        self.shutdown()
         super().closeEvent(event)

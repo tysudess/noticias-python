@@ -73,7 +73,8 @@ class DigitalNewspapersPage(QWidget):
         title = QLabel("Jornais Digitais")
         title.setObjectName("digitalTitle")
         subtitle = QLabel(
-            "Acesse suas próprias assinaturas e preserve o arquivo oficial sempre que o jornal disponibilizar PDF."
+            "Clique no jornal para baixar automaticamente a edição da data selecionada. "
+            "Quando houver PDF oficial, o arquivo original é preservado sem recompressão."
         )
         subtitle.setObjectName("digitalMuted")
         subtitle.setWordWrap(True)
@@ -81,7 +82,7 @@ class DigitalNewspapersPage(QWidget):
         text_box.addWidget(subtitle)
         hl.addLayout(text_box, 1)
 
-        safe = QLabel("●  Sessões protegidas localmente")
+        safe = QLabel("●  Download automático • sessão protegida")
         safe.setObjectName("digitalSafeChip")
         hl.addWidget(safe)
         root.addWidget(hero)
@@ -95,14 +96,22 @@ class DigitalNewspapersPage(QWidget):
         providers_layout.setContentsMargins(14, 12, 14, 12)
         providers_layout.setSpacing(8)
 
-        providers_title = QLabel("Jornais disponíveis")
+        providers_title = QLabel("Clique no jornal para baixar")
         providers_title.setObjectName("digitalSectionTitle")
         providers_layout.addWidget(providers_title)
+
+        providers_help = QLabel(
+            "Um clique inicia o download da edição completa. Nenhuma janela de navegador "
+            "é aberta durante o fluxo normal."
+        )
+        providers_help.setObjectName("digitalMuted")
+        providers_help.setWordWrap(True)
+        providers_layout.addWidget(providers_help)
 
         self.provider_table = QTableWidget(0, 4)
         self.provider_table.setObjectName("digitalProviders")
         self.provider_table.setHorizontalHeaderLabels(
-            ["Jornal", "Sessão", "Edição", "PDF"]
+            ["Jornal", "Sessão", "Edição", "Método"]
         )
         self.provider_table.verticalHeader().setVisible(False)
         self.provider_table.setSelectionBehavior(
@@ -124,8 +133,8 @@ class DigitalNewspapersPage(QWidget):
         self.provider_table.itemSelectionChanged.connect(
             self._selection_changed
         )
-        self.provider_table.cellDoubleClicked.connect(
-            lambda _row, _col: self.download_current()
+        self.provider_table.cellClicked.connect(
+            self._provider_clicked
         )
         providers_layout.addWidget(self.provider_table, 1)
         content.addWidget(providers_card, 3)
@@ -163,15 +172,19 @@ class DigitalNewspapersPage(QWidget):
         )
         action_layout.addWidget(self.date_edit)
 
-        self.open_button = QPushButton("↗  Abrir edição / entrar")
-        self.open_button.setObjectName("digitalPrimary")
-        self.open_button.clicked.connect(self.open_current)
-        action_layout.addWidget(self.open_button)
-
-        self.download_button = QPushButton("⇩  Baixar edição completa")
+        self.download_button = QPushButton("⇩  Baixar edição completa agora")
         self.download_button.setObjectName("digitalDownload")
         self.download_button.clicked.connect(self.download_current)
         action_layout.addWidget(self.download_button)
+
+        self.open_button = QPushButton("↗  Entrar / renovar sessão")
+        self.open_button.setProperty("secondary", True)
+        self.open_button.clicked.connect(self.open_current)
+        self.open_button.setToolTip(
+            "Use somente quando o jornal informar que a autenticação expirou. "
+            "O download normal não abre navegador."
+        )
+        action_layout.addWidget(self.open_button)
 
         self.clear_session_button = QPushButton("×  Limpar sessão deste jornal")
         self.clear_session_button.setProperty("secondary", True)
@@ -185,7 +198,8 @@ class DigitalNewspapersPage(QWidget):
         action_layout.addWidget(self.progress)
 
         self.status = QLabel(
-            "Selecione um jornal. O primeiro acesso abre o login oficial dentro da Central."
+            "Clique em um jornal à esquerda. A Central tentará baixar diretamente "
+            "a edição completa da data selecionada."
         )
         self.status.setObjectName("digitalStatus")
         self.status.setWordWrap(True)
@@ -193,7 +207,7 @@ class DigitalNewspapersPage(QWidget):
 
         rule = QLabel(
             "Qualidade: PDF oficial → exportação autorizada → páginas HD autorizadas. "
-            "Captura de tela não é usada como PDF oficial."
+            "Não há quebra de DRM, CAPTCHA ou paywall. A senha do jornal não é salva."
         )
         rule.setObjectName("digitalRule")
         rule.setWordWrap(True)
@@ -323,11 +337,9 @@ class DigitalNewspapersPage(QWidget):
             padding:10px;
             font-size:10px;
         }
-        QPushButton#digitalPrimary, QPushButton#digitalDownload {
-            min-height:34px;
-            font-weight:900;
-        }
         QPushButton#digitalDownload {
+            min-height:38px;
+            font-weight:900;
             background:qlineargradient(x1:0,y1:0,x2:1,y2:0,stop:0 #087AF7,stop:1 #16A3EE);
         }
         QTableWidget#digitalProviders, QTableWidget#digitalHistory {
@@ -338,7 +350,10 @@ class DigitalNewspapersPage(QWidget):
             selection-background-color:#E7F3FF;
             selection-color:#08245F;
         }
-        QTableWidget::item {
+        QTableWidget#digitalProviders::item {
+            padding:7px 5px;
+        }
+        QTableWidget#digitalHistory::item {
             padding:5px;
         }
         """
@@ -362,6 +377,20 @@ class DigitalNewspapersPage(QWidget):
             self._selected_provider_id = provider_id
         self._sync_selected_panel()
 
+    def _provider_clicked(self, row: int, _column: int) -> None:
+        item = self.provider_table.item(row, 0)
+        if item is None:
+            return
+
+        provider_id = str(item.data(Qt.ItemDataRole.UserRole) or "")
+        if not provider_id:
+            return
+
+        self._selected_provider_id = provider_id
+        self.provider_table.selectRow(row)
+        self._sync_selected_panel()
+        self.download_current()
+
     def _sync_selected_panel(self) -> None:
         provider = self._selected_provider()
         if provider is None:
@@ -376,7 +405,7 @@ class DigitalNewspapersPage(QWidget):
         )
         self.download_button.setEnabled(provider.can_try_download)
         self.download_button.setToolTip(
-            "Procura apenas PDF/download/exportação oferecidos pelo próprio site."
+            "Baixa a edição completa automaticamente, sem abrir navegador."
             if provider.can_try_download
             else "A edição completa está documentada somente no aplicativo oficial."
         )
@@ -391,21 +420,21 @@ class DigitalNewspapersPage(QWidget):
 
             vault = SecureSessionStore(self.paths, provider.id)
             session = "Sessão local" if vault.exists() else "Sem sessão"
-            pdf = (
-                "PDF oficial"
-                if provider.official_pdf_documented
-                else (
-                    "Exportação"
-                    if provider.can_try_download
-                    else "App"
-                )
-            )
+
+            if provider.supports_direct_pdf:
+                method = "PDF direto"
+            elif provider.official_pdf_documented:
+                method = "PDF oficial"
+            elif provider.can_try_download:
+                method = "Exportação"
+            else:
+                method = "App"
 
             values = (
                 provider.name,
                 session,
                 provider.edition_kind,
-                pdf,
+                method,
             )
             for col, value in enumerate(values):
                 item = QTableWidgetItem(value)
@@ -467,12 +496,15 @@ class DigitalNewspapersPage(QWidget):
         provider = self._selected_provider()
         if provider is None:
             return
+
         dialog = self._browser_for(provider)
+        dialog.prepare_manual_login()
         dialog.show()
         dialog.raise_()
         dialog.activateWindow()
         self.status.setText(
-            f"{provider.name}: navegador interno aberto. Faça login diretamente no site do jornal."
+            f"{provider.name}: janela de autenticação aberta somente porque você "
+            "solicitou renovar a sessão. Depois do login, feche-a e clique no jornal."
         )
 
     def download_current(self) -> None:
@@ -482,17 +514,23 @@ class DigitalNewspapersPage(QWidget):
 
         if not provider.can_try_download:
             self.status.setText(
-                f"{provider.name}: a edição completa está documentada somente no aplicativo oficial; "
-                "a V77 não extrai o pacote interno do app."
+                f"{provider.name}: a edição completa está documentada somente no "
+                "aplicativo oficial; a Central não extrai o pacote interno do app."
             )
+            self.progress.hide()
             return
 
         dialog = self._browser_for(provider)
-        dialog.show()
-        dialog.raise_()
-        dialog.activateWindow()
-        dialog.try_download_edition()
+        dialog.set_target_date(self._date_value())
+
+        # V78: CRÍTICO — não chamar show()/raise_()/activateWindow() aqui.
+        # O fluxo normal acontece inteiramente em segundo plano.
+        dialog.start_automatic_download()
         self.progress.show()
+        self.status.setText(
+            f"{provider.name}: buscando a edição completa de "
+            f"{self._date_value().strftime('%d/%m/%Y')} em segundo plano…"
+        )
 
     def clear_current_session(self) -> None:
         provider = self._selected_provider()
@@ -510,11 +548,22 @@ class DigitalNewspapersPage(QWidget):
 
     def _browser_status(self, text: str) -> None:
         self.status.setText(text)
-        if (
-            "concluído" in text.lower()
-            or "nenhum download" in text.lower()
-            or "cancelado" in text.lower()
-            or "interrompido" in text.lower()
+        lowered = text.lower()
+        if any(
+            marker in lowered
+            for marker in (
+                "concluído",
+                "nenhum pdf",
+                "não está disponível",
+                "autenticação necessária",
+                "sessão pode precisar",
+                "cancelado",
+                "interrompido",
+                "não era um pdf",
+                "não passou na validação",
+                "respondeu http",
+                "não concluiu o carregamento",
+            )
         ):
             self.progress.hide()
 
@@ -541,7 +590,7 @@ class DigitalNewspapersPage(QWidget):
         self.history_store.append(entry)
         self.progress.hide()
         self.status.setText(
-            f"✓ {provider.name}: PDF salvo sem recompressão em {output}"
+            f"✓ {provider.name}: edição completa salva em PDF sem recompressão: {output}"
         )
         self._refresh_history()
 
@@ -583,6 +632,7 @@ class DigitalNewspapersPage(QWidget):
     def shutdown(self) -> None:
         for dialog in list(self.browser_dialogs.values()):
             try:
+                dialog.shutdown()
                 dialog.close()
             except Exception:
                 pass
