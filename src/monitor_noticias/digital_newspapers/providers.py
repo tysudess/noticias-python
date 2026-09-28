@@ -19,6 +19,10 @@ class DigitalNewspaperProvider:
     date_selection: str = "viewer"
     note: str = ""
     direct_pdf_template: str = ""
+    page_pdf_templates: tuple[str, ...] = ()
+    pagewise_min_pages: int = 8
+    pagewise_max_pages: int = 120
+    pagewise_stop_after_misses: int = 4
 
     @property
     def can_try_download(self) -> bool:
@@ -30,6 +34,10 @@ class DigitalNewspaperProvider:
     @property
     def supports_direct_pdf(self) -> bool:
         return bool(self.direct_pdf_template.strip())
+
+    @property
+    def supports_pagewise_pdf(self) -> bool:
+        return bool(self.page_pdf_templates)
 
     def direct_pdf_url(self, target_date: date) -> str:
         template = self.direct_pdf_template.strip()
@@ -43,6 +51,28 @@ class DigitalNewspaperProvider:
             iso=target_date.isoformat(),
             br=target_date.strftime("%d-%m-%Y"),
         )
+
+    def page_pdf_urls(
+        self,
+        target_date: date,
+        page: int,
+    ) -> tuple[str, ...]:
+        out: list[str] = []
+        for template in self.page_pdf_templates:
+            text = str(template or "").strip()
+            if not text:
+                continue
+            out.append(
+                text.format(
+                    year=f"{target_date.year:04d}",
+                    month=f"{target_date.month:02d}",
+                    day=f"{target_date.day:02d}",
+                    iso=target_date.isoformat(),
+                    br=target_date.strftime("%d-%m-%Y"),
+                    page=int(page),
+                )
+            )
+        return tuple(out)
 
     def output_filename(self, target_date: date) -> str:
         slug = re.sub(
@@ -82,10 +112,30 @@ class CorreioBrazilienseProvider(DigitalNewspaperProvider):
                 "https://edicao.correiobraziliense.com.br/"
                 "correiobraziliense/{year}/{month}/{day}/all.pdf"
             ),
+            page_pdf_templates=(
+                "https://edicao.correiobraziliense.com.br/"
+                "correiobraziliense/{year}/{month}/{day}/{page}.pdf",
+                "https://edicao.correiobraziliense.com.br/"
+                "correiobraziliense/{year}/{month}/{day}/{page:02d}.pdf",
+                "https://edicao.correiobraziliense.com.br/"
+                "correiobraziliense/{year}/{month}/{day}/{page:03d}.pdf",
+                "https://edicao.correiobraziliense.com.br/"
+                "correiobraziliense/{year}/{month}/{day}/pag{page}.pdf",
+                "https://edicao.correiobraziliense.com.br/"
+                "correiobraziliense/{year}/{month}/{day}/pag{page:02d}.pdf",
+                "https://edicao.correiobraziliense.com.br/"
+                "correiobraziliense/{year}/{month}/{day}/page{page}.pdf",
+                "https://edicao.correiobraziliense.com.br/"
+                "correiobraziliense/{year}/{month}/{day}/page{page:02d}.pdf",
+            ),
+            pagewise_min_pages=8,
+            pagewise_max_pages=80,
+            pagewise_stop_after_misses=5,
             note=(
-                "A edição certificada possui PDF integral. A V78 usa o arquivo "
-                "oficial da data selecionada diretamente, sem abrir navegador e "
-                "sem recompressão."
+                "A edição certificada possui PDF integral. A V79 primeiro tenta "
+                "reconstituir a edição página a página para evitar falhas como "
+                "saltos 2→4; se não houver páginas individuais válidas, cai para o "
+                "all.pdf oficial sem recompressão."
             ),
         )
 
@@ -265,8 +315,8 @@ class WashingtonPostProvider(DigitalNewspaperProvider):
             download_strategy="app_only",
             browser_supported=True,
             note=(
-                "A documentação atual concentra a Print Edition no aplicativo. A V78 "
-                "não tenta extrair o pacote offline do app."
+                "A documentação atual concentra a Print Edition no aplicativo. "
+                "A V78 abre a conta web, mas não tenta extrair o pacote offline do app."
             ),
         )
 

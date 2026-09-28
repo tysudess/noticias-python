@@ -4,6 +4,7 @@ import base64
 from datetime import date
 import json
 from pathlib import Path
+import shutil
 
 import requests
 
@@ -248,6 +249,280 @@ class DirectPdfDownloadThread(QThread):
             except Exception:
                 continue
 
+    def _headers(self) -> dict[str, str]:
+        return {
+            "User-Agent": (
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 Chrome/151 Safari/537.36"
+            ),
+            "Accept": "application/pdf,*/*;q=0.8",
+            "Referer": self.provider.edition_url,
+        }
+
+    def _http_get(
+        self,
+        session: requests.Session,
+        url: str,
+        *,
+        proxies,
+        verify,
+        stream: bool = True,
+    ) -> requests.Response:
+        return session.get(
+            url,
+            headers=self._headers(),
+            stream=stream,
+            allow_redirects=True,
+            timeout=(15, 180),
+            proxies=proxies,
+            verify=verify,
+        )
+
+    def _download_response_to_file(
+        self,
+        response: requests.Response,
+        target: Path,
+    ) -> None:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            target.unlink()
+        except FileNotFoundError:
+            pass
+
+        received = 0
+        with response:
+            with target.open("wb") as handle:
+                for chunk in response.iter_content(chunk_size=1024 * 512):
+                    if self.isInterruptionRequested():
+                        raise RuntimeError("Download cancelado.")
+                    if not chunk:
+                        continue
+                    handle.write(chunk)
+                    received += len(chunk)
+                    if received and received % (5 * 1024 * 1024) < len(chunk):
+                        self.status_changed.emit(
+                            f"{self.provider.name}: {received / (1024 * 1024):.1f} MB recebidos…"
+                        )
+
+    def _validate_pdf(
+        self,
+        path: Path,
+    ) -> int:
+        with path.open("rb") as handle:
+            signature = handle.read(5)
+
+        if signature != b"%PDF-":
+            raise RuntimeError(
+                "O endereço oficial não retornou um PDF. A sessão pode ter expirado."
+            )
+
+        try:
+            from pypdf import PdfReader
+
+            pages = len(PdfReader(str(path)).pages)
+        except Exception as exc:
+            raise RuntimeError(
+                "O arquivo recebido não passou na validação de PDF."
+            ) from exc
+
+        if pages <= 0:
+            raise RuntimeError(
+                "O arquivo PDF foi recebido, mas veio sem páginas válidas."
+            )
+        return pages
+
+    def _emit_pagewise_fallback(
+        self,
+        message: str,
+    ) -> None:
+        self.status_changed.emit(
+            f"{self.provider.name}: {message} Tentando o PDF integral oficial…"
+        )
+
+    def _try_pagewise_pdf_build(
+        self,
+        session: requests.Session,
+        *,
+        proxies,
+        verify,
+        target: Path,
+    ) -> tuple[int, str] | None:
+        if not self.provider.supports_pagewise_pdf:
+            return None
+
+        from pypdf import PdfReader, PdfWriter
+
+        temp_dir = target.parent / "_tmp_paginas"
+        shutil.rmtree(temp_dir, ignore_errors=True)
+        temp_dir.mkdir(parents=True, exist_ok=True)
+
+        page_files: list[tuple[int, Path]] = []
+        misses = 0
+
+        try:
+            self.status_changed.emit(
+                f"{self.provider.name}: tentando remontar a edição página a página…"
+            )
+
+            for page_number in range(1, self.provider.pagewise_max_pages + 1):
+                if self.isInterruptionRequested():
+                    raise RuntimeError("Download cancelado.")
+
+                downloaded_file: Path | None = None
+
+                for url in self.provider.page_pdf_urls(self.target_date, page_number):
+                    response = self._http_get(
+                        session,
+                        url,
+                        proxies=proxies,
+                        verify=verify,
+                        stream=True,
+                    )
+
+                    if response.status_code in {401, 403}:
+                        response.close()
+                        self._emit_pagewise_fallback(
+                            "as páginas individuais exigem autenticação"
+                        )
+                        return None
+
+                    if response.status_code == 404:
+                        response.close()
+                        continue
+
+                    if response.status_code < 200 or response.status_code >= 300:
+                        response.close()
+                        continue
+
+                    candidate = temp_dir / f"{page_number:03d}.pdf"
+                    try:
+                        self._download_response_to_file(response, candidate)
+                        page_count = self._validate_pdf(candidate)
+                        if page_count <= 0:
+                            raise RuntimeError("Página vazia.")
+                        downloaded_file = candidate
+                        break
+                    except Exception:
+                        try:
+                            candidate.unlink()
+                        except Exception:
+                            pass
+                        continue
+
+                if downloaded_file is not None:
+                    page_files.append((page_number, downloaded_file))
+                    misses = 0
+                    self.status_changed.emit(
+                        f"{self.provider.name}: página {page_number:02d} localizada…"
+                    )
+                    continue
+
+                misses += 1
+                if page_files and misses >= self.provider.pagewise_stop_after_misses:
+                    break
+
+            if len(page_files) < max(1, self.provider.pagewise_min_pages):
+                if page_files:
+                    self._emit_pagewise_fallback(
+                        "a quantidade de páginas individuais válidas foi insuficiente"
+                    )
+                return None
+
+            discovered = [page for page, _ in page_files]
+            existing = set(discovered)
+            gaps = [
+                number
+                for number in range(discovered[0], discovered[-1] + 1)
+                if number not in existing
+            ]
+            if gaps:
+                shown = ", ".join(str(x) for x in gaps[:8])
+                if len(gaps) > 8:
+                    shown += ", …"
+                self._emit_pagewise_fallback(
+                    f"faltaram páginas na sequência ({shown})"
+                )
+                return None
+
+            writer = PdfWriter()
+            total_pages = 0
+            for _page_number, pdf_path in page_files:
+                reader = PdfReader(str(pdf_path))
+                for page in reader.pages:
+                    writer.add_page(page)
+                    total_pages += 1
+
+            part = target.with_suffix(target.suffix + ".part")
+            try:
+                part.unlink()
+            except FileNotFoundError:
+                pass
+
+            with part.open("wb") as handle:
+                writer.write(handle)
+
+            total_pages = self._validate_pdf(part)
+
+            try:
+                target.unlink()
+            except FileNotFoundError:
+                pass
+
+            part.replace(target)
+            return total_pages, "PDF oficial remontado página a página"
+        finally:
+            shutil.rmtree(temp_dir, ignore_errors=True)
+
+    def _download_integral_pdf(
+        self,
+        session: requests.Session,
+        *,
+        proxies,
+        verify,
+        target: Path,
+    ) -> tuple[int, str]:
+        part = target.with_suffix(target.suffix + ".part")
+
+        response = self._http_get(
+            session,
+            self.url,
+            proxies=proxies,
+            verify=verify,
+            stream=True,
+        )
+
+        if response.status_code in {401, 403}:
+            response.close()
+            raise RuntimeError(
+                "Autenticação necessária. Use “Entrar / renovar sessão” uma vez e tente novamente."
+            )
+
+        if response.status_code == 404:
+            response.close()
+            raise RuntimeError(
+                "A edição desta data ainda não está disponível no servidor oficial."
+            )
+
+        if response.status_code < 200 or response.status_code >= 300:
+            response.close()
+            raise RuntimeError(
+                f"O servidor do jornal respondeu HTTP {response.status_code}."
+            )
+
+        self.status_changed.emit(
+            f"{self.provider.name}: baixando o PDF integral oficial…"
+        )
+        self._download_response_to_file(response, part)
+        pages = self._validate_pdf(part)
+
+        try:
+            target.unlink()
+        except FileNotFoundError:
+            pass
+
+        part.replace(target)
+        return pages, "PDF oficial direto"
+
     def run(self) -> None:
         target = _output_target(
             self.paths,
@@ -270,87 +545,32 @@ class DirectPdfDownloadThread(QThread):
                     f"{self.target_date.strftime('%d/%m/%Y')} em segundo plano…"
                 )
 
-                response = session.get(
-                    self.url,
-                    headers={
-                        "User-Agent": (
-                            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                            "AppleWebKit/537.36 Chrome/151 Safari/537.36"
-                        ),
-                        "Accept": "application/pdf,*/*;q=0.8",
-                        "Referer": self.provider.edition_url,
-                    },
-                    stream=True,
-                    allow_redirects=True,
-                    timeout=(15, 180),
+                pagewise = self._try_pagewise_pdf_build(
+                    session,
                     proxies=proxies,
                     verify=verify,
+                    target=target,
+                )
+                if pagewise is not None:
+                    pages, method = pagewise
+                    self.completed.emit(
+                        str(target),
+                        pages,
+                        method,
+                    )
+                    return
+
+                pages, method = self._download_integral_pdf(
+                    session,
+                    proxies=proxies,
+                    verify=verify,
+                    target=target,
                 )
 
-                if response.status_code in {401, 403}:
-                    raise RuntimeError(
-                        "Autenticação necessária. Use “Entrar / renovar sessão” "
-                        "uma vez e tente novamente."
-                    )
-
-                if response.status_code == 404:
-                    raise RuntimeError(
-                        "A edição desta data ainda não está disponível no servidor oficial."
-                    )
-
-                if response.status_code < 200 or response.status_code >= 300:
-                    raise RuntimeError(
-                        f"O servidor do jornal respondeu HTTP {response.status_code}."
-                    )
-
-                part.parent.mkdir(parents=True, exist_ok=True)
-                try:
-                    part.unlink()
-                except FileNotFoundError:
-                    pass
-
-                received = 0
-                with part.open("wb") as handle:
-                    for chunk in response.iter_content(chunk_size=1024 * 512):
-                        if self.isInterruptionRequested():
-                            raise RuntimeError("Download cancelado.")
-                        if not chunk:
-                            continue
-                        handle.write(chunk)
-                        received += len(chunk)
-                        if received and received % (5 * 1024 * 1024) < len(chunk):
-                            self.status_changed.emit(
-                                f"{self.provider.name}: {received / (1024 * 1024):.1f} MB recebidos…"
-                            )
-
-            with part.open("rb") as handle:
-                signature = handle.read(5)
-
-            if signature != b"%PDF-":
-                raise RuntimeError(
-                    "O endereço oficial não retornou um PDF. A sessão pode ter expirado."
-                )
-
-            pages = 0
-            try:
-                from pypdf import PdfReader
-
-                pages = len(PdfReader(str(part)).pages)
-            except Exception as exc:
-                raise RuntimeError(
-                    "O arquivo recebido não passou na validação de PDF."
-                ) from exc
-
-            try:
-                target.unlink()
-            except FileNotFoundError:
-                pass
-
-            part.replace(target)
             self.completed.emit(
                 str(target),
                 pages,
-                "PDF oficial direto",
+                method,
             )
 
         except Exception as exc:
