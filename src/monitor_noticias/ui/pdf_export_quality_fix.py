@@ -11,7 +11,7 @@ from PIL import Image
 from PySide6.QtCore import QThread
 from PySide6.QtWidgets import QFileDialog
 
-from pypdf import PageObject, PdfWriter
+from pypdf import PageObject, PdfReader, PdfWriter
 from pypdf.generic import (
     BooleanObject,
     DictionaryObject,
@@ -23,6 +23,7 @@ from pypdf.generic import (
 from monitor_noticias.pdf_editor.core import (
     PdfEditorModel,
     PdfExportQuality,
+    PdfImportError,
     PdfItemKind,
 )
 from monitor_noticias.ui import pdf_editor_page as pdf_page_module
@@ -35,6 +36,11 @@ _INSTALLED = False
 DEFAULT_IMAGE_DPI = 300.0
 MIN_VALID_DPI = 36.0
 MAX_VALID_DPI = 1200.0
+
+# V74: todas as paginas exportadas usam a largura fisica da capa padrao.
+# A capa padrao atual (1245 px a 300 dpi) corresponde a 298.8 pt.
+FALLBACK_STANDARD_COVER_WIDTH_PT = 298.8
+_EXPORT_TARGET_WIDTH_PT: float | None = None
 
 
 def _safe_dpi(
@@ -126,20 +132,30 @@ def _page_for_pixels(
         dpi_y
     )
 
-    width_pt = (
-        float(
-            width_px
+    if _EXPORT_TARGET_WIDTH_PT is not None:
+        # V74: muda apenas o tamanho fisico da pagina PDF.
+        # Os pixels nao sao redimensionados e a proporcao e preservada.
+        width_pt = max(1.0, float(_EXPORT_TARGET_WIDTH_PT))
+        height_pt = (
+            width_pt
+            * float(height_px)
+            / float(width_px)
         )
-        / dpi_x
-        * 72.0
-    )
-    height_pt = (
-        float(
-            height_px
+    else:
+        width_pt = (
+            float(
+                width_px
+            )
+            / dpi_x
+            * 72.0
         )
-        / dpi_y
-        * 72.0
-    )
+        height_pt = (
+            float(
+                height_px
+            )
+            / dpi_y
+            * 72.0
+        )
 
     return PageObject.create_blank_page(
         width=max(
@@ -152,6 +168,133 @@ def _page_for_pixels(
         ),
     )
 
+
+
+def _standard_cover_width_pt(
+    self: PdfEditorModel,
+) -> float:
+    """Largura fisica da capa padrao usada como referencia do PDF."""
+
+    candidates = [
+        getattr(
+            self,
+            "hd_default_cover_file",
+            None,
+        ),
+        (
+            Path(self.app_root)
+            / "resources"
+            / "pdf-default-cover.png"
+        ),
+    ]
+
+    for candidate in candidates:
+        if candidate is None:
+            continue
+
+        path = Path(candidate)
+
+        if not path.is_file():
+            continue
+
+        try:
+            with Image.open(path) as image:
+                dpi_x, _ = _image_dpi(image)
+                width_pt = (
+                    float(image.width)
+                    / float(dpi_x)
+                    * 72.0
+                )
+
+                if width_pt > 1.0:
+                    return width_pt
+
+        except Exception:
+            log.exception(
+                "Falha ao medir a largura da capa padrao: %s",
+                path,
+            )
+
+    return FALLBACK_STANDARD_COVER_WIDTH_PT
+
+
+def _append_vector_cover_width(
+    writer: PdfWriter,
+    data,
+    target_width_pt: float,
+) -> tuple[float, float]:
+    """Mantem PDF vetorial e iguala sua largura a capa padrao."""
+
+    reader = PdfReader(data.path)
+
+    if (
+        reader.is_encrypted
+        and reader.decrypt("") == 0
+    ):
+        raise PdfImportError(
+            "PDF protegido por senha nao suportada."
+        )
+
+    source = reader.pages[
+        data.page_no or 0
+    ]
+
+    box = (
+        source.cropbox
+        if source.cropbox is not None
+        else source.mediabox
+    )
+
+    width = float(box.width)
+    height = float(box.height)
+
+    if width <= 0 or height <= 0:
+        raise PdfImportError(
+            "Pagina PDF com dimensoes invalidas."
+        )
+
+    target_width_pt = max(
+        1.0,
+        float(target_width_pt),
+    )
+
+    target_height_pt = (
+        target_width_pt
+        * height
+        / width
+    )
+
+    target = PageObject.create_blank_page(
+        width=target_width_pt,
+        height=target_height_pt,
+    )
+
+    scale = target_width_pt / width
+    left = float(box.left)
+    bottom = float(box.bottom)
+
+    target.merge_transformed_page(
+        source,
+        (
+            scale,
+            0.0,
+            0.0,
+            scale,
+            -left * scale,
+            -bottom * scale,
+        ),
+        over=True,
+        expand=False,
+    )
+
+    target.pop(
+        NameObject("/Annots"),
+        None,
+    )
+
+    writer.add_page(target)
+
+    return target_width_pt, target_height_pt
 
 def _attach_image_xobject(
     writer: PdfWriter,
@@ -689,14 +832,20 @@ def _export_native_quality(
         exist_ok=True,
     )
 
+    global _EXPORT_TARGET_WIDTH_PT
+    _EXPORT_TARGET_WIDTH_PT = (
+        _standard_cover_width_pt(self)
+    )
+
     writer = PdfWriter()
 
     diagnostics: list[str] = [
-        "EXPORTACAO PDF - QUALIDADE NATIVA",
+        "EXPORTACAO PDF - QUALIDADE NATIVA + LARGURA DA CAPA",
         f"arquivo={output}",
+        f"largura_referencia={_EXPORT_TARGET_WIDTH_PT:.3f} pt",
         (
-            "regra=nenhuma imagem raster e reduzida "
-            "antes de entrar no PDF"
+            "regra=todas as paginas usam a largura fisica da capa padrao; "
+            "altura proporcional; pixels/vetor preservados"
         ),
         "",
     ]
@@ -765,16 +914,21 @@ def _export_native_quality(
             and not data.flip_x
             and data.crop is None
         ):
-            self._append_vector(
-                writer,
-                data,
+            final_w, final_h = (
+                _append_vector_cover_width(
+                    writer,
+                    data,
+                    _EXPORT_TARGET_WIDTH_PT
+                    or FALLBACK_STANDARD_COVER_WIDTH_PT,
+                )
             )
 
             diagnostics.append(
                 (
                     f"PAGINA {index} | PDF VETORIAL | "
                     f"{Path(data.path).name} | "
-                    "sem rasterizacao"
+                    f"{final_w:.3f}x{final_h:.3f} pt | "
+                    "mesma largura da capa | sem rasterizacao"
                 )
             )
 
