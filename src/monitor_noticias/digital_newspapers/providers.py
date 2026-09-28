@@ -25,6 +25,9 @@ class DigitalNewspaperProvider:
     pagewise_stop_after_misses: int = 4
     entry_urls: tuple[str, ...] = ()
     dated_edition_url_template: str = ""
+    edition_link_keywords: tuple[str, ...] = ()
+    min_edition_pages: int = 10
+    min_edition_bytes: int = 300_000
 
     @property
     def can_try_download(self) -> bool:
@@ -134,28 +137,19 @@ class CorreioBrazilienseProvider(DigitalNewspaperProvider):
                 "https://edicao.correiobraziliense.com.br/"
                 "correiobraziliense/{year}/{month}/{day}/all.pdf"
             ),
-            page_pdf_templates=(
-                "https://edicao.correiobraziliense.com.br/"
-                "correiobraziliense/{year}/{month}/{day}/{page}.pdf",
-                "https://edicao.correiobraziliense.com.br/"
-                "correiobraziliense/{year}/{month}/{day}/{page:02d}.pdf",
-                "https://edicao.correiobraziliense.com.br/"
-                "correiobraziliense/{year}/{month}/{day}/{page:03d}.pdf",
-                "https://edicao.correiobraziliense.com.br/"
-                "correiobraziliense/{year}/{month}/{day}/pag{page}.pdf",
-                "https://edicao.correiobraziliense.com.br/"
-                "correiobraziliense/{year}/{month}/{day}/pag{page:02d}.pdf",
-                "https://edicao.correiobraziliense.com.br/"
-                "correiobraziliense/{year}/{month}/{day}/page{page}.pdf",
-                "https://edicao.correiobraziliense.com.br/"
-                "correiobraziliense/{year}/{month}/{day}/page{page:02d}.pdf",
+            edition_link_keywords=(
+                "correio braziliense",
+                "edicao certificada",
+                "edição certificada",
+                "jornal",
+                "edicao",
+                "edição",
             ),
-            pagewise_min_pages=8,
-            pagewise_max_pages=80,
-            pagewise_stop_after_misses=5,
+            min_edition_pages=10,
+            min_edition_bytes=300_000,
             note=(
-                "A V80 mantém a correção V79: tenta a sequência de PDFs oficiais "
-                "por página para evitar saltos e usa o all.pdf oficial como fallback."
+                "A V81 volta ao fluxo direto que funcionou na V78: usa o all.pdf "
+                "oficial da data selecionada, sem tentativa página a página."
             ),
         )
 
@@ -174,6 +168,9 @@ class EstadoMinasProvider(DigitalNewspaperProvider):
             edition_kind="Edição diária em PDF",
             download_strategy="official_pdf",
             official_pdf_documented=True,
+            edition_link_keywords=("estado de minas", "em digital", "edicao", "edição", "jornal", "pdf"),
+            min_edition_pages=10,
+            min_edition_bytes=300_000,
             note=(
                 "A V80 abre diretamente o leitor Estado de Minas e procura o PDF/"
                 "download oferecido ao assinante, inclusive em viewer/iframe."
@@ -195,6 +192,9 @@ class GazetaPovoProvider(DigitalNewspaperProvider):
             download_strategy="official_pdf",
             official_pdf_documented=True,
             date_selection="weekly",
+            edition_link_keywords=("gazeta revista", "gazeta do povo", "edicao", "edição", "revista", "pdf"),
+            min_edition_pages=20,
+            min_edition_bytes=500_000,
             note=(
                 "A Gazeta Revista é semanal e oferece PDF a assinantes. A V80 segue "
                 "automaticamente o link da edição/PDF dentro do site oficial."
@@ -216,9 +216,14 @@ class FolhaProvider(DigitalNewspaperProvider):
                 "www1.folha.uol.com.br",
                 "edicaodigital.folha.uol.com.br",
                 "acervo.folha.uol.com.br",
+                "paywall.folha.uol.com.br",
+                "folha.com.br",
             ),
             edition_kind="Edição Folha / réplica impressa",
             download_strategy="authorized_export",
+            edition_link_keywords=("folha", "edicao folha", "edição folha", "jornal", "replica", "réplica", "pdf"),
+            min_edition_pages=10,
+            min_edition_bytes=300_000,
             note=(
                 "A V80 entra pela Edição Folha/Acervo Digital e procura somente "
                 "exportação ou PDF disponibilizado ao assinante pelo leitor oficial."
@@ -240,6 +245,9 @@ class EstadaoProvider(DigitalNewspaperProvider):
             edition_kind="Estadão Digital / réplica",
             download_strategy="authorized_export",
             date_selection="direct_url",
+            edition_link_keywords=("estadao", "estadão", "o estado de s. paulo", "o-estado-de-s-paulo", "edicao", "edição", "jornal", "replica", "réplica"),
+            min_edition_pages=10,
+            min_edition_bytes=300_000,
             note=(
                 "A V80 abre diretamente a réplica do Estadão na data selecionada e "
                 "procura PDF/exportação oferecidos pelo leitor oficial."
@@ -257,6 +265,9 @@ class GloboProvider(DigitalNewspaperProvider):
             domains=("globo.com",),
             edition_kind="Jornal digitalizado",
             download_strategy="authorized_export",
+            edition_link_keywords=("o globo", "oglobo", "jornal digital", "edicao", "edição", "jornal", "pdf"),
+            min_edition_pages=10,
+            min_edition_bytes=300_000,
             note=(
                 "A V80 entra pelo Jornal Digital do GLOBO, preserva a sessão Globo e "
                 "procura apenas PDF/exportação autorizados pelo visualizador."
@@ -277,6 +288,9 @@ class ValorProvider(DigitalNewspaperProvider):
             domains=("globo.com",),
             edition_kind="Jornal impresso digitalizado",
             download_strategy="authorized_export",
+            edition_link_keywords=("valor economico", "valor econômico", "jornal digital", "edicao", "edição", "jornal", "pdf"),
+            min_edition_pages=10,
+            min_edition_bytes=300_000,
             note=(
                 "A V80 usa o Jornal Digital do Valor como ponto de entrada e segue "
                 "somente recursos de download/exportação disponibilizados ao assinante."
@@ -294,6 +308,9 @@ class ATardeProvider(DigitalNewspaperProvider):
             domains=("atarde.com.br",),
             edition_kind="Edição digital",
             download_strategy="authorized_export",
+            edition_link_keywords=("a tarde", "atarde", "edicao", "edição", "jornal", "flip", "pdf"),
+            min_edition_pages=10,
+            min_edition_bytes=300_000,
             note=(
                 "A V80 tenta primeiro o leitor Flip A TARDE e depois o portal oficial, "
                 "procurando apenas edição/PDF/exportação permitidos."
@@ -324,6 +341,9 @@ class GZHProvider(DigitalNewspaperProvider):
             ),
             edition_kind="Réplica completa de Zero Hora",
             download_strategy="authorized_export",
+            edition_link_keywords=("zero hora", "zh", "gzh", "jornal digital", "edicao", "edição", "replica", "réplica"),
+            min_edition_pages=10,
+            min_edition_bytes=300_000,
             note=(
                 "A V80 entra diretamente no leitor de Zero Hora e passa a preservar "
                 "também a sessão do domínio gauchazh.com.br."
@@ -349,6 +369,9 @@ class NYTimesProvider(DigitalNewspaperProvider):
             ),
             edition_kind="Replica Edition / PressReader",
             download_strategy="authorized_export",
+            edition_link_keywords=("new york times", "replica edition", "pressreader", "epaper", "edition", "newspaper"),
+            min_edition_pages=20,
+            min_edition_bytes=500_000,
             note=(
                 "A V80 usa o viewer oficial da Replica Edition e o PressReader como "
                 "fallback, limitando-se aos recursos de impressão/download disponíveis."

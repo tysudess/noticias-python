@@ -103,6 +103,106 @@ class SecureSessionStore:
             pass
 
 
+class SecureCredentialStore:
+    """Cofre local de usuário/senha por jornal.
+
+    Windows: DPAPI CurrentUser.
+    Ubuntu/Linux: Secret Service / Keyring.
+    Nunca existe fallback em texto puro nem arquivo para GitHub.
+    """
+
+    def __init__(
+        self,
+        paths: AppPaths,
+        provider_id: str,
+    ) -> None:
+        self.paths = paths
+        self.provider_id = str(provider_id)
+        self._store = self._create_store()
+
+    def _create_store(self):
+        if is_windows():
+            from monitor_noticias.windows.dpapi import DpapiTextStore
+
+            return DpapiTextStore(
+                self.paths.data
+                / "digital_newspapers"
+                / "credentials"
+                / f"{self.provider_id}.dpapi"
+            )
+
+        if is_linux():
+            from monitor_noticias.platform.credentials import LinuxKeyringTextStore
+
+            return LinuxKeyringTextStore(
+                service_name=SESSION_SERVICE,
+                account_name=(
+                    "digital-newspaper-credential:"
+                    + self.provider_id
+                ),
+            )
+
+        return None
+
+    @property
+    def available(self) -> bool:
+        return self._store is not None
+
+    def exists(self) -> bool:
+        if self._store is None:
+            return False
+        try:
+            return bool(self._store.exists())
+        except Exception:
+            return False
+
+    def save(
+        self,
+        username: str,
+        password: str,
+    ) -> None:
+        username = str(username or "").strip()
+        password = str(password or "")
+        if not username or not password:
+            raise ValueError("Usuário e senha são obrigatórios.")
+        if self._store is None:
+            raise SecureSessionUnavailable(
+                "Cofre seguro não disponível neste sistema."
+            )
+        payload = json.dumps(
+            {"username": username, "password": password},
+            ensure_ascii=False,
+            separators=(",", ":"),
+        )
+        self._store.save(payload)
+
+    def load(self) -> tuple[str, str] | None:
+        if self._store is None:
+            return None
+        try:
+            raw = self._store.load()
+            if not raw:
+                return None
+            data = json.loads(raw)
+            if not isinstance(data, dict):
+                return None
+            username = str(data.get("username") or "").strip()
+            password = str(data.get("password") or "")
+            if not username or not password:
+                return None
+            return username, password
+        except Exception:
+            return None
+
+    def clear(self) -> None:
+        if self._store is None:
+            return
+        try:
+            self._store.delete()
+        except Exception:
+            pass
+
+
 @dataclass(slots=True)
 class DigitalNewspaperHistoryEntry:
     newspaper: str

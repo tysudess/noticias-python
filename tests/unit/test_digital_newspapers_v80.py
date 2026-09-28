@@ -69,7 +69,7 @@ def test_v80_browser_discovers_nested_viewers_and_retries_entries():
     assert "self.provider.edition_urls(self.target_date)" in source
 
 
-def test_v80_preserves_v79_correio_pagewise_rebuild():
+def test_v80_reader_changes_survive_v81_correio_direct_rollback():
     provider = get_provider("correio-braziliense")
     source = (
         ROOT
@@ -79,9 +79,10 @@ def test_v80_preserves_v79_correio_pagewise_rebuild():
         / "browser.py"
     ).read_text(encoding="utf-8")
 
-    assert provider.supports_pagewise_pdf
-    assert "PDF oficial remontado página a página" in source
-    assert "faltaram páginas na sequência" in source
+    assert provider.supports_direct_pdf
+    assert not provider.supports_pagewise_pdf
+    assert "def _advance_auto_entry(" in source
+    assert "self.provider.edition_urls(self.target_date)" in source
 
 
 def test_v80_keeps_multi_resolution_windows_icon():

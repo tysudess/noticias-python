@@ -12,6 +12,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QHeaderView,
     QLabel,
+    QLineEdit,
     QPushButton,
     QProgressBar,
     QTableWidget,
@@ -31,6 +32,7 @@ from monitor_noticias.digital_newspapers.providers import (
 from monitor_noticias.digital_newspapers.storage import (
     DigitalNewspaperHistoryEntry,
     DigitalNewspaperHistoryStore,
+    SecureCredentialStore,
     SecureSessionStore,
 )
 
@@ -172,6 +174,39 @@ class DigitalNewspapersPage(QWidget):
         )
         action_layout.addWidget(self.date_edit)
 
+        credentials_label = QLabel("Acesso local do jornal")
+        credentials_label.setObjectName("digitalCaption")
+        credentials_label.setToolTip(
+            "Opcional. Usuário e senha ficam criptografados somente neste computador."
+        )
+        action_layout.addWidget(credentials_label)
+
+        self.credential_user = QLineEdit()
+        self.credential_user.setPlaceholderText("Usuário / e-mail")
+        self.credential_user.setObjectName("digitalCredential")
+        action_layout.addWidget(self.credential_user)
+
+        self.credential_password = QLineEdit()
+        self.credential_password.setPlaceholderText("Senha")
+        self.credential_password.setEchoMode(QLineEdit.EchoMode.Password)
+        self.credential_password.setObjectName("digitalCredential")
+        action_layout.addWidget(self.credential_password)
+
+        credential_actions = QHBoxLayout()
+        credential_actions.setSpacing(6)
+
+        self.save_credentials_button = QPushButton("Salvar acesso neste PC")
+        self.save_credentials_button.setProperty("secondary", True)
+        self.save_credentials_button.clicked.connect(self.save_current_credentials)
+        credential_actions.addWidget(self.save_credentials_button, 1)
+
+        self.clear_credentials_button = QPushButton("Apagar acesso")
+        self.clear_credentials_button.setProperty("danger", True)
+        self.clear_credentials_button.clicked.connect(self.clear_current_credentials)
+        credential_actions.addWidget(self.clear_credentials_button)
+
+        action_layout.addLayout(credential_actions)
+
         self.download_button = QPushButton("⇩  Baixar edição completa agora")
         self.download_button.setObjectName("digitalDownload")
         self.download_button.clicked.connect(self.download_current)
@@ -207,7 +242,8 @@ class DigitalNewspapersPage(QWidget):
 
         rule = QLabel(
             "Qualidade: PDF oficial → exportação autorizada → páginas HD autorizadas. "
-            "Não há quebra de DRM, CAPTCHA ou paywall. A senha do jornal não é salva."
+            "Não há quebra de DRM, CAPTCHA ou paywall. Se você salvar o acesso, "
+            "ele fica criptografado somente neste computador e nunca entra no GitHub."
         )
         rule.setObjectName("digitalRule")
         rule.setWordWrap(True)
@@ -342,6 +378,14 @@ class DigitalNewspapersPage(QWidget):
             font-weight:900;
             background:qlineargradient(x1:0,y1:0,x2:1,y2:0,stop:0 #087AF7,stop:1 #16A3EE);
         }
+        QLineEdit#digitalCredential {
+            background:#FFFFFF;
+            color:#08245F;
+            border:1px solid #CADCEF;
+            border-radius:8px;
+            padding:8px 10px;
+            min-height:20px;
+        }
         QTableWidget#digitalProviders, QTableWidget#digitalHistory {
             background:white;
             border:1px solid #DFEAF6;
@@ -409,6 +453,7 @@ class DigitalNewspapersPage(QWidget):
             if provider.can_try_download
             else "A edição completa está documentada somente no aplicativo oficial."
         )
+        self._load_selected_credentials()
 
     def _refresh_providers(self) -> None:
         self.provider_table.setRowCount(len(self.providers))
@@ -419,7 +464,17 @@ class DigitalNewspapersPage(QWidget):
                 selected_row = row
 
             vault = SecureSessionStore(self.paths, provider.id)
-            session = "Sessão local" if vault.exists() else "Sem sessão"
+            credentials = SecureCredentialStore(self.paths, provider.id)
+            has_session = vault.exists()
+            has_credentials = credentials.exists()
+            if has_session and has_credentials:
+                session = "Sessão + acesso"
+            elif has_session:
+                session = "Sessão local"
+            elif has_credentials:
+                session = "Acesso salvo"
+            else:
+                session = "Sem sessão"
 
             if provider.supports_direct_pdf:
                 method = "PDF direto"
@@ -448,6 +503,72 @@ class DigitalNewspapersPage(QWidget):
         if self.providers:
             self.provider_table.selectRow(selected_row)
         self._sync_selected_panel()
+
+    def _credential_store(
+        self,
+        provider: DigitalNewspaperProvider,
+    ) -> SecureCredentialStore:
+        return SecureCredentialStore(self.paths, provider.id)
+
+    def _load_selected_credentials(self) -> None:
+        provider = self._selected_provider()
+        if provider is None:
+            self.credential_user.clear()
+            self.credential_password.clear()
+            return
+
+        store = self._credential_store(provider)
+        saved = store.load()
+        self.credential_password.clear()
+        if saved is None:
+            self.credential_user.clear()
+            self.credential_password.setPlaceholderText("Senha")
+            return
+
+        username, _password = saved
+        self.credential_user.setText(username)
+        self.credential_password.setPlaceholderText("Senha salva localmente")
+
+    def save_current_credentials(self) -> None:
+        provider = self._selected_provider()
+        if provider is None:
+            return
+
+        username = self.credential_user.text().strip()
+        password = self.credential_password.text()
+        if not username or not password:
+            self.status.setText(
+                "Informe usuário/e-mail e senha para salvar o acesso localmente."
+            )
+            return
+
+        try:
+            self._credential_store(provider).save(username, password)
+        except Exception as exc:
+            self.status.setText(
+                f"{provider.name}: não foi possível salvar no cofre seguro: {exc}"
+            )
+            return
+
+        self.credential_password.clear()
+        self.credential_password.setPlaceholderText("Senha salva localmente")
+        self.status.setText(
+            f"{provider.name}: acesso salvo criptografado somente neste computador."
+        )
+        self._refresh_providers()
+
+    def clear_current_credentials(self) -> None:
+        provider = self._selected_provider()
+        if provider is None:
+            return
+        self._credential_store(provider).clear()
+        self.credential_user.clear()
+        self.credential_password.clear()
+        self.credential_password.setPlaceholderText("Senha")
+        self.status.setText(
+            f"{provider.name}: usuário e senha locais removidos."
+        )
+        self._refresh_providers()
 
     def _date_value(self) -> date:
         qdate = self.date_edit.date()
@@ -503,8 +624,8 @@ class DigitalNewspapersPage(QWidget):
         dialog.raise_()
         dialog.activateWindow()
         self.status.setText(
-            f"{provider.name}: janela de autenticação aberta somente porque você "
-            "solicitou renovar a sessão. Depois do login, feche-a e clique no jornal."
+            f"{provider.name}: janela de autenticação aberta. Se houver acesso salvo "
+            "localmente, a Central preencherá os campos sem expor a senha no código."
         )
 
     def download_current(self) -> None:
