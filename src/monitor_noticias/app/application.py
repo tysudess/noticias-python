@@ -66,10 +66,7 @@ class Application:
             QDialog,
         )
 
-        # V75:
-        # A Tribuna da Bahia precisa entrar no catálogo ANTES do import
-        # de AppContainer/composition, porque composition.py captura
-        # NEWS_SOURCES no momento em que é importado.
+        # V75 - Tribuna da Bahia no catálogo antes de AppContainer.
         from monitor_noticias.ui.sources_bahia_patch import (
             install_sources_bahia_catalog_patch,
         )
@@ -125,6 +122,13 @@ class Application:
         install_news_extractor_speed_patch()
         install_cross_platform_runtime_patch()
         install_pdf_export_quality_fix()
+
+        # V76 - altera a estrutura da Home antes de MainWindow/HomePage nascer.
+        from monitor_noticias.ui.home_layout_v76_patch import (
+            install_home_layout_v76_patch,
+        )
+
+        install_home_layout_v76_patch()
 
         from monitor_noticias.ui.main_window import MainWindow
         from monitor_noticias.ui.screen_recorder_integration import (
