@@ -65,6 +65,17 @@ class Application:
             QApplication,
             QDialog,
         )
+
+        # V75:
+        # A Tribuna da Bahia precisa entrar no catálogo ANTES do import
+        # de AppContainer/composition, porque composition.py captura
+        # NEWS_SOURCES no momento em que é importado.
+        from monitor_noticias.ui.sources_bahia_patch import (
+            install_sources_bahia_catalog_patch,
+        )
+
+        install_sources_bahia_catalog_patch()
+
         from monitor_noticias.app.composition import AppContainer
 
         from monitor_noticias.ui.extractor_proxy_patch import (

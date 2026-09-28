@@ -1,159 +1,69 @@
 from __future__ import annotations
 
-from PySide6.QtCore import QTimer
-from PySide6.QtGui import QStandardItem
-from PySide6.QtWidgets import (
-    QComboBox,
-    QListWidget,
-    QTableWidget,
-    QTreeWidget,
-    QTreeWidgetItem,
-    QWidget,
-)
-
-from monitor_noticias.ui.sections import Section
+from monitor_noticias.models import MediaSource
 
 
+_SOURCE_ID = "ba-tribuna-da-bahia"
 _SOURCE_NAME = "Tribuna da Bahia"
-_MARKERS = {
-    "bahia",
-    "a tarde",
-    "bahia notícias",
-    "bahia noticias",
-    "correio",
-    "correio da bahia",
-    "aratu",
-}
 
 
-def _norm(value: str) -> str:
-    return " ".join(str(value or "").strip().lower().split())
+def _tribuna_source() -> MediaSource:
+    return MediaSource(
+        id=_SOURCE_ID,
+        name=_SOURCE_NAME,
+        region="Nordeste",
+        state="BA",
+        stateName="Bahia",
+        group="Bahia • Nordeste",
+        aliases=[
+            "Tribuna Bahia",
+            "Jornal Tribuna da Bahia",
+        ],
+    )
 
 
-def _texts_from_widget(widget: QWidget) -> list[str]:
-    texts: list[str] = []
+def install_sources_bahia_catalog_patch() -> None:
+    """V75 — adiciona Tribuna da Bahia ao catálogo REAL antes do AppContainer.
 
-    if isinstance(widget, QComboBox):
-        for index in range(widget.count()):
-            texts.append(_norm(widget.itemText(index)))
+    O AppContainer importa NEWS_SOURCES/BY_STATE de ui.catalog durante a sua
+    importação. Portanto este patch precisa rodar ANTES de importar
+    monitor_noticias.app.composition.
+    """
 
-    elif isinstance(widget, QListWidget):
-        for index in range(widget.count()):
-            item = widget.item(index)
-            if item is not None:
-                texts.append(_norm(item.text()))
+    from monitor_noticias.ui import catalog
 
-    elif isinstance(widget, QTreeWidget):
-        for index in range(widget.topLevelItemCount()):
-            item = widget.topLevelItem(index)
-            if item is not None:
-                texts.append(_norm(item.text(0)))
-
-    elif isinstance(widget, QTableWidget):
-        rows = widget.rowCount()
-        cols = widget.columnCount()
-        for row in range(rows):
-            for col in range(min(cols, 2)):
-                item = widget.item(row, col)
-                if item is not None:
-                    texts.append(_norm(item.text()))
-
-    model = getattr(widget, "model", None)
-    if callable(model):
-        try:
-            model_obj = model()
-        except Exception:
-            model_obj = None
-        if model_obj is not None:
-            rows = getattr(model_obj, "rowCount", lambda: 0)()
-            for row in range(rows):
-                try:
-                    index = model_obj.index(row, 0)
-                    value = model_obj.data(index)
-                    if value:
-                        texts.append(_norm(value))
-                except Exception:
-                    pass
-
-    return texts
-
-
-def _looks_like_bahia_collection(texts: list[str]) -> bool:
-    joined = " | ".join(texts)
-    return any(marker in joined for marker in _MARKERS)
-
-
-def _contains_source(texts: list[str]) -> bool:
-    source_norm = _norm(_SOURCE_NAME)
-    return any(source_norm == text for text in texts)
-
-
-def _add_to_widget(widget: QWidget) -> bool:
-    texts = _texts_from_widget(widget)
-    if not texts or not _looks_like_bahia_collection(texts) or _contains_source(texts):
-        return False
-
-    try:
-        if isinstance(widget, QComboBox):
-            widget.addItem(_SOURCE_NAME)
-            return True
-
-        if isinstance(widget, QListWidget):
-            widget.addItem(_SOURCE_NAME)
-            return True
-
-        if isinstance(widget, QTreeWidget):
-            widget.addTopLevelItem(QTreeWidgetItem([_SOURCE_NAME]))
-            return True
-
-        if isinstance(widget, QTableWidget):
-            row = widget.rowCount()
-            widget.insertRow(row)
-            from PySide6.QtWidgets import QTableWidgetItem
-            widget.setItem(row, 0, QTableWidgetItem(_SOURCE_NAME))
-            return True
-
-        model_fn = getattr(widget, "model", None)
-        if callable(model_fn):
-            model = model_fn()
-            append_row = getattr(model, "appendRow", None)
-            if callable(append_row):
-                append_row(QStandardItem(_SOURCE_NAME))
-                return True
-    except Exception:
-        return False
-
-    return False
-
-
-def _apply(window: QWidget) -> None:
-    pages = getattr(window, "pages", None)
-    if not isinstance(pages, dict):
+    if any(
+        getattr(source, "id", "") == _SOURCE_ID
+        for source in catalog.NEWS_SOURCES
+    ):
         return
 
-    page = pages.get(Section.SOURCES)
-    if page is None:
-        return
+    source = _tribuna_source()
 
-    # Tenta coleções comuns da aba Fontes.
-    added = False
-    for widget_type in (QComboBox, QListWidget, QTreeWidget, QTableWidget):
-        for widget in page.findChildren(widget_type):
-            added = _add_to_widget(widget) or added
+    catalog.BY_STATE = tuple(
+        list(catalog.BY_STATE)
+        + [source]
+    )
 
-    # Fallback: tenta qualquer widget com model().
-    if not added:
-        for widget in page.findChildren(QWidget):
-            if hasattr(widget, "model"):
-                added = _add_to_widget(widget) or added
+    catalog.NEWS_SOURCES = tuple(
+        dict(
+            (
+                item.id,
+                item,
+            )
+            for item in (
+                tuple(catalog.NATIONAL)
+                + tuple(catalog.BY_STATE)
+                + tuple(catalog.SPECIALIZED)
+            )
+        ).values()
+    )
 
-    try:
-        page.updateGeometry()
-        page.update()
-    except Exception:
-        pass
 
+def install_sources_bahia_patch(window) -> None:
+    """Compatibilidade com a chamada antiga da V73.
 
-def install_sources_bahia_patch(window: QWidget) -> None:
-    for delay in (0, 300, 900, 1500):
-        QTimer.singleShot(delay, lambda w=window: _apply(w))
+    A fonte já foi adicionada ao catálogo antes da criação do AppContainer.
+    Não é mais necessário injetar nada visualmente.
+    """
+    return
