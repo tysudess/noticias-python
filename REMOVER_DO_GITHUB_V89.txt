@@ -1,0 +1,77 @@
+# V89 — arquivos legados a excluir do repositório
+#
+# IMPORTANTE:
+# Um ZIP enviado pela interface do GitHub substitui/adiciona arquivos, mas não
+# apaga arquivos já existentes. Para a limpeza ficar completa, exclua os itens
+# abaixo do repositório. O programa já deixa de importar/empacotar essas
+# integrações com os arquivos substituídos da V89.
+
+.github/workflows/rebuild-planilhas-runtime.yml
+README_V30_WHATSAPP.md
+README_V32_COLAR_PLANILHAS.md
+README_V33_TECLADO_PLANILHAS.md
+README_V34_PLANILHAS_PADROES_SCROLL.md
+README_V37_MONITOR_PLANILHAS.md
+README_V38_1_REBUILD_FIX.md
+README_V38_PIPELINE_PLANILHAS.md
+README_V40_WHATSAPP_PROXY_TIMEOUT.md
+README_V41_REMOVER_WHATSAPP_PLANILHAS.md
+README_V77_JORNAIS_DIGITAIS.md
+README_V78_AUTO_PDF_E_ICONE.md
+README_V79_CORREIO_E_ICONE.md
+README_V80_JORNAIS_DIGITAIS_PROVEDORES.md
+README_V81_VALIDACAO_CREDENCIAIS_ICONE.md
+README_V83_CREDENCIAIS_LAYOUT.md
+README_V84_VALOR_PRESSREADER_HD.md
+README_V85_BUSCA_SEPARADA_IMAGENS_HD.md
+README_V86_SESSAO_PRESSREADER_HD.md
+README_V87_REMOVE_JORNAIS_DIGITAIS.md
+src/monitor_noticias/app/__pycache__/application.cpython-313.pyc
+src/monitor_noticias/auth/__pycache__/__init__.cpython-313.pyc
+src/monitor_noticias/auth/__pycache__/client.cpython-313.pyc
+src/monitor_noticias/auth/__pycache__/runtime.cpython-313.pyc
+src/monitor_noticias/digital_newspapers/__init__.py
+src/monitor_noticias/digital_newspapers/browser.py
+src/monitor_noticias/digital_newspapers/pressreader_hd.py
+src/monitor_noticias/digital_newspapers/providers.py
+src/monitor_noticias/digital_newspapers/storage.py
+src/monitor_noticias/digital_newspapers/validation.py
+src/monitor_noticias/ui/__pycache__/auth_window_integration.cpython-313.pyc
+src/monitor_noticias/ui/__pycache__/extractor_page.cpython-313.pyc
+src/monitor_noticias/ui/__pycache__/login_dialog.cpython-313.pyc
+src/monitor_noticias/ui/__pycache__/theme.cpython-313.pyc
+src/monitor_noticias/ui/digital_newspapers_integration.py
+src/monitor_noticias/ui/digital_newspapers_page.py
+src/monitor_noticias/ui/removed_integrations_guard.py
+src/monitor_noticias/ui/spreadsheet_automation_page.py
+src/monitor_noticias/ui/spreadsheet_shared_whatsapp_patch.py
+src/monitor_noticias/ui/whatsapp_browser_integration.py
+src/monitor_noticias/ui/whatsapp_browser_page.py
+tests/unit/__pycache__/test_auth_permissions.cpython-313.pyc
+tests/unit/__pycache__/test_auth_proxy_client.cpython-313.pyc
+tests/unit/test_digital_newspapers_v77.py
+tests/unit/test_digital_newspapers_v78.py
+tests/unit/test_digital_newspapers_v79.py
+tests/unit/test_digital_newspapers_v80.py
+tests/unit/test_digital_newspapers_v81.py
+tests/unit/test_digital_newspapers_v83.py
+tests/unit/test_digital_newspapers_v84.py
+tests/unit/test_digital_newspapers_v85.py
+tests/unit/test_digital_newspapers_v86.py
+tests/unit/test_remove_digital_newspapers_v87.py
+tools/planilhas_runtime_source/README.md
+tools/planilhas_runtime_source/build/icon.png
+tools/planilhas_runtime_source/build/icon.svg
+tools/planilhas_runtime_source/config.json
+tools/planilhas_runtime_source/engine/index.js
+tools/planilhas_runtime_source/main.js
+tools/planilhas_runtime_source/package.json
+tools/planilhas_runtime_source/preload.js
+tools/planilhas_runtime_source/renderer/index.html
+tools/planilhas_runtime_source/renderer/renderer.js
+tools/planilhas_runtime_source/renderer/style.css
+tools/planilhas_runtime_source/scripts/patch-whatsapp-web.js
+tools/spreadsheet_automation/config.default.json
+tools/spreadsheet_automation/config.json
+tools/spreadsheet_automation/engine/index.js
+tools/spreadsheet_automation/package.json

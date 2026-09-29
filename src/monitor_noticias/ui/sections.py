@@ -77,16 +77,6 @@ class Section(Enum):
         "Editor de vídeo incorporado ao Monitor",
         "▰",
     )
-
-    # Mantido apenas como identificador legado para permitir rollback sem
-    # quebrar imports antigos. NÃO entra mais no menu, stack ou navegação.
-    SPREADSHEETS = SectionSpec(
-        "Planilhas",
-        "Integração desativada",
-        "▦",
-    )
-
-    # Configurações permanece propositalmente a ÚLTIMA opção do menu.
     SETTINGS = SectionSpec(
         "Configurações",
         "Automação, proxy, inicialização e operação do aplicativo",
@@ -94,9 +84,6 @@ class Section(Enum):
     )
 
 
-# V41:
-# WhatsApp e Planilhas foram retirados da interface do Central.
-# SPREADSHEETS fica fora de SECTION_ORDER para não ocupar índice no stack.
 SECTION_ORDER = (
     Section.HOME,
     Section.NEWS,

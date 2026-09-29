@@ -66,7 +66,11 @@ class Application:
             QDialog,
         )
 
-        # V75 - Tribuna da Bahia no catálogo antes de AppContainer.
+        from monitor_noticias.version import (
+            APP_DISPLAY_NAME,
+        )
+
+        # Tribuna da Bahia entra no catálogo antes de AppContainer.
         from monitor_noticias.ui.sources_bahia_patch import (
             install_sources_bahia_catalog_patch,
         )
@@ -123,7 +127,8 @@ class Application:
         install_cross_platform_runtime_patch()
         install_pdf_export_quality_fix()
 
-        # V76 - altera a estrutura da Home antes de MainWindow/HomePage nascer.
+        # Mantém a Home consolidada na estrutura V76 enquanto os patches
+        # visuais remanescentes são migrados gradualmente para os componentes.
         from monitor_noticias.ui.home_layout_v76_patch import (
             install_home_layout_v76_patch,
         )
@@ -136,10 +141,6 @@ class Application:
         )
         from monitor_noticias.ui.demands_news_actions_integration import (
             install_demands_news_actions,
-        )
-        from monitor_noticias.ui.removed_integrations_guard import (
-            install_removed_integrations_guard,
-            remove_legacy_pages,
         )
         from monitor_noticias.ui.home_dashboard_patch import (
             install_home_dashboard_patch,
@@ -161,7 +162,6 @@ class Application:
             install_sources_bahia_patch,
         )
 
-        install_removed_integrations_guard(MainWindow)
         install_linux_boot_patch(MainWindow)
         install_linux_screen_recorder_patch()
 
@@ -173,13 +173,13 @@ class Application:
         )
 
         qt_app.setApplicationName(
-            "Central Inteligente de Mídia"
+            APP_DISPLAY_NAME
         )
         qt_app.setApplicationDisplayName(
-            "Central Inteligente de Mídia"
+            APP_DISPLAY_NAME
         )
         qt_app.setOrganizationName(
-            "Central Inteligente de Mídia"
+            APP_DISPLAY_NAME
         )
 
         app_icon = load_app_icon()
@@ -249,9 +249,6 @@ class Application:
                 app_icon
             )
 
-        remove_legacy_pages(
-            window
-        )
         install_screen_recorder(
             window
         )
@@ -291,6 +288,11 @@ class Application:
             result = qt_app.exec()
         finally:
             container.close()
+            if auth_runtime is not None:
+                try:
+                    auth_runtime.client.close()
+                except Exception:
+                    pass
 
         log.info(
             "Aplicação encerrada com código %s",

@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "monitor-de-noticias"
-version = "0.0.1"
-description = "Fundação da migração controlada do Monitor de Notícias para Python"
+dynamic = ["version"]
+description = "Central Inteligente de Mídia para monitoramento, extração e produção multimídia"
 readme = "README.md"
 requires-python = ">=3.12,<3.13"
 dependencies = [
@@ -14,6 +14,9 @@ dependencies = [
     "truststore>=0.10,<1",
     "beautifulsoup4>=4.12,<5",
     "lxml>=5,<7",
+    "pypdf==6.18.0",
+    "pypdfium2==5.13.0",
+    "Pillow==12.3.0",
     "PyAudioWPatch==0.2.12.8; sys_platform == 'win32'",
     "keyring>=25,<26; sys_platform == 'linux'",
     "SecretStorage>=3.3,<4; sys_platform == 'linux'",
@@ -23,6 +26,9 @@ dependencies = [
 test = [
     "pytest>=8,<10",
 ]
+
+[tool.setuptools.dynamic]
+version = {attr = "monitor_noticias.version.APP_VERSION"}
 
 [tool.setuptools.packages.find]
 where = ["src"]

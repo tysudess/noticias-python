@@ -11,7 +11,6 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QMainWindow,
     QMenu,
-    QPushButton,
     QStackedWidget,
     QStyle,
     QSystemTrayIcon,
@@ -48,13 +47,17 @@ from monitor_noticias.ui.settings_reference_page import (
 from monitor_noticias.ui.terms_page import TermsPage
 from monitor_noticias.ui.source_page import SourcesPage
 from monitor_noticias.ui.videos_page import VideosPage
-from monitor_noticias.ui.spreadsheet_automation_page import SpreadsheetAutomationPage
 from monitor_noticias.ui.sections import SECTION_ORDER, Section
 from monitor_noticias.ui.sidebar_widgets import (
     SIDEBAR_STYLE,
     SidebarNavItem,
 )
 from monitor_noticias.ui.theme import APP_STYLESHEET
+from monitor_noticias.version import (
+    APP_DISPLAY_NAME,
+    APP_VERSION,
+    platform_version_label,
+)
 from monitor_noticias.windows.notifications import WindowsTrayNotifier
 
 log = logging.getLogger(__name__)
@@ -83,9 +86,10 @@ class MainWindow(QMainWindow):
 
         self._allow_close = False
         self._current = Section.HOME
+        self._last_refresh_signature = None
 
         self.setWindowTitle(
-            "Central Inteligente de Mídia - Windows Portable v4.0.2"
+            f"{APP_DISPLAY_NAME} - {platform_version_label()}"
         )
         self.resize(1600, 960)
         self.setMinimumSize(1180, 720)
@@ -105,8 +109,10 @@ class MainWindow(QMainWindow):
 
         self.controller.subscribe(self._state_changed)
 
+        # O relógio continua atualizado a cada segundo, mas a página ativa
+        # só é redesenhada quando o estado realmente mudou.
         self._timer = QTimer(self)
-        self._timer.setInterval(500)
+        self._timer.setInterval(1000)
         self._timer.timeout.connect(self._tick)
         self._timer.start()
 
@@ -117,28 +123,7 @@ class MainWindow(QMainWindow):
     # -----------------------------------------------------------------
 
     def _sidebar_navigation_order(self) -> tuple[Section, ...]:
-        """Ordem visual exatamente igual à imagem de referência.
-
-        A ordem do QStackedWidget continua usando SECTION_ORDER.
-        Portanto mudar a ordem visual aqui não quebra os índices das páginas.
-        """
-        return (
-            Section.HOME,
-            Section.NEWS,
-            Section.VIDEOS,
-            Section.DEMANDS,
-            Section.SOURCES,
-            Section.HISTORY,
-            Section.TERMS,
-            Section.STOP,
-            Section.NEWS_EXTRACTOR,
-            Section.COVERS,
-            Section.PDF_EDITOR,
-            Section.EXTRACTOR,
-            Section.VIDEO_EDITOR,
-            Section.SPREADSHEETS,
-            Section.SETTINGS,
-        )
+        return SECTION_ORDER
 
     @staticmethod
     def _sidebar_icon_data(section: Section) -> tuple[str, str]:
@@ -157,7 +142,6 @@ class MainWindow(QMainWindow):
             Section.PDF_EDITOR: ("PDF", "#FF5574"),
             Section.EXTRACTOR: ("☁", "#4DDEDE"),
             Section.VIDEO_EDITOR: ("▰", "#B867F6"),
-            Section.SPREADSHEETS: ("▦", "#29D6A3"),
         }
         return data.get(section, ("•", "#FFFFFF"))
 
@@ -170,7 +154,6 @@ class MainWindow(QMainWindow):
         side.setContentsMargins(8, 10, 8, 10)
         side.setSpacing(3)
 
-        # Logo / marca
         brand_wrap = QFrame()
         brand_wrap.setObjectName("sidebarBrandWrap")
 
@@ -201,7 +184,6 @@ class MainWindow(QMainWindow):
         side.addWidget(brand_wrap)
         side.addSpacing(2)
 
-        # Itens
         self.nav_buttons: dict[Section, SidebarNavItem] = {}
 
         for section in self._sidebar_navigation_order():
@@ -222,7 +204,6 @@ class MainWindow(QMainWindow):
 
         side.addStretch(1)
 
-        # Card de status inferior
         self.sidebar_status_card = QFrame()
         self.sidebar_status_card.setObjectName(
             "sidebarStatusCard"
@@ -253,7 +234,7 @@ class MainWindow(QMainWindow):
         )
 
         self.sidebar_status = QLabel(
-            "Windows Portable v4.0.2"
+            platform_version_label()
         )
         self.sidebar_status.setObjectName(
             "sidebarStatusText"
@@ -267,7 +248,6 @@ class MainWindow(QMainWindow):
         )
 
         status_row.addLayout(status_text, 1)
-
         side.addWidget(self.sidebar_status_card)
 
         return sidebar
@@ -341,7 +321,7 @@ class MainWindow(QMainWindow):
 
         self.clock = QLabel()
         self.clock.setObjectName("clockCard")
-        self.clock.setMinimumWidth(180)
+        self.clock.setMinimumWidth(150)
         header.addWidget(self.clock)
 
         cl.addLayout(header)
@@ -372,14 +352,8 @@ class MainWindow(QMainWindow):
             Section.VIDEO_EDITOR: VideoEditorPage(
                 self.paths.root
             ),
-            Section.SPREADSHEETS: SpreadsheetAutomationPage(
-                self.controller,
-                self.paths.root,
-            ),
         }
 
-        # IMPORTANTE:
-        # O stack continua exatamente na ordem de SECTION_ORDER.
         for section in SECTION_ORDER:
             self.stack.addWidget(
                 self.pages[section]
@@ -441,7 +415,6 @@ class MainWindow(QMainWindow):
         footer.addWidget(self.footer_right)
 
         cl.addLayout(footer)
-
         outer.addWidget(content, 1)
 
     # -----------------------------------------------------------------
@@ -461,7 +434,7 @@ class MainWindow(QMainWindow):
             self,
         )
         self.tray.setToolTip(
-            "Central Inteligente de Mídia"
+            APP_DISPLAY_NAME
         )
 
         menu = QMenu()
@@ -549,9 +522,6 @@ class MainWindow(QMainWindow):
 
         elif "fonte" in lowered:
             self.navigate(Section.SOURCES)
-
-        elif "planilha" in lowered or "whatsapp" in lowered:
-            self.navigate(Section.SPREADSHEETS)
 
         else:
             self.navigate(Section.NEWS)
@@ -648,39 +618,67 @@ class MainWindow(QMainWindow):
         self.pages[section].refresh(
             self.controller.state
         )
+        self._last_refresh_signature = (
+            self._state_signature()
+        )
 
     # -----------------------------------------------------------------
     # STATUS
     # -----------------------------------------------------------------
 
-    def _tick(self) -> None:
-        self.controller.sync_automation_state()
+    @staticmethod
+    def _progress_signature(progress) -> tuple:
+        if progress is None:
+            return ()
 
-        self.pages[
-            self._current
-        ].refresh(
-            self.controller.state
+        return (
+            int(getattr(progress, "completed", 0) or 0),
+            int(getattr(progress, "total", 0) or 0),
+            str(getattr(progress, "currentSource", "") or ""),
+            str(getattr(progress, "currentQuery", "") or ""),
+            round(
+                float(getattr(progress, "fraction", 0.0) or 0.0),
+                4,
+            ),
         )
 
-        # Branding centralizado. O HomePage ainda usa internamente o nome
-        # histórico em uma linha de atividade; trocamos somente a apresentação.
-        home_page = self.pages.get(Section.HOME)
-        activities = getattr(home_page, "activities_text", None)
-        if activities is not None:
-            current_text = activities.text()
-            if "Monitor de Notícias v4.0.2" in current_text:
-                activities.setText(
-                    current_text.replace(
-                        "Monitor de Notícias v4.0.2",
-                        "Central Inteligente de Mídia v4.0.2",
-                    )
-                )
+    def _state_signature(self) -> tuple:
+        state = self.controller.state
+        return (
+            bool(state.news_busy),
+            bool(state.video_busy),
+            str(state.status),
+            str(state.video_status),
+            len(state.news),
+            len(state.videos),
+            len(state.demands),
+            len(state.terms),
+            self._progress_signature(state.news_progress),
+            self._progress_signature(state.video_progress),
+        )
 
+    def _refresh_current_page_if_changed(self) -> None:
+        signature = self._state_signature()
+
+        if signature == self._last_refresh_signature:
+            return
+
+        page = self.pages.get(self._current)
+        if page is not None:
+            page.refresh(
+                self.controller.state
+            )
+
+        self._last_refresh_signature = signature
+
+    def _update_status_widgets(self) -> None:
         now = QDateTime.currentDateTime()
 
+        # Sem temperatura fictícia: se a Central não possui dado climático
+        # real, exibe somente data e hora reais do sistema.
         self.clock.setText(
             now.toString(
-                "dd/MM/yyyy\nHH:mm:ss   ☀  29°C"
+                "dd/MM/yyyy\nHH:mm:ss"
             )
         )
 
@@ -700,12 +698,11 @@ class MainWindow(QMainWindow):
             else "○  Automação pausada"
         )
 
-        # Card inferior compacto, como no print.
         self.sidebar_status_title.setText(
             "Sistema operacional"
         )
         self.sidebar_status.setText(
-            "Windows Portable v4.0.2"
+            platform_version_label()
         )
 
         self.footer_left.setText(
@@ -720,11 +717,34 @@ class MainWindow(QMainWindow):
             f"Vídeos: {state.video_status}"
         )
 
+        # Compatibilidade temporária com a Home antiga: substitui apenas a
+        # linha histórica até ela ser consolidada em componente definitivo.
+        home_page = self.pages.get(Section.HOME)
+        activities = getattr(home_page, "activities_text", None)
+        if activities is not None:
+            current_text = activities.text()
+            old = "Monitor de Notícias v4.0.2"
+            if old in current_text:
+                activities.setText(
+                    current_text.replace(
+                        old,
+                        f"{APP_DISPLAY_NAME} v{APP_VERSION}",
+                    )
+                )
+
+    def _tick(self) -> None:
+        self.controller.sync_automation_state()
+        self._refresh_current_page_if_changed()
+        self._update_status_widgets()
+
     def _state_changed(
         self,
         _state,
     ) -> None:
-        pass
+        # Atualização imediata quando o controller emite mudança real.
+        self._last_refresh_signature = None
+        self._refresh_current_page_if_changed()
+        self._update_status_widgets()
 
     def _restore(self) -> None:
         self.show()
@@ -802,15 +822,6 @@ class MainWindow(QMainWindow):
             )
             self._restore()
             return
-
-        spreadsheets = self.pages.get(
-            Section.SPREADSHEETS
-        )
-        if isinstance(
-            spreadsheets,
-            SpreadsheetAutomationPage,
-        ):
-            spreadsheets.shutdown()
 
         self._allow_close = True
         self._timer.stop()
