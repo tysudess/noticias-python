@@ -15,6 +15,7 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QPushButton,
     QProgressBar,
+    QScrollArea,
     QTableWidget,
     QTableWidgetItem,
     QVBoxLayout,
@@ -143,7 +144,8 @@ class DigitalNewspapersPage(QWidget):
 
         action_card = QFrame()
         action_card.setObjectName("digitalCard")
-        action_card.setMinimumWidth(360)
+        action_card.setMinimumWidth(430)
+        action_card.setMinimumHeight(620)
         action_layout = QVBoxLayout(action_card)
         action_layout.setContentsMargins(16, 14, 16, 14)
         action_layout.setSpacing(10)
@@ -169,6 +171,7 @@ class DigitalNewspapersPage(QWidget):
         self.date_edit = QDateEdit(QDate.currentDate())
         self.date_edit.setCalendarPopup(True)
         self.date_edit.setDisplayFormat("dd/MM/yyyy")
+        self.date_edit.setMinimumHeight(38)
         self.date_edit.dateChanged.connect(
             self._date_changed
         )
@@ -184,12 +187,19 @@ class DigitalNewspapersPage(QWidget):
         self.credential_user = QLineEdit()
         self.credential_user.setPlaceholderText("Usuário / e-mail")
         self.credential_user.setObjectName("digitalCredential")
+        self.credential_user.setReadOnly(False)
+        self.credential_user.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        self.credential_user.setMinimumHeight(38)
+        self.credential_user.setClearButtonEnabled(True)
         action_layout.addWidget(self.credential_user)
 
         self.credential_password = QLineEdit()
         self.credential_password.setPlaceholderText("Senha")
         self.credential_password.setEchoMode(QLineEdit.EchoMode.Password)
         self.credential_password.setObjectName("digitalCredential")
+        self.credential_password.setReadOnly(False)
+        self.credential_password.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        self.credential_password.setMinimumHeight(38)
         action_layout.addWidget(self.credential_password)
 
         credential_actions = QHBoxLayout()
@@ -198,11 +208,13 @@ class DigitalNewspapersPage(QWidget):
         self.save_credentials_button = QPushButton("Salvar acesso neste PC")
         self.save_credentials_button.setProperty("secondary", True)
         self.save_credentials_button.clicked.connect(self.save_current_credentials)
+        self.save_credentials_button.setMinimumHeight(38)
         credential_actions.addWidget(self.save_credentials_button, 1)
 
         self.clear_credentials_button = QPushButton("Apagar acesso")
         self.clear_credentials_button.setProperty("danger", True)
         self.clear_credentials_button.clicked.connect(self.clear_current_credentials)
+        self.clear_credentials_button.setMinimumHeight(38)
         credential_actions.addWidget(self.clear_credentials_button)
 
         action_layout.addLayout(credential_actions)
@@ -210,11 +222,13 @@ class DigitalNewspapersPage(QWidget):
         self.download_button = QPushButton("⇩  Baixar edição completa agora")
         self.download_button.setObjectName("digitalDownload")
         self.download_button.clicked.connect(self.download_current)
+        self.download_button.setMinimumHeight(42)
         action_layout.addWidget(self.download_button)
 
         self.open_button = QPushButton("↗  Entrar / renovar sessão")
         self.open_button.setProperty("secondary", True)
         self.open_button.clicked.connect(self.open_current)
+        self.open_button.setMinimumHeight(40)
         self.open_button.setToolTip(
             "Use somente quando o jornal informar que a autenticação expirou. "
             "O download normal não abre navegador."
@@ -224,6 +238,7 @@ class DigitalNewspapersPage(QWidget):
         self.clear_session_button = QPushButton("×  Limpar sessão deste jornal")
         self.clear_session_button.setProperty("secondary", True)
         self.clear_session_button.clicked.connect(self.clear_current_session)
+        self.clear_session_button.setMinimumHeight(40)
         action_layout.addWidget(self.clear_session_button)
 
         self.progress = QProgressBar()
@@ -250,8 +265,21 @@ class DigitalNewspapersPage(QWidget):
         action_layout.addWidget(rule)
 
         action_layout.addStretch(1)
-        content.addWidget(action_card, 2)
-        root.addLayout(content, 3)
+
+        # V83: preserva alturas confortáveis mesmo quando a janela não tem
+        # espaço vertical suficiente. O painel direito passa a rolar em vez
+        # de achatar/encavalar campos e botões.
+        action_scroll = QScrollArea()
+        action_scroll.setObjectName("digitalActionScroll")
+        action_scroll.setWidgetResizable(True)
+        action_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        action_scroll.setHorizontalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+        )
+        action_scroll.setWidget(action_card)
+        action_scroll.setMinimumWidth(430)
+        content.addWidget(action_scroll, 2)
+        root.addLayout(content, 4)
 
         history_card = QFrame()
         history_card.setObjectName("digitalCard")
@@ -307,7 +335,7 @@ class DigitalNewspapersPage(QWidget):
         h.setSectionResizeMode(5, QHeaderView.ResizeMode.Stretch)
         h.setSectionResizeMode(6, QHeaderView.ResizeMode.ResizeToContents)
         history_layout.addWidget(self.history_table, 1)
-        root.addWidget(history_card, 2)
+        root.addWidget(history_card, 1)
 
         self.setStyleSheet(self._stylesheet())
 
@@ -384,7 +412,19 @@ class DigitalNewspapersPage(QWidget):
             border:1px solid #CADCEF;
             border-radius:8px;
             padding:8px 10px;
-            min-height:20px;
+            min-height:34px;
+            font-size:11px;
+        }
+        QLineEdit#digitalCredential:focus {
+            border:2px solid #087AF7;
+            background:#FFFFFF;
+        }
+        QScrollArea#digitalActionScroll {
+            background:transparent;
+            border:0;
+        }
+        QScrollArea#digitalActionScroll > QWidget > QWidget {
+            background:transparent;
         }
         QTableWidget#digitalProviders, QTableWidget#digitalHistory {
             background:white;
@@ -688,8 +728,35 @@ class DigitalNewspapersPage(QWidget):
         ):
             self.progress.hide()
 
-    def _session_changed(self, _provider_id: str) -> None:
-        self._refresh_providers()
+    def _session_changed(self, provider_id: str) -> None:
+        # V83: não chamar _refresh_providers() aqui. Durante o login oculto
+        # vários cookies chegam em sequência; a atualização completa recarregava
+        # o painel selecionado e apagava o que o usuário estava digitando nos
+        # campos de usuário/senha. Atualizamos somente a célula de sessão.
+        for row, provider in enumerate(self.providers):
+            if provider.id != provider_id:
+                continue
+
+            vault = SecureSessionStore(self.paths, provider.id)
+            credentials = SecureCredentialStore(self.paths, provider.id)
+            has_session = vault.exists()
+            has_credentials = credentials.exists()
+            if has_session and has_credentials:
+                session = "Sessão + acesso"
+            elif has_session:
+                session = "Sessão local"
+            elif has_credentials:
+                session = "Acesso salvo"
+            else:
+                session = "Sem sessão"
+
+            item = self.provider_table.item(row, 1)
+            if item is None:
+                item = QTableWidgetItem(session)
+                self.provider_table.setItem(row, 1, item)
+            else:
+                item.setText(session)
+            break
 
     def _pdf_completed(
         self,
