@@ -30,23 +30,27 @@ def test_auth_keeps_remote_validation():
     assert '"device_id": self.device.device_id' in source
 
 
-def test_extractor_uses_persistent_worker():
-    page = _read(
-        "src/monitor_noticias/ui/news_extractor_page.py"
+def test_extractor_uses_reliable_one_shot_process():
+    speed = _read(
+        "src/monitor_noticias/ui/news_extractor_speed_patch.py"
     )
     node = _read(
         "tools/news_extractor/monitor-main.js"
     )
 
-    assert 'env.insert("MONITOR_PERSISTENT", "1")' in page
-    assert "process.stdin" in node
-    assert "executarPersistente" in node
-    assert "CENTRAL_RESULT " in node
+    assert '"MONITOR_NEWS_URL"' in speed
+    assert '"MONITOR_RESULT_FILE"' in speed
+    assert '"MONITOR_PERSISTENT"' in speed
+    assert "env.remove(" in speed
+
+    assert "process.stdin" not in node
+    assert "executarPersistente" not in node
+    assert "app.exit(0)" in node
 
 
 def test_extractor_preserves_proxy_general_environment():
-    page = _read(
-        "src/monitor_noticias/ui/news_extractor_page.py"
+    speed = _read(
+        "src/monitor_noticias/ui/news_extractor_speed_patch.py"
     )
     node = _read(
         "tools/news_extractor/monitor-main.js"
@@ -59,17 +63,23 @@ def test_extractor_preserves_proxy_general_environment():
         "CENTRAL_PROXY_USERNAME",
         "CENTRAL_PROXY_PASSWORD",
     ):
-        assert key in page
+        assert key in speed
         assert key in node
 
 
-def test_extractor_has_quality_guard_and_safe_result_write():
+def test_extractor_has_hard_timeout_and_atomic_result_write():
+    speed = _read(
+        "src/monitor_noticias/ui/news_extractor_speed_patch.py"
+    )
     node = _read(
         "tools/news_extractor/monitor-main.js"
     )
 
-    assert "resultadoSuspeito" in node
-    assert "pontuarMateria" in node
-    assert "segundaLeituraUsada" in node
+    assert "DEFAULT_UI_TIMEOUT_MS" in speed
+    assert "CENTRAL_NEWS_HARD_TIMEOUT_MS" in speed
+    assert "Tempo limite da extração" in speed
+
+    assert "HARD_TIMEOUT_MS" in node
+    assert "Promise.race" in node
     assert "fs.renameSync" in node
-    assert "erroNaoDeveRepetir" in node
+    assert "motor.extrairMateria(URL)" in node
