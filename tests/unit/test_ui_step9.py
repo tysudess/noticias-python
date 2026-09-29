@@ -228,6 +228,10 @@ def test_settings_proxy_startup_and_secure_password_field(app,tmp_path):
     w=MainWindow(c,c.paths)
     page=w.pages[Section.SETTINGS]
 
+    # Na aplicação real a aba é refrescada ao ser aberta. Esse refresh muda
+    # _loaded para True e habilita a reação do toggle de startup.
+    page.refresh(c.state)
+
     assert (
         page.password.echoMode()
         == page.password.EchoMode.Password
@@ -243,9 +247,8 @@ def test_settings_proxy_startup_and_secure_password_field(app,tmp_path):
     assert c.proxy_config.password=="senha-ficticia"
     assert page.password.text()==""
 
-    # Testa diretamente o contrato atual. O estado visual do checkbox pode
-    # ser restaurado pelo refresh sem que isso represente falha no backend.
     page._startup(True)
+    assert c.startup.calls
     assert c.startup.calls[-1] is True
 
     w.exit_application()

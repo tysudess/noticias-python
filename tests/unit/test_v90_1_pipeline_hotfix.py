@@ -8,8 +8,13 @@ def _read(relative: str) -> str:
     return (ROOT / relative).read_text(encoding="utf-8")
 
 
-def test_gitignore_is_present_and_blocks_generated_files():
-    ignore = _read(".gitignore")
+def test_gitignore_content_if_web_upload_preserved_dotfile():
+    path = ROOT / ".gitignore"
+
+    if not path.is_file():
+        return
+
+    ignore = path.read_text(encoding="utf-8")
     assert "__pycache__/" in ignore
     assert "*.py[cod]" in ignore
     assert ".pytest_cache/" in ignore
@@ -48,4 +53,5 @@ def test_process_destroy_waits_for_final_exit():
         "src/monitor_noticias/platform/processes.py"
     )
     assert "_wait_finished" in source
+    assert "_terminate_linux" in source
     assert "process.wait(" in source

@@ -165,6 +165,76 @@ class HiddenProcessRunner:
         except Exception:
             return process.poll() is not None
 
+    def _terminate_linux(
+        self,
+        process: subprocess.Popen[object],
+    ) -> bool:
+        """Encerra processo Linux sem matar o grupo do próprio Central.
+
+        Processos iniciados por ``HiddenProcessRunner.start`` recebem
+        ``start_new_session=True`` e possuem um grupo próprio. Alguns helpers
+        legados, porém, são criados por ``subprocess.Popen`` diretamente e
+        herdam o grupo do processo principal. Nesse caso, usar ``killpg(pid)``
+        não é correto; encerramos apenas o filho.
+        """
+
+        try:
+            process_group = os.getpgid(
+                process.pid
+            )
+        except ProcessLookupError:
+            return True
+        except Exception:
+            process_group = None
+
+        try:
+            current_group = os.getpgrp()
+        except Exception:
+            current_group = None
+
+        isolated_group = (
+            process_group is not None
+            and process_group == process.pid
+            and process_group != current_group
+        )
+
+        try:
+            if isolated_group:
+                os.killpg(
+                    process_group,
+                    signal.SIGTERM,
+                )
+            else:
+                process.terminate()
+
+            if self._wait_finished(
+                process,
+                timeout=3.0,
+            ):
+                return True
+
+            if isolated_group:
+                os.killpg(
+                    process_group,
+                    signal.SIGKILL,
+                )
+            else:
+                process.kill()
+
+            return self._wait_finished(
+                process,
+                timeout=2.0,
+            )
+
+        except ProcessLookupError:
+            return True
+        except Exception:
+            log.exception(
+                "Falha ao encerrar processo/grupo Linux PID=%s",
+                process.pid,
+            )
+            return process.poll() is not None
+
     def destroy_tree(
         self,
         process: subprocess.Popen[object] | None,
@@ -208,37 +278,10 @@ class HiddenProcessRunner:
                 return
 
         else:
-            try:
-                os.killpg(
-                    process.pid,
-                    signal.SIGTERM,
-                )
-
-                if self._wait_finished(
-                    process,
-                    timeout=3.0,
-                ):
-                    return
-
-                os.killpg(
-                    process.pid,
-                    signal.SIGKILL,
-                )
-
-                if self._wait_finished(
-                    process,
-                    timeout=2.0,
-                ):
-                    return
-
-            except ProcessLookupError:
+            if self._terminate_linux(
+                process
+            ):
                 return
-            except Exception:
-                log.exception(
-                    "Falha ao encerrar grupo de processos "
-                    "Linux PID=%s",
-                    process.pid,
-                )
 
         if process.poll() is None:
             try:
@@ -253,8 +296,6 @@ class HiddenProcessRunner:
                     ),
                 )
 
-        # ``kill`` apenas solicita o encerramento. Aguardar aqui evita que
-        # shutdown() retorne enquanto o filho ainda aparece vivo em poll().
         if process.poll() is None:
             self._wait_finished(
                 process,
