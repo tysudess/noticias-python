@@ -131,6 +131,18 @@ jobs:
           print("QtWebEngineCore:", QtWebEngineCore.__file__)
           PY
 
+      - name: Validar código e testes unitários
+        shell: bash
+        env:
+          QT_QPA_PLATFORM: offscreen
+          QTWEBENGINE_DISABLE_SANDBOX: "1"
+        run: |
+          set -euo pipefail
+
+          python -m compileall -q src
+          node --check tools/news_extractor/monitor-main.js
+          python -m pytest -q tests/unit -k "not digital_newspapers"
+
       - name: Gerar helper Globoplay Linux
         shell: bash
         run: |
@@ -337,18 +349,12 @@ jobs:
           echo "Arquivo recebido: ${SIZE} bytes"
           file "$ARCHIVE"
 
-          # O pacote real do BtbN possui mais de 100 MB.
-          # Se vier HTML/página de erro, normalmente terá apenas alguns KB.
           if [ "$SIZE" -lt 50000000 ]; then
             echo "Download do FFmpeg incompleto ou inválido: ${SIZE} bytes"
             echo "Esperado: arquivo XZ com pelo menos 50 MB."
             exit 1
           fi
 
-          # Valida a integridade XZ ANTES de chamar tar.
-          # Isso evita o erro obscuro:
-          #   xz: File format not recognized
-          #   tar: Child returned status 1
           xz -t "$ARCHIVE"
 
           tar -xJf "$ARCHIVE" -C "$EXTRACTED"
