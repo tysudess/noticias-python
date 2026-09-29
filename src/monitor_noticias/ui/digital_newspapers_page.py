@@ -45,6 +45,10 @@ class DigitalNewspapersPage(QWidget):
         self.providers = DIGITAL_NEWSPAPER_PROVIDERS
         self.history_store = DigitalNewspaperHistoryStore(paths)
         self.browser_dialogs: dict[str, DigitalNewspaperBrowserDialog] = {}
+        # V85: cada jornal mantém seu próprio estado. Selecionar uma linha
+        # nunca inicia navegação, busca ou download.
+        self._provider_status: dict[str, str] = {}
+        self._provider_busy: set[str] = set()
         self._selected_provider_id = (
             self.providers[0].id
             if self.providers
@@ -76,8 +80,9 @@ class DigitalNewspapersPage(QWidget):
         title = QLabel("Jornais Digitais")
         title.setObjectName("digitalTitle")
         subtitle = QLabel(
-            "Clique no jornal para baixar automaticamente a edição da data selecionada. "
-            "Quando houver PDF oficial, o arquivo original é preservado sem recompressão."
+            "Selecione um jornal, confira a data e o acesso e só então clique em iniciar. "
+            "PDFs oficiais são preservados; quando houver páginas HD, as imagens também "
+            "são salvas separadamente."
         )
         subtitle.setObjectName("digitalMuted")
         subtitle.setWordWrap(True)
@@ -85,7 +90,7 @@ class DigitalNewspapersPage(QWidget):
         text_box.addWidget(subtitle)
         hl.addLayout(text_box, 1)
 
-        safe = QLabel("●  Download automático • sessão protegida")
+        safe = QLabel("●  Busca manual • sessão protegida")
         safe.setObjectName("digitalSafeChip")
         hl.addWidget(safe)
         root.addWidget(hero)
@@ -99,13 +104,13 @@ class DigitalNewspapersPage(QWidget):
         providers_layout.setContentsMargins(14, 12, 14, 12)
         providers_layout.setSpacing(8)
 
-        providers_title = QLabel("Clique no jornal para baixar")
+        providers_title = QLabel("Selecione o jornal")
         providers_title.setObjectName("digitalSectionTitle")
         providers_layout.addWidget(providers_title)
 
         providers_help = QLabel(
-            "Um clique inicia o download da edição completa. Nenhuma janela de navegador "
-            "é aberta durante o fluxo normal."
+            "Clicar na linha apenas seleciona o jornal. A busca só começa quando você "
+            "clicar em “Iniciar busca / baixar edição”."
         )
         providers_help.setObjectName("digitalMuted")
         providers_help.setWordWrap(True)
@@ -135,9 +140,6 @@ class DigitalNewspapersPage(QWidget):
         header.setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)
         self.provider_table.itemSelectionChanged.connect(
             self._selection_changed
-        )
-        self.provider_table.cellClicked.connect(
-            self._provider_clicked
         )
         providers_layout.addWidget(self.provider_table, 1)
         content.addWidget(providers_card, 3)
@@ -219,7 +221,7 @@ class DigitalNewspapersPage(QWidget):
 
         action_layout.addLayout(credential_actions)
 
-        self.download_button = QPushButton("⇩  Baixar edição completa agora")
+        self.download_button = QPushButton("▶  Iniciar busca / baixar edição")
         self.download_button.setObjectName("digitalDownload")
         self.download_button.clicked.connect(self.download_current)
         self.download_button.setMinimumHeight(42)
@@ -461,39 +463,34 @@ class DigitalNewspapersPage(QWidget):
             self._selected_provider_id = provider_id
         self._sync_selected_panel()
 
-    def _provider_clicked(self, row: int, _column: int) -> None:
-        item = self.provider_table.item(row, 0)
-        if item is None:
-            return
-
-        provider_id = str(item.data(Qt.ItemDataRole.UserRole) or "")
-        if not provider_id:
-            return
-
-        self._selected_provider_id = provider_id
-        self.provider_table.selectRow(row)
-        self._sync_selected_panel()
-        self.download_current()
-
     def _sync_selected_panel(self) -> None:
         provider = self._selected_provider()
         if provider is None:
             self.selected_name.setText("—")
             self.selected_note.setText("—")
             self.download_button.setEnabled(False)
+            self.progress.hide()
             return
 
         self.selected_name.setText(provider.name)
-        self.selected_note.setText(
-            f"{provider.edition_kind}. {provider.note}"
-        )
+        self.selected_note.setText(f"{provider.edition_kind}. {provider.note}")
         self.download_button.setEnabled(provider.can_try_download)
         self.download_button.setToolTip(
-            "Baixa a edição completa automaticamente, sem abrir navegador."
+            "Inicia a busca somente quando este botão é pressionado."
             if provider.can_try_download
             else "A edição completa está documentada somente no aplicativo oficial."
         )
         self._load_selected_credentials()
+
+        saved_status = self._provider_status.get(provider.id)
+        if saved_status:
+            self.status.setText(saved_status)
+        else:
+            self.status.setText(
+                f"{provider.name}: selecionado. Nenhuma busca foi iniciada. "
+                "Clique em “Iniciar busca / baixar edição” quando estiver pronto."
+            )
+        self.progress.setVisible(provider.id in self._provider_busy)
 
     def _refresh_providers(self) -> None:
         self.provider_table.setRowCount(len(self.providers))
@@ -517,7 +514,7 @@ class DigitalNewspapersPage(QWidget):
                 session = "Sem sessão"
 
             if provider.download_strategy == "pressreader_hd_images":
-                method = "Páginas HD"
+                method = "Imagens HD + PDF"
             elif provider.supports_direct_pdf:
                 method = "PDF direto"
             elif provider.official_pdf_documented:
@@ -594,9 +591,9 @@ class DigitalNewspapersPage(QWidget):
 
         self.credential_password.clear()
         self.credential_password.setPlaceholderText("Senha salva localmente")
-        self.status.setText(
-            f"{provider.name}: acesso salvo criptografado somente neste computador."
-        )
+        message = f"{provider.name}: acesso salvo criptografado somente neste computador."
+        self._provider_status[provider.id] = message
+        self.status.setText(message)
         self._refresh_providers()
 
     def clear_current_credentials(self) -> None:
@@ -607,9 +604,9 @@ class DigitalNewspapersPage(QWidget):
         self.credential_user.clear()
         self.credential_password.clear()
         self.credential_password.setPlaceholderText("Senha")
-        self.status.setText(
-            f"{provider.name}: usuário e senha locais removidos."
-        )
+        message = f"{provider.name}: usuário e senha locais removidos."
+        self._provider_status[provider.id] = message
+        self.status.setText(message)
         self._refresh_providers()
 
     def _date_value(self) -> date:
@@ -639,7 +636,9 @@ class DigitalNewspapersPage(QWidget):
             target_date=self._date_value(),
             parent=self.window(),
         )
-        dialog.status_changed.connect(self._browser_status)
+        dialog.status_changed.connect(
+            lambda text, pid=provider.id: self._browser_status(pid, text)
+        )
         dialog.session_changed.connect(
             lambda _has, pid=provider.id:
                 self._session_changed(pid)
@@ -665,10 +664,12 @@ class DigitalNewspapersPage(QWidget):
         dialog.show()
         dialog.raise_()
         dialog.activateWindow()
-        self.status.setText(
+        message = (
             f"{provider.name}: janela de autenticação aberta. Se houver acesso salvo "
             "localmente, a Central preencherá os campos sem expor a senha no código."
         )
+        self._provider_status[provider.id] = message
+        self.status.setText(message)
 
     def download_current(self) -> None:
         provider = self._selected_provider()
@@ -676,24 +677,30 @@ class DigitalNewspapersPage(QWidget):
             return
 
         if not provider.can_try_download:
-            self.status.setText(
+            message = (
                 f"{provider.name}: a edição completa está documentada somente no "
                 "aplicativo oficial; a Central não extrai o pacote interno do app."
             )
+            self._provider_status[provider.id] = message
+            self._provider_busy.discard(provider.id)
+            self.status.setText(message)
             self.progress.hide()
             return
 
         dialog = self._browser_for(provider)
         dialog.set_target_date(self._date_value())
 
-        # V78: CRÍTICO — não chamar show()/raise_()/activateWindow() aqui.
-        # O fluxo normal acontece inteiramente em segundo plano.
-        dialog.start_automatic_download()
-        self.progress.show()
-        self.status.setText(
-            f"{provider.name}: buscando a edição completa de "
-            f"{self._date_value().strftime('%d/%m/%Y')} em segundo plano…"
+        # V85: somente este botão inicia uma busca. Trocar de jornal não dispara
+        # qualquer acesso de rede nem interfere no estado de outra busca.
+        self._provider_busy.add(provider.id)
+        message = (
+            f"{provider.name}: iniciando busca da edição de "
+            f"{self._date_value().strftime('%d/%m/%Y')}…"
         )
+        self._provider_status[provider.id] = message
+        self.progress.show()
+        self.status.setText(message)
+        dialog.start_automatic_download()
 
     def clear_current_session(self) -> None:
         provider = self._selected_provider()
@@ -704,36 +711,37 @@ class DigitalNewspapersPage(QWidget):
             dialog.clear_session()
         else:
             SecureSessionStore(self.paths, provider.id).clear()
-        self.status.setText(
-            f"{provider.name}: sessão protegida removida."
-        )
+        message = f"{provider.name}: sessão protegida removida."
+        self._provider_status[provider.id] = message
+        self._provider_busy.discard(provider.id)
+        self.status.setText(message)
+        self.progress.hide()
         self._refresh_providers()
 
-    def _browser_status(self, text: str) -> None:
-        self.status.setText(text)
+    def _browser_status(self, provider_id: str, text: str) -> None:
+        # V85: cada diálogo escreve apenas no estado do próprio jornal.
+        self._provider_status[provider_id] = text
         lowered = text.lower()
-        if any(
+        terminal = any(
             marker in lowered
             for marker in (
-                "concluído",
-                "nenhum pdf",
-                "não está disponível",
-                "autenticação necessária",
-                "sessão pode precisar",
-                "cancelado",
-                "interrompido",
-                "não era um pdf",
-                "não passou na validação",
-                "respondeu http",
-                "não concluiu o carregamento",
-                "qualidade insuficiente",
-                "sequência de páginas",
-                "sequência das páginas",
-                "foram localizadas somente",
-                "precisa ser renovada",
+                "concluído", "nenhum pdf", "não está disponível",
+                "autenticação necessária", "sessão pode precisar", "cancelado",
+                "interrompido", "não era um pdf", "não passou na validação",
+                "respondeu http", "não concluiu o carregamento",
+                "qualidade insuficiente", "sequência de páginas",
+                "sequência das páginas", "foram localizadas somente",
+                "precisa ser renovada", "não apareceu uma imagem",
+                "nenhuma página",
             )
-        ):
-            self.progress.hide()
+        )
+        if terminal:
+            self._provider_busy.discard(provider_id)
+
+        if provider_id != self._selected_provider_id:
+            return
+        self.status.setText(text)
+        self.progress.setVisible(provider_id in self._provider_busy)
 
     def _session_changed(self, provider_id: str) -> None:
         # V83: não chamar _refresh_providers() aqui. Durante o login oculto
@@ -773,25 +781,32 @@ class DigitalNewspapersPage(QWidget):
         method: str,
     ) -> None:
         output = Path(path)
+        inferred_date = output.parent.name
+        if len(inferred_date) != 10 or inferred_date[4:5] != "-" or inferred_date[7:8] != "-":
+            inferred_date = self._date_value().isoformat()
         quality = (
-            "HD / pixels preservados"
-            if method == "PressReader - páginas HD"
+            "HD / imagens preservadas"
+            if "PressReader" in method
             else "Original / sem recompressão"
         )
         entry = DigitalNewspaperHistoryEntry.completed(
             newspaper=provider.name,
             provider_id=provider.id,
-            edition_date=self._date_value().isoformat(),
+            edition_date=inferred_date,
             pages=pages,
             quality=quality,
             method=method,
             path=output,
         )
         self.history_store.append(entry)
-        self.progress.hide()
-        self.status.setText(
-            f"✓ {provider.name}: edição completa salva em PDF sem recompressão: {output}"
+        self._provider_busy.discard(provider.id)
+        message = (
+            f"✓ {provider.name}: edição concluída com {pages} páginas. Arquivo: {output}"
         )
+        self._provider_status[provider.id] = message
+        if provider.id == self._selected_provider_id:
+            self.progress.hide()
+            self.status.setText(message)
         self._refresh_history()
 
     def _refresh_history(self) -> None:

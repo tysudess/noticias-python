@@ -23,6 +23,7 @@ from PySide6.QtWebEngineCore import (
     QWebEnginePage,
     QWebEngineProfile,
     QWebEngineSettings,
+    QWebEngineUrlRequestInterceptor,
 )
 from PySide6.QtWebEngineWidgets import QWebEngineView
 from PySide6.QtWidgets import (
@@ -61,6 +62,21 @@ class DigitalNewspaperPage(QWebEnginePage):
 
     def createWindow(self, _window_type):  # noqa: N802
         return self
+
+
+class DigitalNewspaperRequestInterceptor(QWebEngineUrlRequestInterceptor):
+    """Observa recursos do viewer sem modificar as requisições."""
+
+    resource_seen = Signal(str)
+
+    def interceptRequest(self, info) -> None:  # noqa: N802
+        try:
+            url = info.requestUrl().toString()
+        except Exception:
+            return
+        low = url.lower()
+        if "prcdn.co" in low or "pressreader" in low or "newspaperdirect" in low:
+            self.resource_seen.emit(url)
 
 
 DOWNLOAD_PROBE_JS = r"""
@@ -200,18 +216,21 @@ DOWNLOAD_PROBE_JS = r"""
 PRESSREADER_RESOURCES_JS = r"""
 (function(){
   try{
-    var resources=(performance.getEntriesByType('resource')||[]).map(function(e){return e.name;});
-    return JSON.stringify({
-      href: location.href || '',
-      title: document.title || '',
-      hasPassword: !!document.querySelector('input[type="password"]'),
-      resources: resources
+    var resources=[],seen={};
+    function add(v){try{var u=String(v||'').trim();if(!u||seen[u])return;seen[u]=1;resources.push(u);}catch(e){}}
+    (performance.getEntriesByType('resource')||[]).forEach(function(e){add(e.name);});
+    Array.from(document.images||[]).forEach(function(img){
+      add(img.currentSrc);add(img.src);
+      String(img.srcset||'').split(',').forEach(function(part){add(part.trim().split(/\s+/)[0]);});
     });
-  }catch(e){
-    return JSON.stringify({href:location.href||'',title:document.title||'',hasPassword:false,resources:[]});
-  }
+    Array.from(document.querySelectorAll('source[src],source[srcset]')).forEach(function(n){
+      add(n.src);String(n.srcset||'').split(',').forEach(function(part){add(part.trim().split(/\s+/)[0]);});
+    });
+    return JSON.stringify({href:location.href||'',title:document.title||'',hasPassword:!!document.querySelector('input[type="password"]'),resources:resources});
+  }catch(e){return JSON.stringify({href:location.href||'',title:document.title||'',hasPassword:false,resources:[]});}
 })()
 """
+
 
 
 def _output_target(
@@ -681,6 +700,8 @@ class DigitalNewspaperBrowserDialog(QDialog):
         self._valor_image_urls: dict[int, str] = {}
         self._valor_probe_attempts = 0
         self._valor_reload_attempts = 0
+        self._valor_intercepted_best_url = ""
+        self._valor_intercepted_best_score = -1
 
         self.setWindowTitle(
             f"Entrar / renovar sessão • {provider.name}"
@@ -699,6 +720,12 @@ class DigitalNewspaperBrowserDialog(QDialog):
             pass
 
         self.profile = QWebEngineProfile(self)
+        self._request_interceptor = DigitalNewspaperRequestInterceptor(self)
+        self._request_interceptor.resource_seen.connect(self._request_resource_seen)
+        try:
+            self.profile.setUrlRequestInterceptor(self._request_interceptor)
+        except Exception:
+            pass
         self.profile.setHttpUserAgent(
             "Mozilla/5.0 CentralInteligenteDeMidia/4.0.2"
         )
@@ -776,6 +803,17 @@ class DigitalNewspaperBrowserDialog(QDialog):
             self._load_finished
         )
 
+    def _request_resource_seen(self, raw_url: str) -> None:
+        if not self._valor_hd_active:
+            return
+        score = pressreader_image_candidate_score(
+            raw_url, expected_page=self._valor_page_number
+        )
+        if score is None or score <= self._valor_intercepted_best_score:
+            return
+        self._valor_intercepted_best_score = score
+        self._valor_intercepted_best_url = str(raw_url or "")
+
     def _build_ui(self) -> None:
         root = QVBoxLayout(self)
         root.setContentsMargins(10, 10, 10, 10)
@@ -818,8 +856,8 @@ class DigitalNewspaperBrowserDialog(QDialog):
 
         self.info = QLabel(
             "Esta tela existe somente para autenticação quando a sessão expirar. "
-            "No uso normal, clique no nome do jornal na aba Jornais Digitais e o "
-            "download acontece sem abrir esta janela. Se você optar por salvar o acesso, "
+            "No uso normal, selecione o jornal na aba Jornais Digitais e clique em "
+            "“Iniciar busca / baixar edição”. Se você optar por salvar o acesso, "
             "a senha fica criptografada somente neste computador."
         )
         self.info.setWordWrap(True)
@@ -1192,7 +1230,7 @@ class DigitalNewspaperBrowserDialog(QDialog):
         if self._auto_login_seen:
             self._emit_status(
                 f"{self.provider.name}: autenticação necessária ou sessão expirada. "
-                "Use “Entrar / renovar sessão” uma vez e depois clique no jornal novamente."
+                "Use “Entrar / renovar sessão” uma vez e depois clique em “Iniciar busca / baixar edição”."
             )
             return
 
@@ -1287,7 +1325,21 @@ class DigitalNewspaperBrowserDialog(QDialog):
         self._valor_image_urls.clear()
         self._valor_probe_attempts = 0
         self._valor_reload_attempts = 0
+        self._valor_intercepted_best_url = ""
+        self._valor_intercepted_best_score = -1
         self.download_button.setEnabled(False)
+        try:
+            self.page.setVisible(True)
+        except Exception:
+            pass
+        try:
+            self.page.setLifecycleState(QWebEnginePage.LifecycleState.Active)
+        except Exception:
+            pass
+        try:
+            self.view.resize(1440, 2400)
+        except Exception:
+            pass
         self._emit_status(
             f"{self.provider.name}: abrindo página 01 da edição de "
             f"{self.target_date.strftime('%d/%m/%Y')} no PressReader…"
@@ -1316,7 +1368,13 @@ class DigitalNewspaperBrowserDialog(QDialog):
 
         self._autofill_saved_credentials(auto_submit=True)
         self._valor_probe_attempts = 0
-        QTimer.singleShot(1800, self._probe_pressreader_resources)
+        try:
+            self.page.runJavaScript(
+                "(function(){try{document.querySelectorAll('img').forEach(function(i){i.loading='eager';});window.scrollTo(0,1);window.scrollTo(0,0);window.dispatchEvent(new Event('resize'));}catch(e){}return true;})()"
+            )
+        except Exception:
+            pass
+        QTimer.singleShot(3200, self._probe_pressreader_resources)
 
     def _probe_pressreader_resources(self) -> None:
         if not self._valor_hd_active:
@@ -1364,8 +1422,8 @@ class DigitalNewspaperBrowserDialog(QDialog):
         if not isinstance(resources, list):
             resources = []
 
-        best_url = ""
-        best_score = -1
+        best_url = self._valor_intercepted_best_url
+        best_score = self._valor_intercepted_best_score
         for item in resources:
             url = str(item or "").strip()
             score = pressreader_image_candidate_score(
@@ -1385,6 +1443,8 @@ class DigitalNewspaperBrowserDialog(QDialog):
             self._valor_page_number += 1
             self._valor_probe_attempts = 0
             self._valor_reload_attempts = 0
+            self._valor_intercepted_best_url = ""
+            self._valor_intercepted_best_score = -1
 
             if self._valor_page_number > int(self.provider.pressreader_max_pages):
                 self._finish_pressreader_collection()
@@ -1405,7 +1465,7 @@ class DigitalNewspaperBrowserDialog(QDialog):
                 )
             except Exception:
                 pass
-            QTimer.singleShot(1200, self._probe_pressreader_resources)
+            QTimer.singleShot(1800, self._probe_pressreader_resources)
             return
 
         # Uma recarga reduz o risco de considerar como fim da edição uma página

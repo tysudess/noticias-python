@@ -122,5 +122,5 @@ def test_v84_browser_has_sequential_pressreader_collection_and_worker():
 
 def test_v84_ui_identifies_hd_method_and_quality():
     source = PAGE.read_text(encoding="utf-8")
-    assert 'method = "Páginas HD"' in source
-    assert '"HD / pixels preservados"' in source
+    assert 'method = "Imagens HD + PDF"' in source
+    assert '"HD / imagens preservadas"' in source

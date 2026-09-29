@@ -328,10 +328,10 @@ class ValorProvider(DigitalNewspaperProvider):
             min_edition_pages=8,
             min_edition_bytes=300_000,
             note=(
-                "A V84 usa a estratégia já comprovada no APK Extrator Valor: abre a "
-                "edição autorizada no PressReader, identifica as imagens de página do "
-                "CDN prcdn.co, busca a maior resolução disponível e monta um único PDF "
-                "sem reduzir pixels. JPEG é incorporado sem recompressão."
+                "A V85 usa a estratégia comprovada no APK Extrator Valor e reforça a "
+                "captura dos recursos do PressReader: identifica as imagens de página "
+                "do CDN prcdn.co, salva cada página HD separadamente e, quando a sequência "
+                "está completa, também monta um único PDF sem reduzir pixels."
             ),
         )
 

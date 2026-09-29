@@ -429,16 +429,16 @@ class PressReaderHdPdfThread(QThread):
             )
             return
 
-        temp_dir = self.output_path.parent / "_valor_pressreader_tmp"
-        shutil.rmtree(temp_dir, ignore_errors=True)
-        temp_dir.mkdir(parents=True, exist_ok=True)
+        pages_dir = self.output_path.parent / "paginas_hd"
+        shutil.rmtree(pages_dir, ignore_errors=True)
+        pages_dir.mkdir(parents=True, exist_ok=True)
+        downloaded: list[Path] = []
 
         try:
             settings, config = self._proxy_settings()
             proxies = settings.requests_proxies(config)
             verify = settings.requests_verify(config)
 
-            downloaded: list[Path] = []
             with requests.Session() as session:
                 session.trust_env = False
                 self._restore_requests_cookies(session)
@@ -455,12 +455,19 @@ class PressReaderHdPdfThread(QThread):
                         proxies=proxies,
                         verify=verify,
                     )
-                    suffix = ".jpg" if fmt in {"JPEG", "JPG"} else ".img"
-                    image_path = temp_dir / f"{page_number:03d}{suffix}"
+                    suffix = {
+                        "JPEG": ".jpg",
+                        "JPG": ".jpg",
+                        "PNG": ".png",
+                        "WEBP": ".webp",
+                        "AVIF": ".avif",
+                        "TIFF": ".tif",
+                    }.get(fmt, ".img")
+                    image_path = pages_dir / f"pagina-{page_number:03d}{suffix}"
                     image_path.write_bytes(payload)
                     downloaded.append(image_path)
                     self.status_changed.emit(
-                        f"{self.provider.name}: página {page_number:02d} confirmada "
+                        f"{self.provider.name}: página {page_number:02d} salva separadamente "
                         f"em {width}x{height}px."
                     )
 
@@ -484,13 +491,17 @@ class PressReaderHdPdfThread(QThread):
             self.completed.emit(
                 str(self.output_path),
                 pages,
-                "PressReader - páginas HD",
+                "PressReader - imagens HD + PDF",
             )
         except Exception as exc:
             try:
                 self.output_path.unlink()
             except Exception:
                 pass
-            self.failed.emit(str(exc) or exc.__class__.__name__)
-        finally:
-            shutil.rmtree(temp_dir, ignore_errors=True)
+            detail = str(exc) or exc.__class__.__name__
+            if downloaded:
+                detail += (
+                    f" As {len(downloaded)} imagem(ns) já baixadas foram preservadas em "
+                    f"{pages_dir}."
+                )
+            self.failed.emit(detail)
