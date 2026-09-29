@@ -9,7 +9,6 @@ on:
       - "resources/**"
       - "portable/**"
       - "tools/news_extractor/**"
-      - "tools/spreadsheet_automation/**"
       - "tools/globoplay-login-helper.py"
       - "tools/build-globoplay-login-helper.py"
       - "run.py"
@@ -29,8 +28,6 @@ concurrency:
 env:
   PORTABLE_NAME: MonitorDeNoticias-Windows-Portable-x64.zip
   ARTIFACT_NAME: monitor-portable-release
-  PLANILHAS_RUNTIME_TAG: planilhas-runtime-v1.0.4
-  PLANILHAS_RUNTIME_ASSET: AutomacaoPlanilhas-Windows-Portable-v1.0.4.exe
 
 jobs:
   build:
@@ -69,6 +66,17 @@ jobs:
             --upgrade `
             --only-binary=:all: `
             "PyAudioWPatch==0.2.12.8"
+
+      - name: Validar código e testes unitários
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $env:QT_QPA_PLATFORM = "offscreen"
+          $env:QTWEBENGINE_DISABLE_SANDBOX = "1"
+
+          python -m compileall -q src
+          node --check tools/news_extractor/monitor-main.js
+          python -m pytest -q tests/unit -k "not digital_newspapers"
 
       - name: Validar backend WASAPI do Gravador de Tela
         shell: pwsh
@@ -159,8 +167,6 @@ jobs:
 
       - name: Preparar estrutura portable
         shell: pwsh
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           $ErrorActionPreference = "Stop"
 
@@ -174,8 +180,7 @@ jobs:
             "temp",
             "Videos",
             "VideoEditorExports",
-            "tools/news_extractor",
-            "tools/spreadsheet_automation"
+            "tools/news_extractor"
           )) {
             New-Item -ItemType Directory -Force -Path (Join-Path $root $dir) | Out-Null
           }
@@ -217,38 +222,6 @@ jobs:
           Copy-Item `
             $extractor.FullName `
             (Join-Path $root "tools/news_extractor/ExtratorMateriasPortable-V1.25.19.exe") `
-            -Force
-
-          $sheetTargetDir = Join-Path $root "tools/spreadsheet_automation"
-          $sheetTarget = Join-Path $sheetTargetDir $env:PLANILHAS_RUNTIME_ASSET
-          $sheetConfig = "tools/spreadsheet_automation/config.json"
-
-          if (-not (Test-Path $sheetConfig)) {
-            throw "config.json da Automação de Planilhas não foi encontrado no repositório."
-          }
-
-          gh release download `
-            $env:PLANILHAS_RUNTIME_TAG `
-            --repo $env:GITHUB_REPOSITORY `
-            --pattern $env:PLANILHAS_RUNTIME_ASSET `
-            --dir $sheetTargetDir `
-            --clobber
-
-          if ($LASTEXITCODE -ne 0) {
-            throw "Falha ao baixar o runtime da Automação de Planilhas."
-          }
-
-          if (-not (Test-Path $sheetTarget)) {
-            throw "Runtime da Automação de Planilhas não foi baixado."
-          }
-
-          if ((Get-Item $sheetTarget).Length -lt 50MB) {
-            throw "Runtime da Automação de Planilhas parece incompleto."
-          }
-
-          Copy-Item `
-            $sheetConfig `
-            (Join-Path $sheetTargetDir "config.json") `
             -Force
 
           if (Test-Path "portable/README_PORTABLE.txt") {
@@ -500,22 +473,14 @@ jobs:
               throw "Extrator de Notícias não está dentro do portable."
             }
 
-            $sheetExe = $archive.Entries |
+            $legacyPlanilhas = $archive.Entries |
               Where-Object {
-                $_.FullName.Replace("\", "/") -ieq `
-                  "tools/spreadsheet_automation/AutomacaoPlanilhas-Windows-Portable-v1.0.4.exe"
+                $_.FullName.Replace("\", "/") -like "tools/spreadsheet_automation/*"
               } |
               Select-Object -First 1
 
-            $sheetConfig = $archive.Entries |
-              Where-Object {
-                $_.FullName.Replace("\", "/") -ieq `
-                  "tools/spreadsheet_automation/config.json"
-              } |
-              Select-Object -First 1
-
-            if (-not $sheetExe -or -not $sheetConfig) {
-              throw "Automação de Planilhas standalone v1.0.4 não está completa dentro do portable."
+            if ($legacyPlanilhas) {
+              throw "O ZIP ainda contém a integração legada de Planilhas."
             }
           }
           finally {
