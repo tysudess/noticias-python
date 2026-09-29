@@ -266,6 +266,15 @@ class Application:
             window
         )
 
+        from monitor_noticias.ui.diagnostics_panel import (
+            install_diagnostics_panel,
+        )
+
+        install_diagnostics_panel(
+            window,
+            auth_runtime,
+        )
+
         if (
             auth_runtime is not None
             and auth_session is not None

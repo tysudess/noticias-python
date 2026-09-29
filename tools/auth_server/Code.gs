@@ -1,4 +1,4 @@
-const AUTH_VERSION = "1.1.3";
+const AUTH_VERSION = "1.2.0";
 
 const SHEET_USERS = "USUARIOS";
 const SHEET_DEVICES = "DISPOSITIVOS";
@@ -8,6 +8,7 @@ const SHEET_CONFIG = "CONFIG";
 
 const DEFAULT_PASSWORD_ITERATIONS = 8000;
 const DEFAULT_SESSION_HOURS = 12;
+const VALIDATION_TOUCH_MINUTES = 15;
 
 const ALL_PERMISSIONS = [
   "home",
@@ -28,10 +29,7 @@ const ALL_PERMISSIONS = [
 
 const PROFILE_PERMISSIONS = {
   ADMIN: ["*"],
-
-  // V64: OPERADOR com todas as abas/funções ativas.
   OPERADOR: ["*"],
-
   EDICAO: [
     "home",
     "history",
@@ -40,7 +38,6 @@ const PROFILE_PERMISSIONS = {
     "extractor",
     "video_editor",
   ],
-
   CONSULTA: [
     "home",
     "news",
@@ -49,23 +46,20 @@ const PROFILE_PERMISSIONS = {
   ],
 };
 
+// Cache apenas durante a mesma execução do Apps Script. Não mantém dados de
+// autenticação entre requisições e, portanto, não cria janela de revogação.
+let _activeSpreadsheetCache = null;
+const _sheetCache = {};
+const _configCache = {};
+
 
 function onOpen() {
   SpreadsheetApp
     .getUi()
     .createMenu("Central Auth")
-    .addItem(
-      "Preparar / atualizar planilha",
-      "setupCentralAuth"
-    )
-    .addItem(
-      "Processar senhas pendentes",
-      "processarSenhasPendentes"
-    )
-    .addItem(
-      "Revogar todas as sessões",
-      "revogarTodasSessoes"
-    )
+    .addItem("Preparar / atualizar planilha", "setupCentralAuth")
+    .addItem("Processar senhas pendentes", "processarSenhasPendentes")
+    .addItem("Revogar todas as sessões", "revogarTodasSessoes")
     .addToUi();
 }
 
@@ -73,83 +67,59 @@ function onOpen() {
 function setupCentralAuth() {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
 
-  ensureSheet_(
-    ss,
-    SHEET_USERS,
-    [
-      "USERNAME",
-      "NOME",
-      "STATUS",
-      "NOVA_SENHA",
-      "SALT",
-      "SENHA_HASH",
-      "ITERACOES",
-      "PERFIL",
-      "VALIDADE",
-      "MAX_DISPOSITIVOS",
-      "PERMISSOES",
-      "CRIADO_EM",
-      "ULTIMO_LOGIN",
-      "OBSERVACOES",
-      "TROCAR_SENHA",
-    ]
-  );
+  ensureSheet_(ss, SHEET_USERS, [
+    "USERNAME",
+    "NOME",
+    "STATUS",
+    "NOVA_SENHA",
+    "SALT",
+    "SENHA_HASH",
+    "ITERACOES",
+    "PERFIL",
+    "VALIDADE",
+    "MAX_DISPOSITIVOS",
+    "PERMISSOES",
+    "CRIADO_EM",
+    "ULTIMO_LOGIN",
+    "OBSERVACOES",
+    "TROCAR_SENHA",
+  ]);
 
-  ensureSheet_(
-    ss,
-    SHEET_DEVICES,
-    [
-      "USERNAME",
-      "DEVICE_ID",
-      "DEVICE_NAME",
-      "OS",
-      "PRIMEIRO_ACESSO",
-      "ULTIMO_ACESSO",
-      "ATIVO",
-    ]
-  );
+  ensureSheet_(ss, SHEET_DEVICES, [
+    "USERNAME",
+    "DEVICE_ID",
+    "DEVICE_NAME",
+    "OS",
+    "PRIMEIRO_ACESSO",
+    "ULTIMO_ACESSO",
+    "ATIVO",
+  ]);
 
-  ensureSheet_(
-    ss,
-    SHEET_SESSIONS,
-    [
-      "TOKEN_HASH",
-      "USERNAME",
-      "DEVICE_ID",
-      "CRIADO_EM",
-      "EXPIRA_EM",
-      "REVOGADO",
-      "ULTIMA_VALIDACAO",
-    ]
-  );
+  ensureSheet_(ss, SHEET_SESSIONS, [
+    "TOKEN_HASH",
+    "USERNAME",
+    "DEVICE_ID",
+    "CRIADO_EM",
+    "EXPIRA_EM",
+    "REVOGADO",
+    "ULTIMA_VALIDACAO",
+  ]);
 
-  ensureSheet_(
-    ss,
-    SHEET_LOGS,
-    [
-      "DATA_HORA",
-      "EVENTO",
-      "USERNAME",
-      "DEVICE_ID",
-      "DETALHE",
-    ]
-  );
+  ensureSheet_(ss, SHEET_LOGS, [
+    "DATA_HORA",
+    "EVENTO",
+    "USERNAME",
+    "DEVICE_ID",
+    "DETALHE",
+  ]);
 
-  const config = ensureSheet_(
-    ss,
-    SHEET_CONFIG,
-    [
-      "CHAVE",
-      "VALOR",
-    ]
-  );
+  const config = ensureSheet_(ss, SHEET_CONFIG, ["CHAVE", "VALOR"]);
 
   setConfigIfMissing_(
     config,
     "PASSWORD_ITERATIONS",
     String(DEFAULT_PASSWORD_ITERATIONS)
   );
-
   setConfigIfMissing_(
     config,
     "SESSION_HOURS",
@@ -160,339 +130,208 @@ function setupCentralAuth() {
 
   const users = ss.getSheetByName(SHEET_USERS);
 
-  if (
-    users.getLastRow() === 1
-  ) {
-    users.appendRow(
-      [
-        "admin",
-        "Administrador",
-        "ATIVO",
-        "",
-        "",
-        "",
-        "",
-        "ADMIN",
-        "",
-        2,
-        "*",
-        new Date(),
-        "",
-        "Digite uma senha na coluna NOVA_SENHA e use o menu Central Auth.",
-        true,
-      ]
-    );
+  if (users.getLastRow() === 1) {
+    users.appendRow([
+      "admin",
+      "Administrador",
+      "ATIVO",
+      "",
+      "",
+      "",
+      "",
+      "ADMIN",
+      "",
+      2,
+      "*",
+      new Date(),
+      "",
+      "Digite uma senha na coluna NOVA_SENHA e use o menu Central Auth.",
+      true,
+    ]);
   }
 
-  // V61: usuários que já possuíam senha antes da coluna TROCAR_SENHA
-  // devem ser obrigados a trocar no próximo acesso.
-  migratePasswordChangeFlags_(
-    users
-  );
-
+  migratePasswordChangeFlags_(users);
   formatSheets_();
 
-  SpreadsheetApp
-    .getUi()
-    .alert(
-      "Central Auth",
-      (
-        "Estrutura criada.\n\n"
-        + "1. Na aba USUARIOS, informe uma senha na coluna NOVA_SENHA.\n"
-        + "2. Deixe TROCAR_SENHA vazio/TRUE para exigir troca no primeiro acesso.\n"
-        + "3. Use Central Auth > Processar senhas pendentes.\n"
-        + "4. Atualize a implantação do Web App."
-      ),
-      SpreadsheetApp.getUi().ButtonSet.OK
-    );
+  SpreadsheetApp.getUi().alert(
+    "Central Auth",
+    (
+      "Estrutura criada/atualizada.\n\n"
+      + "1. Na aba USUARIOS, informe uma senha na coluna NOVA_SENHA.\n"
+      + "2. TROCAR_SENHA vazio/TRUE exige troca no primeiro acesso.\n"
+      + "3. Use Central Auth > Processar senhas pendentes.\n"
+      + "4. Crie uma NOVA versão da implantação do Web App."
+    ),
+    SpreadsheetApp.getUi().ButtonSet.OK
+  );
 }
 
 
 function processarSenhasPendentes() {
-  const ss = SpreadsheetApp.getActiveSpreadsheet();
-  const sheet = ss.getSheetByName(SHEET_USERS);
+  const lock = LockService.getScriptLock();
+  lock.waitLock(20000);
 
-  if (!sheet) {
-    throw new Error(
-      "Execute setupCentralAuth() primeiro."
-    );
-  }
+  try {
+    const sheet = getSheet_(SHEET_USERS);
+    const rows = sheet.getDataRange().getValues();
 
-  const rows = sheet.getDataRange().getValues();
-
-  if (rows.length <= 1) {
-    return;
-  }
-
-  const iterations = getPasswordIterations_();
-  let processed = 0;
-
-  for (
-    let rowIndex = 1;
-    rowIndex < rows.length;
-    rowIndex++
-  ) {
-    const row = rows[rowIndex];
-
-    const username = normalizeUsername_(
-      row[0]
-    );
-
-    const newPassword = String(
-      row[3] || ""
-    );
-
-    if (
-      !username
-      || !newPassword
-    ) {
-      continue;
+    if (rows.length <= 1) {
+      return;
     }
 
-    if (
-      newPassword.length < 8
-    ) {
-      throw new Error(
-        "A senha de "
-        + username
-        + " precisa ter pelo menos 8 caracteres."
+    const iterations = getPasswordIterations_();
+    let processed = 0;
+
+    for (let rowIndex = 1; rowIndex < rows.length; rowIndex++) {
+      const row = rows[rowIndex];
+      const username = normalizeUsername_(row[0]);
+      const newPassword = String(row[3] || "");
+
+      if (!username || !newPassword) {
+        continue;
+      }
+
+      if (newPassword.length < 8) {
+        throw new Error(
+          "A senha de " + username + " precisa ter pelo menos 8 caracteres."
+        );
+      }
+
+      const salt = randomHex_(24);
+      const passwordHash = hashPassword_(
+        newPassword,
+        salt,
+        iterations
       );
-    }
 
-    const salt = randomHex_(
-      24
-    );
+      // D:G = NOVA_SENHA, SALT, HASH, ITERACOES.
+      sheet.getRange(rowIndex + 1, 4, 1, 4).setValues([[
+        "",
+        salt,
+        passwordHash,
+        iterations,
+      ]]);
 
-    const passwordHash = hashPassword_(
-      newPassword,
-      salt,
-      iterations
-    );
+      // Senha definida pelo administrador é temporária.
+      sheet.getRange(rowIndex + 1, 15).setValue(true);
 
-    sheet.getRange(
-      rowIndex + 1,
-      4
-    ).setValue("");
+      if (!row[11]) {
+        sheet.getRange(rowIndex + 1, 12).setValue(new Date());
+      }
 
-    sheet.getRange(
-      rowIndex + 1,
-      5
-    ).setValue(
-      salt
-    );
-
-    sheet.getRange(
-      rowIndex + 1,
-      6
-    ).setValue(
-      passwordHash
-    );
-
-    sheet.getRange(
-      rowIndex + 1,
-      7
-    ).setValue(
-      iterations
-    );
-
-    // V61: toda senha definida pelo administrador é considerada
-    // temporária. O usuário precisa criar a própria senha no primeiro acesso.
-    sheet.getRange(
-      rowIndex + 1,
-      15
-    ).setValue(
-      true
-    );
-
-    if (
-      !sheet.getRange(
-        rowIndex + 1,
-        12
-      ).getValue()
-    ) {
-      sheet.getRange(
-        rowIndex + 1,
-        12
-      ).setValue(
-        new Date()
+      revokeSessionsForUser_(username);
+      logEvent_(
+        "PASSWORD_CHANGED",
+        username,
+        "",
+        "Senha processada pela planilha."
       );
+      processed++;
     }
 
-    // Alterar a senha encerra sessões anteriores.
-    revokeSessionsForUser_(
-      username
-    );
-
-    logEvent_(
-      "PASSWORD_CHANGED",
-      username,
-      "",
-      "Senha processada pela planilha."
-    );
-
-    processed++;
-  }
-
-  SpreadsheetApp
-    .getUi()
-    .alert(
+    SpreadsheetApp.getUi().alert(
       "Central Auth",
-      (
-        processed
-        + " senha(s) processada(s). "
-        + "Nenhuma senha em texto puro foi mantida."
-      ),
+      processed + " senha(s) processada(s). Nenhuma senha em texto puro foi mantida.",
       SpreadsheetApp.getUi().ButtonSet.OK
     );
+  } finally {
+    lock.releaseLock();
+  }
 }
 
 
 function revogarTodasSessoes() {
-  const ss = SpreadsheetApp.getActiveSpreadsheet();
-  const sheet = ss.getSheetByName(SHEET_SESSIONS);
+  const lock = LockService.getScriptLock();
+  lock.waitLock(20000);
 
-  if (!sheet || sheet.getLastRow() <= 1) {
-    return;
-  }
+  try {
+    const sheet = getSheet_(SHEET_SESSIONS);
+    const lastRow = sheet.getLastRow();
 
-  const values = sheet.getDataRange().getValues();
+    if (lastRow <= 1) {
+      return;
+    }
 
-  for (
-    let i = 1;
-    i < values.length;
-    i++
-  ) {
-    sheet.getRange(
-      i + 1,
-      6
-    ).setValue(
-      true
+    const range = sheet.getRange(2, 6, lastRow - 1, 1);
+    const values = range.getValues().map(function () { return [true]; });
+    range.setValues(values);
+
+    logEvent_(
+      "ALL_SESSIONS_REVOKED",
+      "",
+      "",
+      "Todas as sessões foram revogadas pelo administrador."
     );
+  } finally {
+    lock.releaseLock();
   }
-
-  logEvent_(
-    "ALL_SESSIONS_REVOKED",
-    "",
-    "",
-    "Todas as sessões foram revogadas pelo administrador."
-  );
 }
 
 
 function doGet() {
-  return jsonResponse_(
-    {
-      ok: true,
-      service: "Central Inteligente de Mídia Auth",
-      version: AUTH_VERSION,
-      status: "online",
-    }
-  );
+  return jsonResponse_({
+    ok: true,
+    service: "Central Inteligente de Mídia Auth",
+    version: AUTH_VERSION,
+    status: "online",
+  });
 }
 
 
 function doPost(e) {
+  const startedAt = Date.now();
+
   try {
     const request = parseRequest_(e);
-    const action = String(
-      request.action || ""
-    ).toLowerCase();
+    const action = String(request.action || "").toLowerCase();
+    let response;
 
     if (action === "login") {
-      return jsonResponse_(
-        login_(
-          request
-        )
-      );
-    }
-
-    if (action === "validate") {
-      return jsonResponse_(
-        validateSession_(
-          request
-        )
-      );
-    }
-
-    if (action === "logout") {
-      return jsonResponse_(
-        logout_(
-          request
-        )
-      );
-    }
-
-    if (action === "change_password") {
-      return jsonResponse_(
-        changePassword_(
-          request
-        )
-      );
-    }
-
-    return jsonResponse_(
-      {
+      response = login_(request);
+    } else if (action === "validate") {
+      response = validateSession_(request);
+    } else if (action === "logout") {
+      response = logout_(request);
+    } else if (action === "change_password") {
+      response = changePassword_(request);
+    } else {
+      response = {
         ok: false,
         code: "UNKNOWN_ACTION",
         message: "Ação inválida.",
-      }
-    );
+      };
+    }
 
+    if (response && typeof response === "object") {
+      response.server_timing_ms = Math.max(0, Date.now() - startedAt);
+    }
+
+    return jsonResponse_(response);
   } catch (error) {
-    return jsonResponse_(
-      {
-        ok: false,
-        code: "SERVER_ERROR",
-        message: String(
-          error && error.message
-          ? error.message
-          : error
-        ),
-      }
-    );
+    return jsonResponse_({
+      ok: false,
+      code: "SERVER_ERROR",
+      message: String(
+        error && error.message ? error.message : error
+      ),
+      server_timing_ms: Math.max(0, Date.now() - startedAt),
+    });
   }
 }
 
 
 function login_(request) {
   const lock = LockService.getScriptLock();
-
-  lock.waitLock(
-    20000
-  );
+  lock.waitLock(20000);
 
   try {
-    const username = normalizeUsername_(
-      request.username
-    );
+    const username = normalizeUsername_(request.username);
+    const password = String(request.password || "");
+    const deviceId = normalizeDeviceId_(request.device_id);
+    const deviceName = String(request.device_name || "").slice(0, 160);
+    const osName = String(request.os || "").slice(0, 120);
 
-    const password = String(
-      request.password || ""
-    );
-
-    const deviceId = normalizeDeviceId_(
-      request.device_id
-    );
-
-    const deviceName = String(
-      request.device_name || ""
-    ).slice(
-      0,
-      160
-    );
-
-    const osName = String(
-      request.os || ""
-    ).slice(
-      0,
-      120
-    );
-
-    if (
-      !username
-      || !password
-      || !deviceId
-    ) {
+    if (!username || !password || !deviceId) {
       return deny_(
         "INVALID_REQUEST",
         "Informe usuário, senha e dispositivo.",
@@ -501,9 +340,7 @@ function login_(request) {
       );
     }
 
-    const user = findUser_(
-      username
-    );
+    const user = findUser_(username);
 
     if (!user) {
       return deny_(
@@ -514,9 +351,7 @@ function login_(request) {
       );
     }
 
-    const accessError = userAccessError_(
-      user
-    );
+    const accessError = userAccessError_(user);
 
     if (accessError) {
       return deny_(
@@ -527,10 +362,7 @@ function login_(request) {
       );
     }
 
-    if (
-      !user.salt
-      || !user.passwordHash
-    ) {
+    if (!user.salt || !user.passwordHash) {
       return deny_(
         "PASSWORD_NOT_CONFIGURED",
         "A senha deste usuário ainda não foi configurada.",
@@ -545,12 +377,7 @@ function login_(request) {
       user.iterations
     );
 
-    if (
-      !secureEqual_(
-        calculated,
-        user.passwordHash
-      )
-    ) {
+    if (!secureEqual_(calculated, user.passwordHash)) {
       return deny_(
         "INVALID_CREDENTIALS",
         "Usuário ou senha inválidos.",
@@ -575,62 +402,34 @@ function login_(request) {
       );
     }
 
-    revokeSessionsForDevice_(
-      username,
-      deviceId
-    );
+    revokeSessionsForDevice_(username, deviceId);
 
     const token = createSessionToken_();
-    const tokenHash = hashToken_(
-      token
-    );
-
+    const tokenHash = hashToken_(token);
     const now = new Date();
     const expires = new Date(
-      now.getTime()
-      + getSessionHours_()
-      * 60
-      * 60
-      * 1000
+      now.getTime() + getSessionHours_() * 60 * 60 * 1000
     );
 
-    const sessions = getSheet_(
-      SHEET_SESSIONS
-    );
-
-    sessions.appendRow(
-      [
-        tokenHash,
-        username,
-        deviceId,
-        now,
-        expires,
-        false,
-        now,
-      ]
-    );
-
-    updateUserLastLogin_(
-      user.row,
-      now
-    );
-
-    logEvent_(
-      "LOGIN_OK",
+    getSheet_(SHEET_SESSIONS).appendRow([
+      tokenHash,
       username,
       deviceId,
-      "Login autorizado."
-    );
+      now,
+      expires,
+      false,
+      now,
+    ]);
+
+    updateUserLastLogin_(user.row, now);
+    logEvent_("LOGIN_OK", username, deviceId, "Login autorizado.");
 
     return {
       ok: true,
       token: token,
       expires_at: expires.toISOString(),
-      user: publicUser_(
-        user
-      ),
+      user: publicUser_(user),
     };
-
   } finally {
     lock.releaseLock();
   }
@@ -638,166 +437,94 @@ function login_(request) {
 
 
 function validateSession_(request) {
-  const lock = LockService.getScriptLock();
+  // V90: validação de abertura é majoritariamente leitura. Ela não espera mais
+  // o ScriptLock de até 20 s usado por login/troca de senha/revogação.
+  // O heartbeat de auditoria tenta um lock curtíssimo; se houver outra escrita,
+  // a autenticação é concluída sem aguardar porque o heartbeat não decide acesso.
+  const token = String(request.token || "");
+  const deviceId = normalizeDeviceId_(request.device_id);
 
-  lock.waitLock(
-    20000
-  );
-
-  try {
-    const token = String(
-      request.token || ""
-    );
-
-    const deviceId = normalizeDeviceId_(
-      request.device_id
-    );
-
-    if (
-      !token
-      || !deviceId
-    ) {
-      return {
-        ok: false,
-        code: "SESSION_INVALID",
-        message: "Sessão inválida.",
-      };
-    }
-
-    const session = findSessionByToken_(
-      token
-    );
-
-    if (!session) {
-      return {
-        ok: false,
-        code: "SESSION_INVALID",
-        message: "Sessão inválida ou encerrada.",
-      };
-    }
-
-    if (
-      session.revoked
-      || session.deviceId !== deviceId
-    ) {
-      return {
-        ok: false,
-        code: "SESSION_REVOKED",
-        message: "Sessão revogada.",
-      };
-    }
-
-    const now = new Date();
-
-    if (
-      session.expiresAt.getTime()
-      <= now.getTime()
-    ) {
-      setSessionRevoked_(
-        session.row,
-        true
-      );
-
-      return {
-        ok: false,
-        code: "SESSION_EXPIRED",
-        message: "Sessão expirada. Faça login novamente.",
-      };
-    }
-
-    const user = findUser_(
-      session.username
-    );
-
-    if (!user) {
-      setSessionRevoked_(
-        session.row,
-        true
-      );
-
-      return {
-        ok: false,
-        code: "USER_NOT_FOUND",
-        message: "Usuário não encontrado.",
-      };
-    }
-
-    const accessError = userAccessError_(
-      user
-    );
-
-    if (accessError) {
-      setSessionRevoked_(
-        session.row,
-        true
-      );
-
-      return {
-        ok: false,
-        code: accessError.code,
-        message: accessError.message,
-      };
-    }
-
-    touchSession_(
-      session.row,
-      now
-    );
-
-    touchDevice_(
-      session.username,
-      deviceId,
-      now
-    );
-
+  if (!token || !deviceId) {
     return {
-      ok: true,
-      token: token,
-      expires_at:
-        session.expiresAt
-        .toISOString(),
-      user: publicUser_(
-        user
-      ),
+      ok: false,
+      code: "SESSION_INVALID",
+      message: "Sessão inválida.",
     };
-
-  } finally {
-    lock.releaseLock();
   }
-}
 
+  const session = findSessionByToken_(token);
+
+  if (!session) {
+    return {
+      ok: false,
+      code: "SESSION_INVALID",
+      message: "Sessão inválida ou encerrada.",
+    };
+  }
+
+  if (session.revoked || session.deviceId !== deviceId) {
+    return {
+      ok: false,
+      code: "SESSION_REVOKED",
+      message: "Sessão revogada.",
+    };
+  }
+
+  const now = new Date();
+
+  if (session.expiresAt.getTime() <= now.getTime()) {
+    bestEffortRevokeSession_(session.row);
+    return {
+      ok: false,
+      code: "SESSION_EXPIRED",
+      message: "Sessão expirada. Faça login novamente.",
+    };
+  }
+
+  const user = findUser_(session.username);
+
+  if (!user) {
+    bestEffortRevokeSession_(session.row);
+    return {
+      ok: false,
+      code: "USER_NOT_FOUND",
+      message: "Usuário não encontrado.",
+    };
+  }
+
+  const accessError = userAccessError_(user);
+
+  if (accessError) {
+    bestEffortRevokeSession_(session.row);
+    return {
+      ok: false,
+      code: accessError.code,
+      message: accessError.message,
+    };
+  }
+
+  touchValidationBestEffort_(session, deviceId, now);
+
+  return {
+    ok: true,
+    token: token,
+    expires_at: session.expiresAt.toISOString(),
+    user: publicUser_(user),
+  };
+}
 
 
 function changePassword_(request) {
   const lock = LockService.getScriptLock();
-
-  lock.waitLock(
-    20000
-  );
+  lock.waitLock(20000);
 
   try {
-    const token = String(
-      request.token || ""
-    );
+    const token = String(request.token || "");
+    const deviceId = normalizeDeviceId_(request.device_id);
+    const currentPassword = String(request.current_password || "");
+    const newPassword = String(request.new_password || "");
 
-    const deviceId = normalizeDeviceId_(
-      request.device_id
-    );
-
-    const currentPassword = String(
-      request.current_password || ""
-    );
-
-    const newPassword = String(
-      request.new_password || ""
-    );
-
-    if (
-      !token
-      || !deviceId
-      || !currentPassword
-      || !newPassword
-    ) {
+    if (!token || !deviceId || !currentPassword || !newPassword) {
       return {
         ok: false,
         code: "INVALID_REQUEST",
@@ -821,9 +548,7 @@ function changePassword_(request) {
       };
     }
 
-    const session = findSessionByToken_(
-      token
-    );
+    const session = findSessionByToken_(token);
 
     if (!session) {
       return {
@@ -833,10 +558,7 @@ function changePassword_(request) {
       };
     }
 
-    if (
-      session.revoked
-      || session.deviceId !== deviceId
-    ) {
+    if (session.revoked || session.deviceId !== deviceId) {
       return {
         ok: false,
         code: "SESSION_REVOKED",
@@ -846,15 +568,8 @@ function changePassword_(request) {
 
     const now = new Date();
 
-    if (
-      session.expiresAt.getTime()
-      <= now.getTime()
-    ) {
-      setSessionRevoked_(
-        session.row,
-        true
-      );
-
+    if (session.expiresAt.getTime() <= now.getTime()) {
+      setSessionRevoked_(session.row, true);
       return {
         ok: false,
         code: "SESSION_EXPIRED",
@@ -862,16 +577,10 @@ function changePassword_(request) {
       };
     }
 
-    const user = findUser_(
-      session.username
-    );
+    const user = findUser_(session.username);
 
     if (!user) {
-      setSessionRevoked_(
-        session.row,
-        true
-      );
-
+      setSessionRevoked_(session.row, true);
       return {
         ok: false,
         code: "USER_NOT_FOUND",
@@ -879,9 +588,7 @@ function changePassword_(request) {
       };
     }
 
-    const accessError = userAccessError_(
-      user
-    );
+    const accessError = userAccessError_(user);
 
     if (accessError) {
       return {
@@ -897,12 +604,7 @@ function changePassword_(request) {
       user.iterations
     );
 
-    if (
-      !secureEqual_(
-        currentHash,
-        user.passwordHash
-      )
-    ) {
+    if (!secureEqual_(currentHash, user.passwordHash)) {
       return {
         ok: false,
         code: "CURRENT_PASSWORD_INVALID",
@@ -918,80 +620,35 @@ function changePassword_(request) {
       iterations
     );
 
-    const users = getSheet_(
-      SHEET_USERS
-    );
+    // D:G e TROCAR_SENHA. Mantém layout atual da planilha.
+    const users = getSheet_(SHEET_USERS);
+    users.getRange(user.row, 4, 1, 4).setValues([[
+      "",
+      salt,
+      passwordHash,
+      iterations,
+    ]]);
+    users.getRange(user.row, 15).setValue(false);
 
-    users.getRange(
-      user.row,
-      4
-    ).setValue("");
-
-    users.getRange(
-      user.row,
-      5
-    ).setValue(
-      salt
-    );
-
-    users.getRange(
-      user.row,
-      6
-    ).setValue(
-      passwordHash
-    );
-
-    users.getRange(
-      user.row,
-      7
-    ).setValue(
-      iterations
-    );
-
-    users.getRange(
-      user.row,
-      15
-    ).setValue(
-      false
-    );
-
-    // Derruba todas as sessões anteriores, inclusive a usada para a troca.
-    revokeSessionsForUser_(
-      user.username
-    );
+    revokeSessionsForUser_(user.username);
 
     const newToken = createSessionToken_();
-    const tokenHash = hashToken_(
-      newToken
-    );
-
+    const tokenHash = hashToken_(newToken);
     const expires = new Date(
-      now.getTime()
-      + getSessionHours_()
-      * 60
-      * 60
-      * 1000
+      now.getTime() + getSessionHours_() * 60 * 60 * 1000
     );
 
-    getSheet_(
-      SHEET_SESSIONS
-    ).appendRow(
-      [
-        tokenHash,
-        user.username,
-        deviceId,
-        now,
-        expires,
-        false,
-        now,
-      ]
-    );
-
-    touchDevice_(
+    getSheet_(SHEET_SESSIONS).appendRow([
+      tokenHash,
       user.username,
       deviceId,
-      now
-    );
+      now,
+      expires,
+      false,
+      now,
+    ]);
+
+    touchDevice_(user.username, deviceId, now);
 
     logEvent_(
       "PASSWORD_CHANGED_SELF",
@@ -1000,52 +657,35 @@ function changePassword_(request) {
       "Senha alterada pelo próprio usuário no aplicativo."
     );
 
-    const refreshedUser = findUser_(
-      user.username
-    );
+    const refreshedUser = findUser_(user.username);
 
     return {
       ok: true,
       token: newToken,
       expires_at: expires.toISOString(),
-      user: publicUser_(
-        refreshedUser
-      ),
+      user: publicUser_(refreshedUser || user),
     };
-
   } finally {
     lock.releaseLock();
   }
 }
 
+
 function logout_(request) {
   const lock = LockService.getScriptLock();
-
-  lock.waitLock(
-    20000
-  );
+  lock.waitLock(20000);
 
   try {
-    const token = String(
-      request.token || ""
-    );
+    const token = String(request.token || "");
 
     if (!token) {
-      return {
-        ok: true,
-      };
+      return { ok: true };
     }
 
-    const session = findSessionByToken_(
-      token
-    );
+    const session = findSessionByToken_(token);
 
     if (session) {
-      setSessionRevoked_(
-        session.row,
-        true
-      );
-
+      setSessionRevoked_(session.row, true);
       logEvent_(
         "LOGOUT",
         session.username,
@@ -1054,10 +694,7 @@ function logout_(request) {
       );
     }
 
-    return {
-      ok: true,
-    };
-
+    return { ok: true };
   } finally {
     lock.releaseLock();
   }
@@ -1070,123 +707,59 @@ function publicUser_(user) {
     username: user.username,
     name: user.name,
     profile: user.profile,
-    permissions: resolvePermissions_(
-      user.profile,
-      user.permissions
-    ),
-    must_change_password: Boolean(
-      user.mustChangePassword
-    ),
+    permissions: resolvePermissions_(user.profile, user.permissions),
+    must_change_password: Boolean(user.mustChangePassword),
   };
 }
 
 
-function resolvePermissions_(
-  profile,
-  rawPermissions
-) {
-  const raw = String(
-    rawPermissions || ""
-  ).trim();
-
+function resolvePermissions_(profile, rawPermissions) {
+  const raw = String(rawPermissions || "").trim();
   let values = [];
 
   if (raw) {
     values = raw
       .split(",")
-      .map(
-        value =>
-          value.trim()
-          .toLowerCase()
-      )
+      .map(function (value) { return value.trim().toLowerCase(); })
       .filter(Boolean);
   } else {
     values = (
-      PROFILE_PERMISSIONS[
-        String(
-          profile || "CONSULTA"
-        ).toUpperCase()
-      ]
+      PROFILE_PERMISSIONS[String(profile || "CONSULTA").toUpperCase()]
       || PROFILE_PERMISSIONS.CONSULTA
     );
   }
 
-  if (
-    values.indexOf("*")
-    >= 0
-  ) {
+  if (values.indexOf("*") >= 0) {
     return ALL_PERMISSIONS.slice();
   }
 
   const allowed = {};
+  ALL_PERMISSIONS.forEach(function (key) { allowed[key] = false; });
 
-  ALL_PERMISSIONS.forEach(
-    key => {
-      allowed[key] = false;
+  values.forEach(function (key) {
+    if (ALL_PERMISSIONS.indexOf(key) >= 0) {
+      allowed[key] = true;
     }
-  );
+  });
 
-  values.forEach(
-    key => {
-      if (
-        ALL_PERMISSIONS.indexOf(
-          key
-        ) >= 0
-      ) {
-        allowed[key] = true;
-      }
-    }
-  );
-
-  // Início sempre pode existir depois do login.
   allowed.home = true;
-
-  return ALL_PERMISSIONS.filter(
-    key => allowed[key]
-  );
+  return ALL_PERMISSIONS.filter(function (key) { return allowed[key]; });
 }
 
 
-function authorizeDevice_(
-  user,
-  deviceId,
-  deviceName,
-  osName
-) {
-  const sheet = getSheet_(
-    SHEET_DEVICES
-  );
-
-  const values = sheet
-    .getDataRange()
-    .getValues();
-
+function authorizeDevice_(user, deviceId, deviceName, osName) {
+  const sheet = getSheet_(SHEET_DEVICES);
+  const values = sheet.getDataRange().getValues();
   let activeCount = 0;
   let existingRow = 0;
 
-  for (
-    let i = 1;
-    i < values.length;
-    i++
-  ) {
+  for (let i = 1; i < values.length; i++) {
     const row = values[i];
+    const rowUser = normalizeUsername_(row[0]);
+    const rowDevice = normalizeDeviceId_(row[1]);
+    const active = asBoolean_(row[6], true);
 
-    const rowUser = normalizeUsername_(
-      row[0]
-    );
-
-    const rowDevice = normalizeDeviceId_(
-      row[1]
-    );
-
-    const active = asBoolean_(
-      row[6],
-      true
-    );
-
-    if (
-      rowUser !== user.username
-    ) {
+    if (rowUser !== user.username) {
       continue;
     }
 
@@ -1194,9 +767,7 @@ function authorizeDevice_(
       activeCount++;
     }
 
-    if (
-      rowDevice === deviceId
-    ) {
+    if (rowDevice === deviceId) {
       existingRow = i + 1;
 
       if (!active) {
@@ -1212,89 +783,45 @@ function authorizeDevice_(
   const now = new Date();
 
   if (existingRow) {
-    sheet.getRange(
-      existingRow,
-      3
-    ).setValue(
-      deviceName
-    );
-
-    sheet.getRange(
-      existingRow,
-      4
-    ).setValue(
-      osName
-    );
-
-    sheet.getRange(
-      existingRow,
-      6
-    ).setValue(
-      now
-    );
-
-    return {
-      ok: true,
-    };
+    sheet.getRange(existingRow, 3).setValue(deviceName);
+    sheet.getRange(existingRow, 4).setValue(osName);
+    sheet.getRange(existingRow, 6).setValue(now);
+    return { ok: true };
   }
 
-  const maxDevices = Math.max(
-    1,
-    Number(
-      user.maxDevices || 1
-    )
-  );
+  const maxDevices = Math.max(1, Number(user.maxDevices || 1));
 
-  if (
-    activeCount
-    >= maxDevices
-  ) {
+  if (activeCount >= maxDevices) {
     return {
       ok: false,
       code: "DEVICE_LIMIT",
-      message:
-        "Este usuário atingiu o limite de computadores autorizados.",
+      message: "Este usuário atingiu o limite de computadores autorizados.",
     };
   }
 
-  sheet.appendRow(
-    [
-      user.username,
-      deviceId,
-      deviceName,
-      osName,
-      now,
-      now,
-      true,
-    ]
-  );
+  sheet.appendRow([
+    user.username,
+    deviceId,
+    deviceName,
+    osName,
+    now,
+    now,
+    true,
+  ]);
 
   logEvent_(
     "DEVICE_ADDED",
     user.username,
     deviceId,
-    (
-      deviceName
-      + " / "
-      + osName
-    )
+    deviceName + " / " + osName
   );
 
-  return {
-    ok: true,
-  };
+  return { ok: true };
 }
 
 
-function userAccessError_(
-  user
-) {
-  if (
-    String(
-      user.status || ""
-    ).toUpperCase()
-    !== "ATIVO"
-  ) {
+function userAccessError_(user) {
+  if (String(user.status || "").toUpperCase() !== "ATIVO") {
     return {
       code: "USER_BLOCKED",
       message: "Usuário bloqueado ou inativo.",
@@ -1302,30 +829,13 @@ function userAccessError_(
   }
 
   if (user.expiresAt) {
-    const expiration = new Date(
-      user.expiresAt
-    );
+    const expiration = new Date(user.expiresAt);
 
-    if (
-      !isNaN(
-        expiration.getTime()
-      )
-    ) {
-      const endOfDay = new Date(
-        expiration
-      );
+    if (!isNaN(expiration.getTime())) {
+      const endOfDay = new Date(expiration);
+      endOfDay.setHours(23, 59, 59, 999);
 
-      endOfDay.setHours(
-        23,
-        59,
-        59,
-        999
-      );
-
-      if (
-        Date.now()
-        > endOfDay.getTime()
-      ) {
+      if (Date.now() > endOfDay.getTime()) {
         return {
           code: "USER_EXPIRED",
           message: "O acesso deste usuário expirou.",
@@ -1338,81 +848,38 @@ function userAccessError_(
 }
 
 
-function passwordChangeRequired_(
-  row
-) {
+function passwordChangeRequired_(row) {
   const raw = row[14];
 
-  if (
-    raw === ""
-    || raw === null
-    || typeof raw === "undefined"
-  ) {
-    return Boolean(
-      String(
-        row[5] || ""
-      ).trim()
-    );
+  if (raw === "" || raw === null || typeof raw === "undefined") {
+    return Boolean(String(row[5] || "").trim());
   }
 
-  return asBoolean_(
-    raw,
-    true
-  );
+  return asBoolean_(raw, true);
 }
 
 
-function migratePasswordChangeFlags_(
-  sheet
-) {
-  if (
-    !sheet
-    || sheet.getLastRow() <= 1
-  ) {
+function migratePasswordChangeFlags_(sheet) {
+  if (!sheet || sheet.getLastRow() <= 1) {
     return 0;
   }
 
-  const values = sheet
-    .getDataRange()
-    .getValues();
-
+  const values = sheet.getDataRange().getValues();
   let migrated = 0;
 
-  for (
-    let i = 1;
-    i < values.length;
-    i++
-  ) {
+  for (let i = 1; i < values.length; i++) {
     const row = values[i];
-    const username = normalizeUsername_(
-      row[0]
-    );
-    const passwordHash = String(
-      row[5] || ""
-    ).trim();
+    const username = normalizeUsername_(row[0]);
+    const passwordHash = String(row[5] || "").trim();
     const raw = row[14];
 
-    if (
-      !username
-      || !passwordHash
-    ) {
+    if (!username || !passwordHash) {
       continue;
     }
 
-    if (
-      raw === ""
-      || raw === null
-      || typeof raw === "undefined"
-    ) {
-      sheet.getRange(
-        i + 1,
-        15
-      ).setValue(
-        true
-      );
-
+    if (raw === "" || raw === null || typeof raw === "undefined") {
+      sheet.getRange(i + 1, 15).setValue(true);
       migrated++;
-
       logEvent_(
         "PASSWORD_CHANGE_REQUIRED_MIGRATION",
         username,
@@ -1426,313 +893,275 @@ function migratePasswordChangeFlags_(
 }
 
 
-function findUser_(
-  username
-) {
-  const sheet = getSheet_(
-    SHEET_USERS
-  );
+function userFromRow_(rowNumber, row, normalizedUsername) {
+  const username = normalizedUsername || normalizeUsername_(row[0]);
 
-  const values = sheet
-    .getDataRange()
-    .getValues();
+  return {
+    row: rowNumber,
+    username: username,
+    name: String(row[1] || username),
+    status: String(row[2] || ""),
+    salt: String(row[4] || ""),
+    passwordHash: String(row[5] || ""),
+    iterations: Math.max(
+      1,
+      Number(row[6] || getPasswordIterations_())
+    ),
+    profile: String(row[7] || "CONSULTA").toUpperCase(),
+    expiresAt: row[8] || null,
+    maxDevices: Math.max(1, Number(row[9] || 1)),
+    permissions: String(row[10] || ""),
+    mustChangePassword: passwordChangeRequired_(row),
+  };
+}
 
-  for (
-    let i = 1;
-    i < values.length;
-    i++
-  ) {
-    const row = values[i];
 
-    if (
-      normalizeUsername_(
-        row[0]
-      ) !== username
-    ) {
-      continue;
+function findUser_(username) {
+  const normalized = normalizeUsername_(username);
+  const sheet = getSheet_(SHEET_USERS);
+  const lastRow = sheet.getLastRow();
+
+  if (!normalized || lastRow <= 1) {
+    return null;
+  }
+
+  // Busca é feita no lado do Sheets, sem transferir a tabela inteira para o
+  // runtime na maioria dos casos.
+  const match = sheet
+    .getRange(2, 1, lastRow - 1, 1)
+    .createTextFinder(normalized)
+    .matchEntireCell(true)
+    .matchCase(false)
+    .findNext();
+
+  if (match) {
+    const rowNumber = match.getRow();
+    const row = sheet.getRange(rowNumber, 1, 1, 15).getValues()[0];
+
+    if (normalizeUsername_(row[0]) === normalized) {
+      return userFromRow_(rowNumber, row, normalized);
     }
+  }
 
-    return {
-      row: i + 1,
-      username: username,
-      name: String(
-        row[1] || username
-      ),
-      status: String(
-        row[2] || ""
-      ),
-      salt: String(
-        row[4] || ""
-      ),
-      passwordHash: String(
-        row[5] || ""
-      ),
-      iterations: Math.max(
-        1,
-        Number(
-          row[6]
-          || getPasswordIterations_()
-        )
-      ),
-      profile: String(
-        row[7] || "CONSULTA"
-      ).toUpperCase(),
-      expiresAt: row[8] || null,
-      maxDevices: Math.max(
-        1,
-        Number(
-          row[9] || 1
-        )
-      ),
-      permissions: String(
-        row[10] || ""
-      ),
-      mustChangePassword: passwordChangeRequired_(
-        row
-      ),
-    };
+  // Compatibilidade com planilhas antigas que tenham espaços no username.
+  const values = sheet.getDataRange().getValues();
+
+  for (let i = 1; i < values.length; i++) {
+    if (normalizeUsername_(values[i][0]) === normalized) {
+      return userFromRow_(i + 1, values[i], normalized);
+    }
   }
 
   return null;
 }
 
 
-function updateUserLastLogin_(
-  row,
-  when
-) {
-  getSheet_(
-    SHEET_USERS
-  )
-  .getRange(
-    row,
-    13
-  )
-  .setValue(
-    when
-  );
+function updateUserLastLogin_(row, when) {
+  getSheet_(SHEET_USERS).getRange(row, 13).setValue(when);
 }
 
 
-function findSessionByToken_(
-  token
-) {
-  const tokenHash = hashToken_(
-    token
-  );
+function sessionFromRow_(rowNumber, row) {
+  return {
+    row: rowNumber,
+    username: normalizeUsername_(row[1]),
+    deviceId: normalizeDeviceId_(row[2]),
+    createdAt: new Date(row[3]),
+    expiresAt: new Date(row[4]),
+    revoked: asBoolean_(row[5], false),
+    lastValidatedAt: row[6] ? new Date(row[6]) : null,
+  };
+}
 
-  const sheet = getSheet_(
-    SHEET_SESSIONS
-  );
 
-  const values = sheet
-    .getDataRange()
-    .getValues();
+function findSessionByToken_(token) {
+  const tokenHash = hashToken_(token);
+  const sheet = getSheet_(SHEET_SESSIONS);
+  const lastRow = sheet.getLastRow();
 
-  for (
-    let i = 1;
-    i < values.length;
-    i++
-  ) {
-    const row = values[i];
+  if (lastRow <= 1) {
+    return null;
+  }
 
-    if (
-      !secureEqual_(
-        String(
-          row[0] || ""
-        ),
-        tokenHash
-      )
-    ) {
-      continue;
+  const match = sheet
+    .getRange(2, 1, lastRow - 1, 1)
+    .createTextFinder(tokenHash)
+    .matchEntireCell(true)
+    .matchCase(true)
+    .findNext();
+
+  if (match) {
+    const rowNumber = match.getRow();
+    const row = sheet.getRange(rowNumber, 1, 1, 7).getValues()[0];
+
+    if (secureEqual_(String(row[0] || ""), tokenHash)) {
+      return sessionFromRow_(rowNumber, row);
     }
+  }
 
-    return {
-      row: i + 1,
-      username: normalizeUsername_(
-        row[1]
-      ),
-      deviceId: normalizeDeviceId_(
-        row[2]
-      ),
-      createdAt: new Date(
-        row[3]
-      ),
-      expiresAt: new Date(
-        row[4]
-      ),
-      revoked: asBoolean_(
-        row[5],
-        false
-      ),
-    };
+  // Fallback compatível caso a planilha possua células formatadas de forma
+  // incomum e o TextFinder não encontre o hash.
+  const values = sheet.getDataRange().getValues();
+
+  for (let i = 1; i < values.length; i++) {
+    if (secureEqual_(String(values[i][0] || ""), tokenHash)) {
+      return sessionFromRow_(i + 1, values[i]);
+    }
   }
 
   return null;
 }
 
 
-function revokeSessionsForUser_(
-  username
-) {
-  const sheet = getSheet_(
-    SHEET_SESSIONS
-  );
+function revokeSessionsForUser_(username) {
+  const normalized = normalizeUsername_(username);
+  const sheet = getSheet_(SHEET_SESSIONS);
+  const values = sheet.getDataRange().getValues();
 
-  const values = sheet
-    .getDataRange()
-    .getValues();
-
-  for (
-    let i = 1;
-    i < values.length;
-    i++
-  ) {
-    if (
-      normalizeUsername_(
-        values[i][1]
-      ) === username
-    ) {
-      sheet.getRange(
-        i + 1,
-        6
-      ).setValue(
-        true
-      );
+  for (let i = 1; i < values.length; i++) {
+    if (normalizeUsername_(values[i][1]) === normalized) {
+      sheet.getRange(i + 1, 6).setValue(true);
     }
   }
 }
 
 
-function revokeSessionsForDevice_(
-  username,
-  deviceId
-) {
-  const sheet = getSheet_(
-    SHEET_SESSIONS
-  );
+function revokeSessionsForDevice_(username, deviceId) {
+  const normalizedUser = normalizeUsername_(username);
+  const normalizedDevice = normalizeDeviceId_(deviceId);
+  const sheet = getSheet_(SHEET_SESSIONS);
+  const values = sheet.getDataRange().getValues();
 
-  const values = sheet
-    .getDataRange()
-    .getValues();
-
-  for (
-    let i = 1;
-    i < values.length;
-    i++
-  ) {
+  for (let i = 1; i < values.length; i++) {
     if (
-      normalizeUsername_(
-        values[i][1]
-      ) === username
-      && normalizeDeviceId_(
-        values[i][2]
-      ) === deviceId
+      normalizeUsername_(values[i][1]) === normalizedUser
+      && normalizeDeviceId_(values[i][2]) === normalizedDevice
     ) {
-      sheet.getRange(
-        i + 1,
-        6
-      ).setValue(
-        true
-      );
+      sheet.getRange(i + 1, 6).setValue(true);
     }
   }
 }
 
 
-function setSessionRevoked_(
-  row,
-  revoked
-) {
-  getSheet_(
-    SHEET_SESSIONS
-  )
-  .getRange(
-    row,
-    6
-  )
-  .setValue(
-    Boolean(
-      revoked
-    )
-  );
+function setSessionRevoked_(row, revoked) {
+  getSheet_(SHEET_SESSIONS)
+    .getRange(row, 6)
+    .setValue(Boolean(revoked));
 }
 
 
-function touchSession_(
-  row,
-  when
-) {
-  getSheet_(
-    SHEET_SESSIONS
-  )
-  .getRange(
-    row,
-    7
-  )
-  .setValue(
-    when
-  );
+function touchSession_(row, when) {
+  getSheet_(SHEET_SESSIONS).getRange(row, 7).setValue(when);
 }
 
 
-function touchDevice_(
-  username,
-  deviceId,
-  when
-) {
-  const sheet = getSheet_(
-    SHEET_DEVICES
-  );
+function findDevice_(username, deviceId) {
+  const normalizedUser = normalizeUsername_(username);
+  const normalizedDevice = normalizeDeviceId_(deviceId);
+  const sheet = getSheet_(SHEET_DEVICES);
+  const lastRow = sheet.getLastRow();
 
-  const values = sheet
-    .getDataRange()
-    .getValues();
+  if (lastRow <= 1) {
+    return null;
+  }
 
-  for (
-    let i = 1;
-    i < values.length;
-    i++
-  ) {
+  const matches = sheet
+    .getRange(2, 1, lastRow - 1, 1)
+    .createTextFinder(normalizedUser)
+    .matchEntireCell(true)
+    .matchCase(false)
+    .findAll();
+
+  for (let i = 0; i < matches.length; i++) {
+    const rowNumber = matches[i].getRow();
+    const row = sheet.getRange(rowNumber, 1, 1, 7).getValues()[0];
+
     if (
-      normalizeUsername_(
-        values[i][0]
-      ) === username
-      && normalizeDeviceId_(
-        values[i][1]
-      ) === deviceId
+      normalizeUsername_(row[0]) === normalizedUser
+      && normalizeDeviceId_(row[1]) === normalizedDevice
     ) {
-      sheet.getRange(
-        i + 1,
-        6
-      ).setValue(
-        when
-      );
-      return;
+      return {
+        row: rowNumber,
+        active: asBoolean_(row[6], true),
+        lastAccessAt: row[5] ? new Date(row[5]) : null,
+      };
     }
+  }
+
+  return null;
+}
+
+
+function touchDevice_(username, deviceId, when) {
+  const device = findDevice_(username, deviceId);
+
+  if (!device) {
+    return;
+  }
+
+  getSheet_(SHEET_DEVICES)
+    .getRange(device.row, 6)
+    .setValue(when);
+}
+
+
+function shouldTouchValidation_(session, now) {
+  const last = session.lastValidatedAt;
+
+  if (!last || isNaN(last.getTime())) {
+    return true;
+  }
+
+  return (
+    now.getTime() - last.getTime()
+    >= VALIDATION_TOUCH_MINUTES * 60 * 1000
+  );
+}
+
+
+function touchValidationBestEffort_(session, deviceId, now) {
+  if (!shouldTouchValidation_(session, now)) {
+    return;
+  }
+
+  const lock = LockService.getScriptLock();
+
+  // Heartbeat de auditoria não pode atrasar o login. Se outra ação estiver
+  // gravando, pula esta atualização e tenta novamente numa validação futura.
+  if (!lock.tryLock(50)) {
+    return;
+  }
+
+  try {
+    touchSession_(session.row, now);
+    touchDevice_(session.username, deviceId, now);
+  } finally {
+    lock.releaseLock();
   }
 }
 
 
-function deny_(
-  code,
-  message,
-  username,
-  deviceId
-) {
+function bestEffortRevokeSession_(row) {
+  const lock = LockService.getScriptLock();
+
+  if (!lock.tryLock(250)) {
+    return;
+  }
+
+  try {
+    setSessionRevoked_(row, true);
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+
+function deny_(code, message, username, deviceId) {
   logEvent_(
     "LOGIN_DENIED",
     username || "",
     deviceId || "",
-    (
-      String(
-        code
-      )
-      + ": "
-      + String(
-        message
-      )
-    )
+    String(code) + ": " + String(message)
   );
 
   return {
@@ -1743,246 +1172,117 @@ function deny_(
 }
 
 
-function logEvent_(
-  event,
-  username,
-  deviceId,
-  detail
-) {
+function logEvent_(event, username, deviceId, detail) {
   try {
-    getSheet_(
-      SHEET_LOGS
-    )
-    .appendRow(
-      [
-        new Date(),
-        String(
-          event || ""
-        ),
-        String(
-          username || ""
-        ),
-        String(
-          deviceId || ""
-        ),
-        String(
-          detail || ""
-        ).slice(
-          0,
-          800
-        ),
-      ]
-    );
+    getSheet_(SHEET_LOGS).appendRow([
+      new Date(),
+      String(event || ""),
+      String(username || ""),
+      String(deviceId || ""),
+      String(detail || "").slice(0, 800),
+    ]);
   } catch (error) {
-    console.error(
-      error
-    );
+    console.error(error);
   }
 }
 
 
-function parseRequest_(
-  e
-) {
-  if (
-    !e
-    || !e.postData
-    || !e.postData.contents
-  ) {
-    throw new Error(
-      "Corpo da requisição ausente."
-    );
+function parseRequest_(e) {
+  if (!e || !e.postData || !e.postData.contents) {
+    throw new Error("Corpo da requisição ausente.");
   }
 
-  return JSON.parse(
-    e.postData.contents
-  );
+  return JSON.parse(e.postData.contents);
 }
 
 
-function jsonResponse_(
-  payload
-) {
+function jsonResponse_(payload) {
   return ContentService
-    .createTextOutput(
-      JSON.stringify(
-        payload
-      )
-    )
-    .setMimeType(
-      ContentService.MimeType.JSON
-    );
+    .createTextOutput(JSON.stringify(payload))
+    .setMimeType(ContentService.MimeType.JSON);
 }
 
 
-function normalizeUsername_(
-  value
-) {
-  return String(
-    value || ""
-  )
-  .trim()
-  .toLowerCase();
+function normalizeUsername_(value) {
+  return String(value || "").trim().toLowerCase();
 }
 
 
-function normalizeDeviceId_(
-  value
-) {
-  return String(
-    value || ""
-  )
-  .trim()
-  .toLowerCase()
-  .replace(
-    /[^a-z0-9_-]/g,
-    ""
-  )
-  .slice(
-    0,
-    128
-  );
+function normalizeDeviceId_(value) {
+  return String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9_-]/g, "")
+    .slice(0, 128);
 }
 
 
-function asBoolean_(
-  value,
-  fallback
-) {
-  if (
-    value === true
-    || String(
-      value
-    ).toLowerCase()
-    === "true"
-  ) {
+function asBoolean_(value, fallback) {
+  if (value === true || String(value).toLowerCase() === "true") {
     return true;
   }
 
-  if (
-    value === false
-    || String(
-      value
-    ).toLowerCase()
-    === "false"
-  ) {
+  if (value === false || String(value).toLowerCase() === "false") {
     return false;
   }
 
-  return Boolean(
-    fallback
-  );
+  return Boolean(fallback);
 }
 
 
 function getPasswordIterations_() {
   const value = Number(
-    getConfig_(
-      "PASSWORD_ITERATIONS",
-      String(
-        DEFAULT_PASSWORD_ITERATIONS
-      )
-    )
+    getConfig_("PASSWORD_ITERATIONS", String(DEFAULT_PASSWORD_ITERATIONS))
   );
 
   return Math.max(
     1000,
-    Math.min(
-      30000,
-      Math.floor(
-        value
-        || DEFAULT_PASSWORD_ITERATIONS
-      )
-    )
+    Math.min(30000, Math.floor(value || DEFAULT_PASSWORD_ITERATIONS))
   );
 }
 
 
 function getSessionHours_() {
   const value = Number(
-    getConfig_(
-      "SESSION_HOURS",
-      String(
-        DEFAULT_SESSION_HOURS
-      )
-    )
+    getConfig_("SESSION_HOURS", String(DEFAULT_SESSION_HOURS))
   );
 
-  return Math.max(
-    1,
-    Math.min(
-      168,
-      value
-      || DEFAULT_SESSION_HOURS
-    )
-  );
+  return Math.max(1, Math.min(168, value || DEFAULT_SESSION_HOURS));
 }
 
 
-function hashPassword_(
-  password,
-  salt,
-  iterations
-) {
+function hashPassword_(password, salt, iterations) {
   const pepper = ensurePepper_();
-
   const seed = (
-    String(
-      password
-    )
+    String(password)
     + "\u001f"
-    + String(
-      salt
-    )
+    + String(salt)
     + "\u001f"
     + pepper
   );
 
-  let bytes = Utilities
-    .newBlob(
-      seed
-    )
-    .getBytes();
+  let bytes = Utilities.newBlob(seed).getBytes();
 
-  for (
-    let i = 0;
-    i < iterations;
-    i++
-  ) {
-    bytes = Utilities
-      .computeDigest(
-        Utilities.DigestAlgorithm.SHA_256,
-        bytes
-      );
-  }
-
-  return Utilities
-    .base64Encode(
+  for (let i = 0; i < iterations; i++) {
+    bytes = Utilities.computeDigest(
+      Utilities.DigestAlgorithm.SHA_256,
       bytes
     );
+  }
+
+  return Utilities.base64Encode(bytes);
 }
 
 
-function hashToken_(
-  token
-) {
+function hashToken_(token) {
   const pepper = ensurePepper_();
+  const bytes = Utilities.computeDigest(
+    Utilities.DigestAlgorithm.SHA_256,
+    String(token) + "\u001f" + pepper,
+    Utilities.Charset.UTF_8
+  );
 
-  const bytes = Utilities
-    .computeDigest(
-      Utilities.DigestAlgorithm.SHA_256,
-      String(
-        token
-      )
-      + "\u001f"
-      + pepper,
-      Utilities.Charset.UTF_8
-    );
-
-  return Utilities
-    .base64Encode(
-      bytes
-    );
+  return Utilities.base64Encode(bytes);
 }
 
 
@@ -1990,238 +1290,118 @@ function createSessionToken_() {
   const source = [
     Utilities.getUuid(),
     Utilities.getUuid(),
-    String(
-      Date.now()
-    ),
-    randomHex_(
-      32
-    ),
-  ].join(
-    "|"
+    String(Date.now()),
+    randomHex_(32),
+  ].join("|");
+
+  const bytes = Utilities.computeDigest(
+    Utilities.DigestAlgorithm.SHA_256,
+    source,
+    Utilities.Charset.UTF_8
   );
 
-  const bytes = Utilities
-    .computeDigest(
-      Utilities.DigestAlgorithm.SHA_256,
-      source,
-      Utilities.Charset.UTF_8
-    );
-
   return (
-    Utilities
-    .base64EncodeWebSafe(
-      bytes
-    )
-    .replace(
-      /=+$/g,
-      ""
-    )
+    Utilities.base64EncodeWebSafe(bytes).replace(/=+$/g, "")
     + "."
-    + Utilities
-      .getUuid()
-      .replace(
-        /-/g,
-        ""
-      )
+    + Utilities.getUuid().replace(/-/g, "")
   );
 }
 
 
-function secureEqual_(
-  left,
-  right
-) {
-  const a = String(
-    left || ""
-  );
+function secureEqual_(left, right) {
+  const a = String(left || "");
+  const b = String(right || "");
+  let diff = a.length ^ b.length;
+  const length = Math.max(a.length, b.length);
 
-  const b = String(
-    right || ""
-  );
-
-  let diff = (
-    a.length
-    ^ b.length
-  );
-
-  const length = Math.max(
-    a.length,
-    b.length
-  );
-
-  for (
-    let i = 0;
-    i < length;
-    i++
-  ) {
-    const ca = (
-      i < a.length
-      ? a.charCodeAt(
-          i
-        )
-      : 0
-    );
-
-    const cb = (
-      i < b.length
-      ? b.charCodeAt(
-          i
-        )
-      : 0
-    );
-
-    diff |= (
-      ca
-      ^ cb
-    );
+  for (let i = 0; i < length; i++) {
+    const ca = i < a.length ? a.charCodeAt(i) : 0;
+    const cb = i < b.length ? b.charCodeAt(i) : 0;
+    diff |= ca ^ cb;
   }
 
   return diff === 0;
 }
 
 
-function randomHex_(
-  bytes
-) {
+function randomHex_(bytes) {
   let output = "";
 
-  while (
-    output.length
-    < bytes * 2
-  ) {
-    const digest = Utilities
-      .computeDigest(
-        Utilities.DigestAlgorithm.SHA_256,
-        (
-          Utilities.getUuid()
-          + "|"
-          + Date.now()
-          + "|"
-          + Math.random()
-        ),
-        Utilities.Charset.UTF_8
-      );
+  while (output.length < bytes * 2) {
+    const digest = Utilities.computeDigest(
+      Utilities.DigestAlgorithm.SHA_256,
+      (
+        Utilities.getUuid()
+        + "|"
+        + Date.now()
+        + "|"
+        + Math.random()
+      ),
+      Utilities.Charset.UTF_8
+    );
 
     output += digest
-      .map(
-        value => {
-          const normalized = (
-            value < 0
-            ? value + 256
-            : value
-          );
-
-          return normalized
-            .toString(
-              16
-            )
-            .padStart(
-              2,
-              "0"
-            );
-        }
-      )
+      .map(function (value) {
+        const normalized = value < 0 ? value + 256 : value;
+        return normalized.toString(16).padStart(2, "0");
+      })
       .join("");
   }
 
-  return output.slice(
-    0,
-    bytes * 2
-  );
+  return output.slice(0, bytes * 2);
 }
 
 
 function ensurePepper_() {
-  const props = PropertiesService
-    .getScriptProperties();
-
-  let pepper = props.getProperty(
-    "AUTH_PASSWORD_PEPPER"
-  );
+  const props = PropertiesService.getScriptProperties();
+  let pepper = props.getProperty("AUTH_PASSWORD_PEPPER");
 
   if (!pepper) {
-    pepper = randomHex_(
-      32
-    );
-
-    props.setProperty(
-      "AUTH_PASSWORD_PEPPER",
-      pepper
-    );
+    pepper = randomHex_(32);
+    props.setProperty("AUTH_PASSWORD_PEPPER", pepper);
   }
 
   return pepper;
 }
 
 
-function getSheet_(
-  name
-) {
-  const sheet = SpreadsheetApp
-    .getActiveSpreadsheet()
-    .getSheetByName(
-      name
-    );
+function getSpreadsheet_() {
+  if (_activeSpreadsheetCache) {
+    return _activeSpreadsheetCache;
+  }
+
+  _activeSpreadsheetCache = SpreadsheetApp.getActiveSpreadsheet();
+  return _activeSpreadsheetCache;
+}
+
+
+function getSheet_(name) {
+  if (_sheetCache[name]) {
+    return _sheetCache[name];
+  }
+
+  const sheet = getSpreadsheet_().getSheetByName(name);
 
   if (!sheet) {
     throw new Error(
-      "Aba "
-      + name
-      + " não encontrada. "
-      + "Execute setupCentralAuth()."
+      "Aba " + name + " não encontrada. Execute setupCentralAuth()."
     );
   }
 
+  _sheetCache[name] = sheet;
   return sheet;
 }
 
 
-function ensureSheet_(
-  ss,
-  name,
-  headers
-) {
-  let sheet = ss.getSheetByName(
-    name
-  );
+function ensureSheet_(ss, name, headers) {
+  let sheet = ss.getSheetByName(name);
 
   if (!sheet) {
-    sheet = ss.insertSheet(
-      name
-    );
+    sheet = ss.insertSheet(name);
   }
 
-  if (
-    sheet.getLastRow()
-    === 0
-  ) {
-    sheet.getRange(
-      1,
-      1,
-      1,
-      headers.length
-    ).setValues(
-      [
-        headers,
-      ]
-    );
-  } else {
-    sheet.getRange(
-      1,
-      1,
-      1,
-      headers.length
-    ).setValues(
-      [
-        headers,
-      ]
-    );
-  }
-
-  sheet.setFrozenRows(
-    1
-  );
-
+  sheet.getRange(1, 1, 1, headers.length).setValues([headers]);
+  sheet.setFrozenRows(1);
   return sheet;
 }
 
@@ -2235,102 +1415,53 @@ function formatSheets_() {
     SHEET_SESSIONS,
     SHEET_LOGS,
     SHEET_CONFIG,
-  ].forEach(
-    name => {
-      const sheet = ss.getSheetByName(
-        name
-      );
+  ].forEach(function (name) {
+    const sheet = ss.getSheetByName(name);
 
-      if (!sheet) {
-        return;
-      }
-
-      sheet.getRange(
-        1,
-        1,
-        1,
-        sheet.getLastColumn()
-      )
-      .setFontWeight(
-        "bold"
-      )
-      .setBackground(
-        "#0B2E63"
-      )
-      .setFontColor(
-        "#FFFFFF"
-      );
-
-      sheet.autoResizeColumns(
-        1,
-        sheet.getLastColumn()
-      );
+    if (!sheet) {
+      return;
     }
-  );
+
+    sheet
+      .getRange(1, 1, 1, sheet.getLastColumn())
+      .setFontWeight("bold")
+      .setBackground("#0B2E63")
+      .setFontColor("#FFFFFF");
+
+    sheet.autoResizeColumns(1, sheet.getLastColumn());
+  });
 }
 
 
-function getConfig_(
-  key,
-  fallback
-) {
-  const sheet = getSheet_(
-    SHEET_CONFIG
-  );
+function getConfig_(key, fallback) {
+  if (Object.prototype.hasOwnProperty.call(_configCache, key)) {
+    return _configCache[key];
+  }
 
-  const values = sheet
-    .getDataRange()
-    .getValues();
+  const sheet = getSheet_(SHEET_CONFIG);
+  const values = sheet.getDataRange().getValues();
 
-  for (
-    let i = 1;
-    i < values.length;
-    i++
-  ) {
-    if (
-      String(
-        values[i][0] || ""
-      ).trim()
-      === key
-    ) {
-      return String(
-        values[i][1] || fallback
-      );
+  for (let i = 1; i < values.length; i++) {
+    if (String(values[i][0] || "").trim() === key) {
+      const result = String(values[i][1] || fallback);
+      _configCache[key] = result;
+      return result;
     }
   }
 
+  _configCache[key] = fallback;
   return fallback;
 }
 
 
-function setConfigIfMissing_(
-  sheet,
-  key,
-  value
-) {
-  const values = sheet
-    .getDataRange()
-    .getValues();
+function setConfigIfMissing_(sheet, key, value) {
+  const values = sheet.getDataRange().getValues();
 
-  for (
-    let i = 1;
-    i < values.length;
-    i++
-  ) {
-    if (
-      String(
-        values[i][0] || ""
-      ).trim()
-      === key
-    ) {
+  for (let i = 1; i < values.length; i++) {
+    if (String(values[i][0] || "").trim() === key) {
       return;
     }
   }
 
-  sheet.appendRow(
-    [
-      key,
-      value,
-    ]
-  );
+  sheet.appendRow([key, value]);
 }
