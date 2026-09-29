@@ -160,9 +160,6 @@ class Application:
         from monitor_noticias.ui.sources_bahia_patch import (
             install_sources_bahia_patch,
         )
-        from monitor_noticias.ui.digital_newspapers_integration import (
-            install_digital_newspapers,
-        )
 
         install_removed_integrations_guard(MainWindow)
         install_linux_boot_patch(MainWindow)
@@ -269,9 +266,6 @@ class Application:
             window,
         )
         install_sources_bahia_patch(
-            window
-        )
-        install_digital_newspapers(
             window
         )
 

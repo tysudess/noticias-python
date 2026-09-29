@@ -1,0 +1,40 @@
+V87 — arquivos específicos de Jornais Digitais que podem/devem ser EXCLUÍDOS do repositório
+para a remoção completa do código-fonte da funcionalidade.
+
+IMPORTANTE:
+- O arquivo application.py fornecido na V87 já REMOVE A ABA DO PROGRAMA mesmo que os
+  arquivos abaixo ainda permaneçam no GitHub.
+- Um upload por ZIP no GitHub não apaga arquivos antigos automaticamente.
+- Para limpeza completa do repositório, exclua estes arquivos/pastas em um commit separado
+  ou use git rm localmente.
+
+EXCLUIR:
+src/monitor_noticias/digital_newspapers/__init__.py
+src/monitor_noticias/digital_newspapers/browser.py
+src/monitor_noticias/digital_newspapers/pressreader_hd.py
+src/monitor_noticias/digital_newspapers/providers.py
+src/monitor_noticias/digital_newspapers/storage.py
+src/monitor_noticias/digital_newspapers/validation.py
+src/monitor_noticias/ui/digital_newspapers_integration.py
+src/monitor_noticias/ui/digital_newspapers_page.py
+
+tests/unit/test_digital_newspapers_v77.py
+tests/unit/test_digital_newspapers_v78.py
+tests/unit/test_digital_newspapers_v79.py
+tests/unit/test_digital_newspapers_v80.py
+tests/unit/test_digital_newspapers_v81.py
+tests/unit/test_digital_newspapers_v83.py
+tests/unit/test_digital_newspapers_v84.py
+tests/unit/test_digital_newspapers_v85.py
+tests/unit/test_digital_newspapers_v86.py
+
+DOCUMENTAÇÃO HISTÓRICA OPCIONAL PARA EXCLUIR:
+README_V77_JORNAIS_DIGITAIS.md
+README_V78_AUTO_PDF_E_ICONE.md
+README_V79_CORREIO_E_ICONE.md
+README_V80_JORNAIS_DIGITAIS_PROVEDORES.md
+README_V81_VALIDACAO_CREDENCIAIS_ICONE.md
+README_V83_CREDENCIAIS_LAYOUT.md
+README_V84_VALOR_PRESSREADER_HD.md
+README_V85_BUSCA_SEPARADA_IMAGENS_HD.md
+README_V86_SESSAO_PRESSREADER_HD.md
