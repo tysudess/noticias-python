@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from datetime import date
 from io import BytesIO
 from pathlib import Path
+import re
 import shutil
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 import zlib
@@ -57,6 +58,46 @@ class DownloadedPageImage:
     image_format: str
 
 
+def pressreader_image_page_number(raw_url: str) -> int | None:
+    """Retorna o número da página codificado em uma URL de imagem PressReader."""
+
+    try:
+        parsed = urlsplit(str(raw_url or "").strip())
+        host = str(parsed.hostname or "").lower()
+        path = str(parsed.path or "")
+        if not host.endswith("prcdn.co") or "/img" not in path:
+            return None
+        query = dict(parse_qsl(parsed.query, keep_blank_values=True))
+        page_text = str(query.get("page") or "").strip()
+        file_text = str(query.get("file") or "").strip()
+        if not page_text or not file_text:
+            return None
+        page_number = int(page_text)
+        return page_number if page_number > 0 else None
+    except Exception:
+        return None
+
+
+def pressreader_total_pages_from_text(text: str) -> int | None:
+    """Extrai o total mostrado pelo viewer, por exemplo ``35 de 38`` ou ``35 of 38``."""
+
+    value = str(text or "")
+    patterns = (
+        r"\b\d{1,3}\s+(?:de|of)\s+(\d{1,3})\b",
+        r"\b(?:page|pagina|página)\s+\d{1,3}\s+(?:de|of)\s+(\d{1,3})\b",
+    )
+    totals: list[int] = []
+    for pattern in patterns:
+        for match in re.finditer(pattern, value, flags=re.IGNORECASE):
+            try:
+                total = int(match.group(1))
+            except Exception:
+                continue
+            if 1 <= total <= 500:
+                totals.append(total)
+    return max(totals) if totals else None
+
+
 def pressreader_image_candidate_score(
     raw_url: str,
     *,
@@ -80,14 +121,8 @@ def pressreader_image_candidate_score(
         return None
 
     query = dict(parse_qsl(parsed.query, keep_blank_values=True))
-    page_text = str(query.get("page") or "").strip()
-    file_text = str(query.get("file") or "").strip()
-    if not page_text or not file_text:
-        return None
-
-    try:
-        page_number = int(page_text)
-    except Exception:
+    page_number = pressreader_image_page_number(raw_url)
+    if page_number is None:
         return None
 
     if expected_page is not None and page_number != int(expected_page):
@@ -300,7 +335,7 @@ class PressReaderHdPdfThread(QThread):
         paths: AppPaths,
         provider: DigitalNewspaperProvider,
         target_date: date,
-        page_urls: dict[int, str],
+        page_urls: dict[int, object],
         output_path: Path,
         parent=None,
     ) -> None:
@@ -308,7 +343,26 @@ class PressReaderHdPdfThread(QThread):
         self.paths = paths
         self.provider = provider
         self.target_date = target_date
-        self.page_urls = dict(page_urls)
+        normalized: dict[int, tuple[str, ...]] = {}
+        for raw_page, raw_urls in dict(page_urls).items():
+            page_number = int(raw_page)
+            if isinstance(raw_urls, str):
+                values = [raw_urls]
+            else:
+                try:
+                    values = list(raw_urls)
+                except Exception:
+                    values = [str(raw_urls or "")]
+            seen: set[str] = set()
+            clean: list[str] = []
+            for raw in values:
+                value = str(raw or "").strip()
+                if value and value not in seen:
+                    seen.add(value)
+                    clean.append(value)
+            if clean:
+                normalized[page_number] = tuple(clean)
+        self.page_urls = normalized
         self.output_path = Path(output_path)
 
     def _proxy_settings(self) -> tuple[ProxySettings, object]:
@@ -355,7 +409,7 @@ class PressReaderHdPdfThread(QThread):
     def _download_best_image(
         self,
         session: requests.Session,
-        raw_url: str,
+        raw_urls: tuple[str, ...] | list[str],
         *,
         page_number: int,
         proxies,
@@ -365,42 +419,63 @@ class PressReaderHdPdfThread(QThread):
         best: tuple[bytes, int, int, str] | None = None
         best_pixels = 0
 
-        for candidate in pressreader_image_variants(raw_url):
-            if self.isInterruptionRequested():
-                raise RuntimeError("Download cancelado.")
-            try:
-                response = session.get(
-                    candidate,
-                    headers=self._headers(page_number),
-                    allow_redirects=True,
-                    timeout=(15, 75),
-                    proxies=proxies,
-                    verify=verify,
-                )
-                if response.status_code < 200 or response.status_code >= 300:
+        tried_candidates: set[str] = set()
+        for raw_url in raw_urls:
+            per_source_best: tuple[bytes, int, int, str] | None = None
+            per_source_pixels = 0
+            for candidate in pressreader_image_variants(raw_url):
+                if candidate in tried_candidates:
+                    continue
+                tried_candidates.add(candidate)
+                if self.isInterruptionRequested():
+                    raise RuntimeError("Download cancelado.")
+                try:
+                    response = session.get(
+                        candidate,
+                        headers=self._headers(page_number),
+                        allow_redirects=True,
+                        timeout=(15, 75),
+                        proxies=proxies,
+                        verify=verify,
+                    )
+                    if response.status_code < 200 or response.status_code >= 300:
+                        response.close()
+                        continue
+                    payload = response.content
                     response.close()
+                    if not payload:
+                        continue
+
+                    with Image.open(BytesIO(payload)) as image:
+                        width = int(image.width)
+                        height = int(image.height)
+                        fmt = str(image.format or "").upper()
+
+                    pixels = width * height
+                    if pixels > per_source_pixels:
+                        per_source_best = (payload, width, height, fmt)
+                        per_source_pixels = pixels
+                    if pixels > best_pixels:
+                        best = (payload, width, height, fmt)
+                        best_pixels = pixels
+
+                    # Se este arquivo de página realmente entrega a resolução-alvo,
+                    # não há motivo para testar tamanhos menores do mesmo arquivo.
+                    if width >= int(self.provider.pressreader_target_width):
+                        return payload, width, height, fmt
+                except Exception as exc:
+                    if first_error is None:
+                        first_error = exc
                     continue
-                payload = response.content
-                response.close()
-                if not payload:
-                    continue
 
-                with Image.open(BytesIO(payload)) as image:
-                    width = int(image.width)
-                    height = int(image.height)
-                    fmt = str(image.format or "").upper()
-
-                pixels = width * height
-                if pixels > best_pixels:
-                    best = (payload, width, height, fmt)
-                    best_pixels = pixels
-
-                if width >= int(self.provider.pressreader_target_width):
-                    return payload, width, height, fmt
-            except Exception as exc:
-                if first_error is None:
-                    first_error = exc
-                continue
+            # O URL de maior score pode ser apenas thumbnail/preview. Se ele não
+            # atingir a qualidade mínima, continua no próximo `file=` capturado
+            # para a MESMA página antes de declarar falha.
+            if (
+                per_source_best is not None
+                and per_source_best[1] >= int(self.provider.pressreader_min_width)
+            ):
+                return per_source_best
 
         if best is not None and best[1] >= int(self.provider.pressreader_min_width):
             return best
@@ -430,7 +505,8 @@ class PressReaderHdPdfThread(QThread):
             return
 
         pages_dir = self.output_path.parent / "paginas_hd"
-        shutil.rmtree(pages_dir, ignore_errors=True)
+        # V86: não apaga imagens já baixadas de uma tentativa anterior. Cada
+        # página válida é substituída apenas quando uma nova versão HD é obtida.
         pages_dir.mkdir(parents=True, exist_ok=True)
         downloaded: list[Path] = []
 

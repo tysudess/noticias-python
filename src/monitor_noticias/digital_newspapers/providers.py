@@ -276,17 +276,37 @@ class GloboProvider(DigitalNewspaperProvider):
         super().__init__(
             id="o-globo",
             name="O Globo",
-            edition_url="https://jornaldigital.oglobo.globo.com/",
-            entry_urls=("https://oglobo.globo.com/",),
-            domains=("globo.com",),
-            edition_kind="Jornal digitalizado",
-            download_strategy="authorized_export",
-            edition_link_keywords=("o globo", "oglobo", "jornal digital", "edicao", "edição", "jornal", "pdf"),
+            edition_url="https://infoglobo.pressreader.com/o-globo",
+            entry_urls=(
+                "https://jornaldigital.oglobo.globo.com/",
+                "https://oglobo.globo.com/",
+            ),
+            domains=(
+                "pressreader.com",
+                "newspaperdirect.com",
+                "prcdn.co",
+                "globo.com",
+            ),
+            edition_kind="Edição completa via PressReader / páginas HD",
+            download_strategy="pressreader_hd_images",
+            date_selection="direct_url",
+            pressreader_page_url_template=(
+                "https://infoglobo.pressreader.com/o-globo/"
+                "{yyyymmdd}/page/{page}"
+            ),
+            pressreader_max_pages=180,
+            pressreader_min_width=1800,
+            pressreader_target_width=2200,
+            edition_link_keywords=(
+                "o globo", "oglobo", "pressreader", "jornal digital",
+                "edicao", "edição", "jornal",
+            ),
             min_edition_pages=10,
             min_edition_bytes=300_000,
             note=(
-                "A V80 entra pelo Jornal Digital do GLOBO, preserva a sessão Globo e "
-                "procura apenas PDF/exportação autorizados pelo visualizador."
+                "A V86 usa o mesmo motor PressReader HD do Valor. O viewer oficial "
+                "confirmado em infoglobo.pressreader.com é percorrido página a página; "
+                "as imagens HD são salvas separadamente e depois reunidas em PDF."
             ),
         )
 

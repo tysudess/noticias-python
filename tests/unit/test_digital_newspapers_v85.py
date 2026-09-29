@@ -45,7 +45,8 @@ def test_v85_pressreader_uses_qt_request_interceptor_like_android_webview():
     assert "setUrlRequestInterceptor" in source
     assert "def _request_resource_seen" in source
     assert "pressreader_image_candidate_score" in source
-    assert "self._valor_intercepted_best_url" in source
+    assert "self._pressreader_candidates" in source
+    assert "pressreader_image_page_number" in source
 
 
 def test_v85_pressreader_also_checks_dom_images_and_keeps_page_active():
@@ -55,7 +56,8 @@ def test_v85_pressreader_also_checks_dom_images_and_keeps_page_active():
     assert "img.srcset" in source
     assert "self.page.setVisible(True)" in source
     assert "QWebEnginePage.LifecycleState.Active" in source
-    assert "self.view.resize(1440, 2400)" in source
+    assert "self.view.resize(1800, 2800)" in source
+    assert "self.view.setZoomFactor(1.8)" in source
 
 
 def test_v85_hd_images_are_saved_separately_and_not_deleted_after_pdf():
@@ -64,8 +66,7 @@ def test_v85_hd_images_are_saved_separately_and_not_deleted_after_pdf():
     assert 'f"pagina-{page_number:03d}{suffix}"' in source
     assert "salva separadamente" in source
     assert '"PressReader - imagens HD + PDF"' in source
-    # O diretório é limpo no início para evitar páginas antigas, mas não deve
-    # ser apagado no finally ao terminar a extração.
+    # V86: imagens válidas de tentativas anteriores não são apagadas no início.
     run_source = _function_source(PRESSREADER, "run")
-    assert "shutil.rmtree(pages_dir, ignore_errors=True)" in run_source
-    assert "finally:" not in run_source or "shutil.rmtree(pages_dir" not in run_source.split("finally:", 1)[-1]
+    assert "shutil.rmtree(pages_dir, ignore_errors=True)" not in run_source
+    assert "pages_dir.mkdir(parents=True, exist_ok=True)" in run_source

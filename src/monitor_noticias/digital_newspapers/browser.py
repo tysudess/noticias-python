@@ -4,6 +4,7 @@ import base64
 from datetime import date
 import json
 from pathlib import Path
+import re
 import shutil
 from urllib.parse import urlparse
 
@@ -42,6 +43,8 @@ from monitor_noticias.digital_newspapers.providers import DigitalNewspaperProvid
 from monitor_noticias.digital_newspapers.pressreader_hd import (
     PressReaderHdPdfThread,
     pressreader_image_candidate_score,
+    pressreader_image_page_number,
+    pressreader_total_pages_from_text,
 )
 from monitor_noticias.digital_newspapers.storage import (
     SecureCredentialStore,
@@ -226,8 +229,10 @@ PRESSREADER_RESOURCES_JS = r"""
     Array.from(document.querySelectorAll('source[src],source[srcset]')).forEach(function(n){
       add(n.src);String(n.srcset||'').split(',').forEach(function(part){add(part.trim().split(/\s+/)[0]);});
     });
-    return JSON.stringify({href:location.href||'',title:document.title||'',hasPassword:!!document.querySelector('input[type="password"]'),resources:resources});
-  }catch(e){return JSON.stringify({href:location.href||'',title:document.title||'',hasPassword:false,resources:[]});}
+    var bodyText='';
+    try{bodyText=String((document.body&&document.body.innerText)||'').slice(0,20000);}catch(e){}
+    return JSON.stringify({href:location.href||'',title:document.title||'',hasPassword:!!document.querySelector('input[type="password"]'),resources:resources,bodyText:bodyText});
+  }catch(e){return JSON.stringify({href:location.href||'',title:document.title||'',hasPassword:false,resources:[],bodyText:''});}
 })()
 """
 
@@ -697,11 +702,12 @@ class DigitalNewspaperBrowserDialog(QDialog):
         self._pressreader_thread: PressReaderHdPdfThread | None = None
         self._valor_hd_active = False
         self._valor_page_number = 0
-        self._valor_image_urls: dict[int, str] = {}
+        self._valor_image_urls: dict[int, tuple[str, ...]] = {}
         self._valor_probe_attempts = 0
         self._valor_reload_attempts = 0
-        self._valor_intercepted_best_url = ""
-        self._valor_intercepted_best_score = -1
+        self._pressreader_candidates: dict[int, dict[str, int]] = {}
+        self._pressreader_total_pages = 0
+        self._manual_login_auto_submit = False
 
         self.setWindowTitle(
             f"Entrar / renovar sessão • {provider.name}"
@@ -806,13 +812,26 @@ class DigitalNewspaperBrowserDialog(QDialog):
     def _request_resource_seen(self, raw_url: str) -> None:
         if not self._valor_hd_active:
             return
-        score = pressreader_image_candidate_score(
-            raw_url, expected_page=self._valor_page_number
-        )
-        if score is None or score <= self._valor_intercepted_best_score:
+
+        page_number = pressreader_image_page_number(raw_url)
+        if page_number is None:
             return
-        self._valor_intercepted_best_score = score
-        self._valor_intercepted_best_url = str(raw_url or "")
+        if page_number > int(self.provider.pressreader_max_pages):
+            return
+
+        score = pressreader_image_candidate_score(
+            raw_url, expected_page=page_number
+        )
+        if score is None:
+            return
+
+        bucket = self._pressreader_candidates.setdefault(page_number, {})
+        value = str(raw_url or "").strip()
+        if not value:
+            return
+        previous = bucket.get(value)
+        if previous is None or score > previous:
+            bucket[value] = score
 
     def _build_ui(self) -> None:
         root = QVBoxLayout(self)
@@ -1097,6 +1116,10 @@ class DigitalNewspaperBrowserDialog(QDialog):
         self._auto_download_active = False
         self._auto_entry_urls = ()
         self._auto_entry_index = -1
+        # V86: se o usuário já salvou credenciais neste computador, a janela
+        # de renovação faz login automaticamente inclusive em fluxos de 2 etapas
+        # (e-mail -> Continuar -> senha). A senha continua vindo apenas do cofre.
+        self._manual_login_auto_submit = self.credential_store.exists()
         self.download_button.setEnabled(self.provider.can_try_download)
         self.open_edition()
 
@@ -1325,8 +1348,8 @@ class DigitalNewspaperBrowserDialog(QDialog):
         self._valor_image_urls.clear()
         self._valor_probe_attempts = 0
         self._valor_reload_attempts = 0
-        self._valor_intercepted_best_url = ""
-        self._valor_intercepted_best_score = -1
+        self._pressreader_candidates.clear()
+        self._pressreader_total_pages = 0
         self.download_button.setEnabled(False)
         try:
             self.page.setVisible(True)
@@ -1337,7 +1360,8 @@ class DigitalNewspaperBrowserDialog(QDialog):
         except Exception:
             pass
         try:
-            self.view.resize(1440, 2400)
+            self.view.resize(1800, 2800)
+            self.view.setZoomFactor(1.8)
         except Exception:
             pass
         self._emit_status(
@@ -1408,43 +1432,72 @@ class DigitalNewspaperBrowserDialog(QDialog):
             for marker in ("/login", "/signin", "sign-in", "/auth")
         ):
             self._autofill_saved_credentials(auto_submit=True)
-            if self._valor_probe_attempts < 2:
+            if self._valor_probe_attempts < 3:
                 self._valor_probe_attempts += 1
                 QTimer.singleShot(1700, self._probe_pressreader_resources)
                 return
             self._finish_pressreader_hd_error(
-                "A sessão do PressReader precisa ser renovada. Use “Entrar / renovar sessão” "
-                "uma vez e tente novamente."
+                "A sessão do PressReader precisa ser renovada. O acesso salvo foi "
+                "reaplicado automaticamente, mas o site ainda não liberou a edição."
             )
             return
+
+        total = pressreader_total_pages_from_text(
+            str(data.get("bodyText") or "")
+        )
+        if total is not None:
+            self._pressreader_total_pages = max(
+                self._pressreader_total_pages,
+                min(total, int(self.provider.pressreader_max_pages)),
+            )
 
         resources = data.get("resources")
         if not isinstance(resources, list):
             resources = []
 
-        best_url = self._valor_intercepted_best_url
-        best_score = self._valor_intercepted_best_score
+        # V86: guarda TODOS os `file=` candidatos vistos para cada página. O URL
+        # de maior score pode ser apenas um thumbnail; o worker tentará as variantes
+        # HD de cada arquivo capturado antes de aceitar qualidade insuficiente.
         for item in resources:
             url = str(item or "").strip()
-            score = pressreader_image_candidate_score(
-                url,
-                expected_page=self._valor_page_number,
-            )
-            if score is not None and score > best_score:
-                best_url = url
-                best_score = score
+            page_number = pressreader_image_page_number(url)
+            if page_number is None:
+                continue
+            score = pressreader_image_candidate_score(url, expected_page=page_number)
+            if score is None:
+                continue
+            bucket = self._pressreader_candidates.setdefault(page_number, {})
+            old_score = bucket.get(url)
+            if old_score is None or score > old_score:
+                bucket[url] = score
 
-        if best_url:
-            page_number = self._valor_page_number
-            self._valor_image_urls[page_number] = best_url
-            self._emit_status(
-                f"{self.provider.name}: página {page_number:02d} localizada no CDN HD."
+        page_number = self._valor_page_number
+        current_candidates = self._pressreader_candidates.get(page_number, {})
+        if current_candidates:
+            # Ordenação determinística: melhor score primeiro, mas preservando os
+            # demais arquivos como fallback de alta qualidade.
+            ordered = sorted(
+                current_candidates.items(),
+                key=lambda item: (-item[1], item[0]),
             )
+            self._valor_image_urls[page_number] = tuple(
+                url for url, _score in ordered
+            )
+            self._emit_status(
+                f"{self.provider.name}: página {page_number:02d} localizada com "
+                f"{len(ordered)} candidato(s) de imagem."
+            )
+
+            if (
+                self._pressreader_total_pages
+                and page_number >= self._pressreader_total_pages
+            ):
+                self._finish_pressreader_collection()
+                return
+
             self._valor_page_number += 1
             self._valor_probe_attempts = 0
             self._valor_reload_attempts = 0
-            self._valor_intercepted_best_url = ""
-            self._valor_intercepted_best_score = -1
 
             if self._valor_page_number > int(self.provider.pressreader_max_pages):
                 self._finish_pressreader_collection()
@@ -1454,22 +1507,20 @@ class DigitalNewspaperBrowserDialog(QDialog):
                 self.target_date,
                 self._valor_page_number,
             )
-            QTimer.singleShot(350, lambda: self.view.load(QUrl(next_url)))
+            QTimer.singleShot(450, lambda: self.view.load(QUrl(next_url)))
             return
 
-        if self._valor_probe_attempts < 3:
+        if self._valor_probe_attempts < 4:
             self._valor_probe_attempts += 1
             try:
                 self.page.runJavaScript(
-                    "(function(){try{window.scrollTo(0,0);window.dispatchEvent(new Event('resize'));}catch(e){} return true;})()"
+                    "(function(){try{document.querySelectorAll('img').forEach(function(i){i.loading='eager';});window.scrollTo(0,0);window.dispatchEvent(new Event('resize'));}catch(e){} return true;})()"
                 )
             except Exception:
                 pass
             QTimer.singleShot(1800, self._probe_pressreader_resources)
             return
 
-        # Uma recarga reduz o risco de considerar como fim da edição uma página
-        # que apenas demorou a renderizar no Chromium oculto.
         if self._valor_reload_attempts < 1 and expected in current:
             self._valor_reload_attempts += 1
             self._valor_probe_attempts = 0
@@ -1480,7 +1531,13 @@ class DigitalNewspaperBrowserDialog(QDialog):
             return
 
         collected = len(self._valor_image_urls)
-        if collected >= int(self.provider.min_edition_pages):
+        if (
+            self._pressreader_total_pages
+            and collected >= self._pressreader_total_pages
+        ):
+            self._finish_pressreader_collection()
+            return
+        if not self._pressreader_total_pages and collected >= int(self.provider.min_edition_pages):
             self._finish_pressreader_collection()
             return
 
@@ -1488,9 +1545,13 @@ class DigitalNewspaperBrowserDialog(QDialog):
             detail = "a edição/data não foi aberta pelo PressReader"
         else:
             detail = "não apareceu uma imagem de página válida no CDN"
+        total_hint = (
+            f" de {self._pressreader_total_pages}"
+            if self._pressreader_total_pages
+            else ""
+        )
         self._finish_pressreader_hd_error(
-            f"{detail}. Foram localizadas somente {collected} páginas; "
-            f"o mínimo esperado é {self.provider.min_edition_pages}."
+            f"{detail}. Foram localizadas {collected}{total_hint} páginas."
         )
 
     def _finish_pressreader_collection(self) -> None:
@@ -1501,10 +1562,20 @@ class DigitalNewspaperBrowserDialog(QDialog):
         self._auto_download_requested = False
         self._save_cookie_vault()
 
+        expected_total = self._pressreader_total_pages or (
+            max(self._valor_image_urls) if self._valor_image_urls else 0
+        )
         pages = sorted(self._valor_image_urls)
-        if not pages or pages != list(range(1, pages[-1] + 1)):
+        expected_pages = list(range(1, expected_total + 1)) if expected_total else []
+        if not pages or pages != expected_pages:
+            missing = [p for p in expected_pages if p not in self._valor_image_urls]
+            detail = ", ".join(str(p) for p in missing[:10])
+            if len(missing) > 10:
+                detail += ", …"
             self._finish_pressreader_hd_error(
-                "A sequência das páginas do Valor veio incompleta. Nenhum PDF foi gerado."
+                "A sequência das páginas do PressReader veio incompleta"
+                + (f"; faltaram: {detail}" if detail else "")
+                + ". Nenhum PDF foi gerado."
             )
             return
 
@@ -1523,7 +1594,7 @@ class DigitalNewspaperBrowserDialog(QDialog):
         thread.finished.connect(self._pressreader_thread_finished)
         self._pressreader_thread = thread
         self._emit_status(
-            f"{self.provider.name}: {len(pages)} páginas localizadas; baixando as imagens HD…"
+            f"{self.provider.name}: {len(pages)} páginas localizadas; baixando cada imagem HD separadamente…"
         )
         thread.start()
 
@@ -1616,7 +1687,10 @@ class DigitalNewspaperBrowserDialog(QDialog):
             return
 
         self._autofill_saved_credentials(
-            auto_submit=self._auto_download_active,
+            auto_submit=(
+                self._auto_download_active
+                or self._manual_login_auto_submit
+            ),
         )
 
         if self._auto_download_active:
@@ -1630,10 +1704,17 @@ class DigitalNewspaperBrowserDialog(QDialog):
             )
             return
 
-        self._emit_status(
-            "Página de autenticação carregada. Se houver acesso salvo localmente, "
-            "os campos são preenchidos sem expor a senha no código ou no GitHub."
-        )
+        if self._manual_login_auto_submit and self.credential_store.exists():
+            self._emit_status(
+                "Acesso salvo detectado: a Central está preenchendo e enviando o login "
+                "automaticamente. Se o site exigir CAPTCHA ou verificação adicional, "
+                "essa etapa continuará manual."
+            )
+        else:
+            self._emit_status(
+                "Página de autenticação carregada. Se houver acesso salvo localmente, "
+                "os campos são preenchidos sem expor a senha no código ou no GitHub."
+            )
 
     def try_download_edition(self) -> None:
         if not self.provider.can_try_download:
@@ -1922,6 +2003,7 @@ class DigitalNewspaperBrowserDialog(QDialog):
 
     def shutdown(self) -> None:
         self._valor_hd_active = False
+        self._manual_login_auto_submit = False
         if self._direct_thread is not None and self._direct_thread.isRunning():
             self._direct_thread.requestInterruption()
             self._direct_thread.wait(1500)

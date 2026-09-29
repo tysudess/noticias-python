@@ -5,6 +5,7 @@ from io import BytesIO
 from pathlib import Path
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 import zlib
+import re
 
 from PIL import Image
 from pypdf import PdfReader
@@ -38,6 +39,7 @@ def _exec_selected_functions(path: Path, names: set[str]) -> dict:
         "urlencode": urlencode,
         "PRESSREADER_HIGH_SCALES": (416, 390, 364, 338, 312, 286, 260, 234, 208, 182, 156, 130, 104),
         "PRESSREADER_HIGH_WIDTHS": (3200, 3000, 2800, 2600, 2400, 2200, 2000, 1800, 1600),
+        "re": re,
     }
     exec(compile(module, str(path), "exec"), namespace)
     return namespace
@@ -60,7 +62,7 @@ def test_v84_valor_uses_proven_pressreader_route_and_prcdn():
 def test_v84_prcdn_candidate_and_hd_variants_keep_page_and_file():
     ns = _exec_selected_functions(
         PRESSREADER,
-        {"pressreader_image_candidate_score", "pressreader_image_variants"},
+        {"pressreader_image_page_number", "pressreader_image_candidate_score", "pressreader_image_variants"},
     )
     score = ns["pressreader_image_candidate_score"]
     variants = ns["pressreader_image_variants"]
