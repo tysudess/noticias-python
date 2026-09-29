@@ -69,6 +69,27 @@ def system_trust_store_error() -> str:
     return _LAST_ERROR
 
 
+def _validate_x509_pem(text: str) -> None:
+    """Faz o OpenSSL interpretar de fato o X.509.
+
+    ``ssl.DER_cert_to_PEM_cert`` apenas transforma bytes em Base64 e não
+    comprova que o conteúdo é um certificado. ``SSLContext.load_verify_locations``
+    força o parser X.509 do OpenSSL e rejeita lixo/DER inválido.
+    """
+
+    try:
+        context = ssl.SSLContext(
+            ssl.PROTOCOL_TLS_CLIENT
+        )
+        context.load_verify_locations(
+            cadata=text
+        )
+    except Exception as exc:
+        raise ValueError(
+            "Certificado X.509 inválido."
+        ) from exc
+
+
 def normalize_ca_certificate(
     source: Path,
     target_pem: Path,
@@ -103,15 +124,25 @@ def normalize_ca_certificate(
 
     if pem_blocks:
         for raw in pem_blocks:
-            text = raw.decode(
-                "ascii",
-                errors="strict",
-            )
+            try:
+                text = raw.decode(
+                    "ascii",
+                    errors="strict",
+                )
 
-            # Valida a estrutura do certificado.
-            ssl.PEM_cert_to_DER_cert(
-                text
-            )
+                # Converte a estrutura textual e, em seguida, força o
+                # OpenSSL a interpretar o certificado X.509.
+                ssl.PEM_cert_to_DER_cert(
+                    text
+                )
+                _validate_x509_pem(text)
+
+            except Exception as exc:
+                if isinstance(exc, ValueError):
+                    raise
+                raise ValueError(
+                    "Certificado X.509 inválido."
+                ) from exc
 
             normalized.append(
                 text.strip()
@@ -122,7 +153,11 @@ def normalize_ca_certificate(
             pem = ssl.DER_cert_to_PEM_cert(
                 data
             )
+            _validate_x509_pem(pem)
+
         except Exception as exc:
+            if isinstance(exc, ValueError):
+                raise
             raise ValueError(
                 (
                     "Formato de certificado não reconhecido. "
@@ -131,10 +166,6 @@ def normalize_ca_certificate(
                 )
             ) from exc
 
-        # Confirma que o resultado é um certificado válido.
-        ssl.PEM_cert_to_DER_cert(
-            pem
-        )
         normalized.append(
             pem.strip()
         )

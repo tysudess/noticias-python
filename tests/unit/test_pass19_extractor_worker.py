@@ -17,34 +17,73 @@ def app():
     return QApplication.instance() or QApplication([])
 
 
-def test_download_worker_is_retained_until_qthread_finishes(app, tmp_path: Path, monkeypatch):
+def test_download_qthread_is_retained_until_it_finishes(
+    app,
+    tmp_path: Path,
+    monkeypatch,
+):
     page = ExtractorPage(tmp_path)
-    output = tmp_path / "Videos" / "portable-worker-test.mp4"
-    output.parent.mkdir(parents=True, exist_ok=True)
-    output.write_bytes(b"x" * 2048)
 
-    def fake_download(url, quality, proxy, update):
+    output = (
+        tmp_path
+        / "Videos"
+        / "portable-worker-test.mp4"
+    )
+    output.parent.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
+    output.write_bytes(
+        b"x" * 2048
+    )
+
+    def fake_download(
+        url,
+        quality,
+        proxy,
+        update,
+    ):
         assert url == "https://example.test/video.mp4"
         assert proxy == ""
         update(50, "metade")
         return output
 
-    monkeypatch.setattr(page.engine, "download", fake_download)
-    page.url.setText("https://example.test/video.mp4")
+    monkeypatch.setattr(
+        page.engine,
+        "download",
+        fake_download,
+    )
+
+    page.url.setText(
+        "https://example.test/video.mp4"
+    )
     page.start_download()
 
+    # A implementação atual usa uma QThread autocontida; _download_worker
+    # existe apenas para compatibilidade e deve permanecer None.
     assert page._download_thread is not None
-    assert page._download_worker is not None
+    assert page._download_worker is None
 
-    deadline = time.monotonic() + 5.0
-    while page._download_thread is not None and time.monotonic() < deadline:
+    deadline = (
+        time.monotonic()
+        + 5.0
+    )
+
+    while (
+        page._download_thread is not None
+        and time.monotonic() < deadline
+    ):
         app.processEvents()
         time.sleep(0.01)
+
     app.processEvents()
 
     assert page._download_thread is None
     assert page._download_worker is None
-    assert page.status.text() == "Download concluído: portable-worker-test.mp4"
+    assert (
+        page.status.text()
+        == "Download concluído: portable-worker-test.mp4"
+    )
     assert page.progress.value() == 100
     assert page.history.count() == 1
     assert page.shutdown()

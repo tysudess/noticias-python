@@ -150,10 +150,27 @@ class HiddenProcessRunner:
             output or "",
         )
 
+    @staticmethod
+    def _wait_finished(
+        process: subprocess.Popen[object],
+        timeout: float = 2.0,
+    ) -> bool:
+        try:
+            process.wait(
+                timeout=timeout
+            )
+            return True
+        except subprocess.TimeoutExpired:
+            return False
+        except Exception:
+            return process.poll() is not None
+
     def destroy_tree(
         self,
         process: subprocess.Popen[object] | None,
     ) -> None:
+        """Encerra a árvore e só retorna depois de o processo realmente sair."""
+
         if process is None:
             return
 
@@ -184,6 +201,12 @@ class HiddenProcessRunner:
                     process.pid,
                 )
 
+            if self._wait_finished(
+                process,
+                timeout=2.0,
+            ):
+                return
+
         else:
             try:
                 os.killpg(
@@ -191,15 +214,23 @@ class HiddenProcessRunner:
                     signal.SIGTERM,
                 )
 
-                try:
-                    process.wait(
-                        timeout=3,
-                    )
-                except subprocess.TimeoutExpired:
-                    os.killpg(
-                        process.pid,
-                        signal.SIGKILL,
-                    )
+                if self._wait_finished(
+                    process,
+                    timeout=3.0,
+                ):
+                    return
+
+                os.killpg(
+                    process.pid,
+                    signal.SIGKILL,
+                )
+
+                if self._wait_finished(
+                    process,
+                    timeout=2.0,
+                ):
+                    return
+
             except ProcessLookupError:
                 return
             except Exception:
@@ -221,3 +252,11 @@ class HiddenProcessRunner:
                         "?",
                     ),
                 )
+
+        # ``kill`` apenas solicita o encerramento. Aguardar aqui evita que
+        # shutdown() retorne enquanto o filho ainda aparece vivo em poll().
+        if process.poll() is None:
+            self._wait_finished(
+                process,
+                timeout=2.0,
+            )

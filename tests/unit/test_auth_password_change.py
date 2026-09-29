@@ -17,6 +17,7 @@ def test_session_reads_password_change_flag():
             "ok": True,
             "token": "token",
             "user": {
+                "auth_server_version": "1.2.0",
                 "username": "teste",
                 "name": "Teste",
                 "profile": "CONSULTA",

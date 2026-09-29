@@ -23,6 +23,7 @@ def test_session_mapping() -> None:
             "expires_at":
                 "2026-09-24T10:00:00.000Z",
             "user": {
+                "auth_server_version": "1.2.0",
                 "username": "operador",
                 "name": "Operador",
                 "profile": "OPERADOR",

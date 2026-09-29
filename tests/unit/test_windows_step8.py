@@ -16,7 +16,13 @@ from monitor_noticias.networking.proxy import (
 from monitor_noticias.windows.dpapi import DpapiTextStore
 from monitor_noticias.windows.notifications import WindowsTrayNotifier
 from monitor_noticias.windows.processes import HiddenProcessRunner
-from monitor_noticias.windows.startup import RUN_KEY, VALUE_NAME, StartupManager, startup_command
+from monitor_noticias.windows.startup import (
+    RUN_KEY,
+    VALUE_NAME,
+    StartupManager,
+    WindowsStartupBackend,
+    startup_command,
+)
 
 
 class FakeSecretStore:
@@ -32,8 +38,10 @@ class FakeSecretStore:
 
 class FakeRegistry:
     def __init__(self): self.values = {}
-    def set_string(self, path, name, value): self.values[(path, name)] = value
-    def delete_value(self, path, name): self.values.pop((path, name), None)
+    def set_string(self, path, name, value):
+        self.values[(path, name)] = value
+    def delete_value(self, path, name):
+        self.values.pop((path, name), None)
 
 
 class FakeResponse:
@@ -47,14 +55,20 @@ class FakeSession:
         self.calls = []
     def get(self, url, **kwargs):
         self.calls.append((url, kwargs))
-        if self.error: raise self.error
+        if self.error:
+            raise self.error
         return FakeResponse(self.status)
 
 
 def make_proxy(tmp_path: Path):
-    prefs = SharedPreferences(tmp_path / "data/prefs/monitor_prefs.properties")
+    prefs = SharedPreferences(
+        tmp_path / "data/prefs/monitor_prefs.properties"
+    )
     secret = FakeSecretStore()
-    return prefs, secret, ProxySettings(prefs, secret_store=secret)
+    return prefs, secret, ProxySettings(
+        prefs,
+        secret_store=secret,
+    )
 
 
 def test_proxy_defaults_and_disabled(tmp_path):
@@ -87,7 +101,13 @@ def test_proxy_migrates_legacy_host_and_plaintext_password(tmp_path):
 
 def test_proxy_save_clamps_port_and_url_encodes_credentials(tmp_path):
     prefs, secret, settings = make_proxy(tmp_path)
-    cfg = settings.save(enabled=True, host=" proxy.example ", port=70000, username="u s", password="p@ss")
+    cfg = settings.save(
+        enabled=True,
+        host=" proxy.example ",
+        port=70000,
+        username="u s",
+        password="p@ss",
+    )
     assert cfg.port == 65535
     assert cfg.host == "proxy.example"
     proxies = settings.requests_proxies(cfg)
@@ -100,12 +120,43 @@ def test_proxy_save_clamps_port_and_url_encodes_credentials(tmp_path):
 
 def test_proxy_test_messages_and_contract(tmp_path):
     prefs, secret, settings = make_proxy(tmp_path)
-    assert settings.test_connection(session=FakeSession()) == (False, "Ative o proxy antes de testar.")
-    settings.save(enabled=True, host="proxy.test", port=6060, username="", password="")
-    assert settings.test_connection(session=FakeSession()) == (False, "Informe usuário e senha do proxy.")
-    settings.save(enabled=True, host="proxy.test", port=6060, username="u", password="p")
+    assert settings.test_connection(
+        session=FakeSession()
+    ) == (
+        False,
+        "Ative o proxy antes de testar.",
+    )
+
+    settings.save(
+        enabled=True,
+        host="proxy.test",
+        port=6060,
+        username="",
+        password="",
+    )
+    assert settings.test_connection(
+        session=FakeSession()
+    ) == (
+        False,
+        "Informe usuário e senha do proxy.",
+    )
+
+    settings.save(
+        enabled=True,
+        host="proxy.test",
+        port=6060,
+        username="u",
+        password="p",
+    )
     session = FakeSession(204)
-    assert settings.test_connection(session=session) == (True, "Conexão pelo proxy realizada com sucesso.")
+
+    assert settings.test_connection(
+        session=session
+    ) == (
+        True,
+        "Conexão pelo proxy realizada com sucesso.",
+    )
+
     url, kwargs = session.calls[-1]
     assert url.endswith("/generate_204")
     assert kwargs["timeout"] == 12
@@ -114,43 +165,99 @@ def test_proxy_test_messages_and_contract(tmp_path):
 
 def test_proxy_error_message_redacts_password(tmp_path):
     prefs, secret, settings = make_proxy(tmp_path)
-    settings.save(enabled=True, host="proxy.test", port=6060, username="u", password="senha-super-secreta")
-    session = FakeSession(error=RuntimeError("falha http://u:senha-super-secreta@proxy.test:6060"))
-    ok, message = settings.test_connection(session=session)
+    settings.save(
+        enabled=True,
+        host="proxy.test",
+        port=6060,
+        username="u",
+        password="senha-super-secreta",
+    )
+    session = FakeSession(
+        error=RuntimeError(
+            "falha http://u:senha-super-secreta@proxy.test:6060"
+        )
+    )
+    ok, message = settings.test_connection(
+        session=session
+    )
     assert ok is False
     assert "senha-super-secreta" not in message
     assert "***" in message
 
 
+@pytest.mark.skipif(
+    os.name != "nt",
+    reason="Contrato do Registry é específico do Windows",
+)
 def test_startup_command_and_registry_values(tmp_path):
-    backend = FakeRegistry()
+    registry = FakeRegistry()
+    backend = WindowsStartupBackend(registry)
     mgr = StartupManager(backend)
-    exe = tmp_path / "Monitor de Noticias" / "MonitorDeNoticias.exe"
-    assert mgr.configure(True, executable=exe) is True
-    assert backend.values[(RUN_KEY, VALUE_NAME)] == f'"{exe}"'
+
+    exe = (
+        tmp_path
+        / "Monitor de Noticias"
+        / "MonitorDeNoticias.exe"
+    )
+
+    assert mgr.configure(
+        True,
+        executable=exe,
+    ) is True
+
+    assert registry.values[
+        (RUN_KEY, VALUE_NAME)
+    ] == f'"{exe}"'
+
     assert startup_command(exe) == f'"{exe}"'
+
     assert mgr.configure(False) is True
-    assert (RUN_KEY, VALUE_NAME) not in backend.values
+    assert (RUN_KEY, VALUE_NAME) not in registry.values
 
 
-def test_notification_adapter_preserves_title_and_message():
+def test_notification_adapter_applies_current_brand_and_preserves_message():
     class Tray:
-        def __init__(self): self.calls=[]
-        def showMessage(self, title, message): self.calls.append((title, message))
+        def __init__(self):
+            self.calls=[]
+        def showMessage(self, title, message):
+            self.calls.append((title, message))
+
     tray = Tray()
     notify = WindowsTrayNotifier(tray)
-    notify("Monitor de Notícias", "✓ 1 nova(s) notícia(s)")
-    assert tray.calls == [("Monitor de Notícias", "✓ 1 nova(s) notícia(s)")]
+
+    notify(
+        "Monitor de Notícias",
+        "✓ 1 nova(s) notícia(s)",
+    )
+
+    assert tray.calls == [
+        (
+            "Central Inteligente de Mídia",
+            "✓ 1 nova(s) notícia(s)",
+        )
+    ]
 
 
 def test_process_runner_exit_stdout_and_space_argument(tmp_path):
     runner = HiddenProcessRunner()
-    script = "import sys; print(sys.argv[1]); print('ERR', file=sys.stderr); raise SystemExit(7)"
+    script = (
+        "import sys; "
+        "print(sys.argv[1]); "
+        "print('ERR', file=sys.stderr); "
+        "raise SystemExit(7)"
+    )
+
     result = runner.run(
-        [sys.executable, "-c", script, "argumento com espacos"],
+        [
+            sys.executable,
+            "-c",
+            script,
+            "argumento com espacos",
+        ],
         directory=tmp_path,
         timeout=10,
     )
+
     assert result.exit_code == 7
     assert "argumento com espacos" in result.output
     assert "ERR" in result.output
@@ -158,27 +265,47 @@ def test_process_runner_exit_stdout_and_space_argument(tmp_path):
 
 def test_process_runner_missing_file(tmp_path):
     runner = HiddenProcessRunner()
+
     with pytest.raises(FileNotFoundError):
-        runner.start(["__arquivo_que_nao_existe__.exe"], directory=tmp_path)
+        runner.start(
+            ["__arquivo_que_nao_existe__.exe"],
+            directory=tmp_path,
+        )
 
 
-@pytest.mark.skipif(os.name != "nt", reason="DPAPI real requer Windows")
+@pytest.mark.skipif(
+    os.name != "nt",
+    reason="DPAPI real requer Windows",
+)
 def test_dpapi_roundtrip_current_user(tmp_path):
-    store = DpapiTextStore(tmp_path / "test-secret.dpapi")
+    store = DpapiTextStore(
+        tmp_path / "test-secret.dpapi"
+    )
     store.save("segredo-ficticio")
-    raw = store.path.read_text(encoding="utf-8")
+    raw = store.path.read_text(
+        encoding="utf-8"
+    )
     assert "segredo-ficticio" not in raw
     assert store.load() == "segredo-ficticio"
     assert store.delete()
 
 
-@pytest.mark.skipif(os.name != "nt", reason="Compatibilidade .NET DPAPI requer Windows")
+@pytest.mark.skipif(
+    os.name != "nt",
+    reason="Compatibilidade .NET DPAPI requer Windows",
+)
 def test_dpapi_compatible_with_dotnet_protecteddata(tmp_path):
     import base64
-    from monitor_noticias.windows.dpapi import unprotect_text_from_base64, protect_text_to_base64
+    from monitor_noticias.windows.dpapi import (
+        unprotect_text_from_base64,
+        protect_text_to_base64,
+    )
 
     plain = "credencial-ficticia-step8"
-    plain_b64 = base64.b64encode(plain.encode("utf-8")).decode("ascii")
+    plain_b64 = base64.b64encode(
+        plain.encode("utf-8")
+    ).decode("ascii")
+
     protect_script = (
         "Add-Type -AssemblyName System.Security;"
         "$b=[Convert]::FromBase64String($env:STEP8_PLAIN);"
@@ -186,15 +313,32 @@ def test_dpapi_compatible_with_dotnet_protecteddata(tmp_path):
         "[System.Security.Cryptography.DataProtectionScope]::CurrentUser);"
         "[Console]::Write([Convert]::ToBase64String($e))"
     )
+
     env = os.environ.copy()
     env["STEP8_PLAIN"] = plain_b64
-    dotnet_blob = subprocess.run(
-        ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", protect_script],
-        capture_output=True, text=True, check=True, env=env
-    ).stdout.strip()
-    assert unprotect_text_from_base64(dotnet_blob) == plain
 
-    python_blob = protect_text_to_base64(plain)
+    dotnet_blob = subprocess.run(
+        [
+            "powershell.exe",
+            "-NoProfile",
+            "-NonInteractive",
+            "-Command",
+            protect_script,
+        ],
+        capture_output=True,
+        text=True,
+        check=True,
+        env=env,
+    ).stdout.strip()
+
+    assert unprotect_text_from_base64(
+        dotnet_blob
+    ) == plain
+
+    python_blob = protect_text_to_base64(
+        plain
+    )
+
     unprotect_script = (
         "Add-Type -AssemblyName System.Security;"
         "$e=[Convert]::FromBase64String($env:STEP8_BLOB);"
@@ -202,15 +346,30 @@ def test_dpapi_compatible_with_dotnet_protecteddata(tmp_path):
         "[System.Security.Cryptography.DataProtectionScope]::CurrentUser);"
         "[Console]::Write([Text.Encoding]::UTF8.GetString($p))"
     )
+
     env["STEP8_BLOB"] = python_blob
+
     decoded = subprocess.run(
-        ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", unprotect_script],
-        capture_output=True, text=True, check=True, env=env
+        [
+            "powershell.exe",
+            "-NoProfile",
+            "-NonInteractive",
+            "-Command",
+            unprotect_script,
+        ],
+        capture_output=True,
+        text=True,
+        check=True,
+        env=env,
     ).stdout
+
     assert decoded == plain
 
 
-@pytest.mark.skipif(os.name != "nt", reason="Registry real requer Windows")
+@pytest.mark.skipif(
+    os.name != "nt",
+    reason="Registry real requer Windows",
+)
 def test_winreg_backend_isolated_test_key():
     from monitor_noticias.windows.startup import WinRegBackend
     import winreg
@@ -218,15 +377,38 @@ def test_winreg_backend_isolated_test_key():
     path = r"Software\MonitorDeNoticias\Tests\Step8"
     name = "Step8Value"
     backend = WinRegBackend()
+
     try:
-        backend.set_string(path, name, "valor-ficticio")
-        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, path, 0, winreg.KEY_READ) as key:
-            value, value_type = winreg.QueryValueEx(key, name)
+        backend.set_string(
+            path,
+            name,
+            "valor-ficticio",
+        )
+
+        with winreg.OpenKey(
+            winreg.HKEY_CURRENT_USER,
+            path,
+            0,
+            winreg.KEY_READ,
+        ) as key:
+            value, value_type = winreg.QueryValueEx(
+                key,
+                name,
+            )
+
         assert value == "valor-ficticio"
         assert value_type == winreg.REG_SZ
+
     finally:
-        backend.delete_value(path, name)
+        backend.delete_value(
+            path,
+            name,
+        )
+
         try:
-            winreg.DeleteKey(winreg.HKEY_CURRENT_USER, path)
+            winreg.DeleteKey(
+                winreg.HKEY_CURRENT_USER,
+                path,
+            )
         except OSError:
             pass

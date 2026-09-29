@@ -9,7 +9,7 @@ def _client():
     )
 
 
-def _payload(version="1.1.1", must_change=True):
+def _payload(version="1.2.0", must_change=True):
     return {
         "ok": True,
         "token": "token",
