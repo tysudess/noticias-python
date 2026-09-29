@@ -516,7 +516,9 @@ class DigitalNewspapersPage(QWidget):
             else:
                 session = "Sem sessão"
 
-            if provider.supports_direct_pdf:
+            if provider.download_strategy == "pressreader_hd_images":
+                method = "Páginas HD"
+            elif provider.supports_direct_pdf:
                 method = "PDF direto"
             elif provider.official_pdf_documented:
                 method = "PDF oficial"
@@ -724,6 +726,11 @@ class DigitalNewspapersPage(QWidget):
                 "não passou na validação",
                 "respondeu http",
                 "não concluiu o carregamento",
+                "qualidade insuficiente",
+                "sequência de páginas",
+                "sequência das páginas",
+                "foram localizadas somente",
+                "precisa ser renovada",
             )
         ):
             self.progress.hide()
@@ -766,12 +773,17 @@ class DigitalNewspapersPage(QWidget):
         method: str,
     ) -> None:
         output = Path(path)
+        quality = (
+            "HD / pixels preservados"
+            if method == "PressReader - páginas HD"
+            else "Original / sem recompressão"
+        )
         entry = DigitalNewspaperHistoryEntry.completed(
             newspaper=provider.name,
             provider_id=provider.id,
             edition_date=self._date_value().isoformat(),
             pages=pages,
-            quality="Original / sem recompressão",
+            quality=quality,
             method=method,
             path=output,
         )

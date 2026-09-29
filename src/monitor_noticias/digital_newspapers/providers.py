@@ -28,6 +28,10 @@ class DigitalNewspaperProvider:
     edition_link_keywords: tuple[str, ...] = ()
     min_edition_pages: int = 10
     min_edition_bytes: int = 300_000
+    pressreader_page_url_template: str = ""
+    pressreader_max_pages: int = 180
+    pressreader_min_width: int = 1800
+    pressreader_target_width: int = 2200
 
     @property
     def can_try_download(self) -> bool:
@@ -82,6 +86,18 @@ class DigitalNewspaperProvider:
             seen.add(value)
             out.append(value)
         return tuple(out)
+
+    def pressreader_page_url(
+        self,
+        target_date: date,
+        page: int,
+    ) -> str:
+        template = self.pressreader_page_url_template.strip()
+        if not template:
+            return ""
+        values = self._date_values(target_date)
+        values["page"] = int(page)
+        return template.format(**values)
 
     def page_pdf_urls(
         self,
@@ -280,20 +296,42 @@ class ValorProvider(DigitalNewspaperProvider):
         super().__init__(
             id="valor-economico",
             name="Valor Econômico",
-            edition_url="https://jornaldigital.valor.globo.com/",
+            edition_url="https://valoreconomico.pressreader.com/valor-economico",
             entry_urls=(
-                "https://jornaldigital.valor.globo.com/revista-valor/",
+                "https://jornaldigital.valor.globo.com/",
                 "https://valor.globo.com/",
             ),
-            domains=("globo.com",),
-            edition_kind="Jornal impresso digitalizado",
-            download_strategy="authorized_export",
-            edition_link_keywords=("valor economico", "valor econômico", "jornal digital", "edicao", "edição", "jornal", "pdf"),
-            min_edition_pages=10,
+            domains=(
+                "pressreader.com",
+                "newspaperdirect.com",
+                "prcdn.co",
+                "globo.com",
+            ),
+            edition_kind="Edição completa via PressReader / páginas HD",
+            download_strategy="pressreader_hd_images",
+            date_selection="direct_url",
+            pressreader_page_url_template=(
+                "https://valoreconomico.pressreader.com/valor-economico/"
+                "{yyyymmdd}/page/{page}"
+            ),
+            pressreader_max_pages=180,
+            pressreader_min_width=1800,
+            pressreader_target_width=2200,
+            edition_link_keywords=(
+                "valor economico",
+                "valor econômico",
+                "pressreader",
+                "edicao",
+                "edição",
+                "jornal",
+            ),
+            min_edition_pages=8,
             min_edition_bytes=300_000,
             note=(
-                "A V80 usa o Jornal Digital do Valor como ponto de entrada e segue "
-                "somente recursos de download/exportação disponibilizados ao assinante."
+                "A V84 usa a estratégia já comprovada no APK Extrator Valor: abre a "
+                "edição autorizada no PressReader, identifica as imagens de página do "
+                "CDN prcdn.co, busca a maior resolução disponível e monta um único PDF "
+                "sem reduzir pixels. JPEG é incorporado sem recompressão."
             ),
         )
 

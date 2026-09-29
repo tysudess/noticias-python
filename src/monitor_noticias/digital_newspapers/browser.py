@@ -38,6 +38,10 @@ from monitor_noticias.app.paths import AppPaths
 from monitor_noticias.app.preferences import SharedPreferences
 from monitor_noticias.capas_tool.app import network as covers_network
 from monitor_noticias.digital_newspapers.providers import DigitalNewspaperProvider
+from monitor_noticias.digital_newspapers.pressreader_hd import (
+    PressReaderHdPdfThread,
+    pressreader_image_candidate_score,
+)
 from monitor_noticias.digital_newspapers.storage import (
     SecureCredentialStore,
     SecureSessionStore,
@@ -189,6 +193,23 @@ DOWNLOAD_PROBE_JS = r"""
     node.setAttribute('data-central-edition-candidate','1');
   }catch(e){}
   return JSON.stringify({ok:true, mode:'click_candidate', href:best.href || '', text:best.text, score:best.score});
+})()
+"""
+
+
+PRESSREADER_RESOURCES_JS = r"""
+(function(){
+  try{
+    var resources=(performance.getEntriesByType('resource')||[]).map(function(e){return e.name;});
+    return JSON.stringify({
+      href: location.href || '',
+      title: document.title || '',
+      hasPassword: !!document.querySelector('input[type="password"]'),
+      resources: resources
+    });
+  }catch(e){
+    return JSON.stringify({href:location.href||'',title:document.title||'',hasPassword:false,resources:[]});
+  }
 })()
 """
 
@@ -654,6 +675,12 @@ class DigitalNewspaperBrowserDialog(QDialog):
         self._edition_download_armed = False
         self._download_origin_auto = False
         self._direct_thread: DirectPdfDownloadThread | None = None
+        self._pressreader_thread: PressReaderHdPdfThread | None = None
+        self._valor_hd_active = False
+        self._valor_page_number = 0
+        self._valor_image_urls: dict[int, str] = {}
+        self._valor_probe_attempts = 0
+        self._valor_reload_attempts = 0
 
         self.setWindowTitle(
             f"Entrar / renovar sessão • {provider.name}"
@@ -1027,6 +1054,7 @@ class DigitalNewspaperBrowserDialog(QDialog):
         self.view.load(QUrl(target))
 
     def prepare_manual_login(self) -> None:
+        self._valor_hd_active = False
         self._auto_download_requested = False
         self._auto_download_active = False
         self._auto_entry_urls = ()
@@ -1212,6 +1240,10 @@ class DigitalNewspaperBrowserDialog(QDialog):
             )
             return
 
+        if self.provider.download_strategy == "pressreader_hd_images":
+            self._start_pressreader_hd_download()
+            return
+
         direct_url = self.provider.direct_pdf_url(self.target_date)
         if direct_url:
             self._start_direct_pdf_download(direct_url)
@@ -1237,6 +1269,231 @@ class DigitalNewspaperBrowserDialog(QDialog):
             f"{self.target_date.strftime('%d/%m/%Y')} nos leitores oficiais…"
         )
         self._advance_auto_entry()
+
+    def _start_pressreader_hd_download(self) -> None:
+        if self._pressreader_thread is not None and self._pressreader_thread.isRunning():
+            self._emit_status("O PDF HD do Valor já está sendo montado.")
+            return
+
+        first_url = self.provider.pressreader_page_url(self.target_date, 1)
+        if not first_url:
+            self._emit_status("O provedor não possui URL de páginas PressReader configurada.")
+            return
+
+        self._auto_download_active = False
+        self._auto_download_requested = True
+        self._valor_hd_active = True
+        self._valor_page_number = 1
+        self._valor_image_urls.clear()
+        self._valor_probe_attempts = 0
+        self._valor_reload_attempts = 0
+        self.download_button.setEnabled(False)
+        self._emit_status(
+            f"{self.provider.name}: abrindo página 01 da edição de "
+            f"{self.target_date.strftime('%d/%m/%Y')} no PressReader…"
+        )
+        self.view.load(QUrl(first_url))
+
+    def _pressreader_page_expected_path(self, page_number: int) -> str:
+        return (
+            f"/{self.target_date.strftime('%Y%m%d')}/page/{int(page_number)}"
+        )
+
+    def _pressreader_load_finished(self, ok: bool) -> None:
+        if not self._valor_hd_active:
+            return
+
+        if not ok:
+            if self._valor_reload_attempts < 1:
+                self._valor_reload_attempts += 1
+                QTimer.singleShot(800, self.view.reload)
+                return
+            self._finish_pressreader_hd_error(
+                "A página do PressReader não concluiu o carregamento. "
+                "Verifique internet, Proxy Geral ou autenticação."
+            )
+            return
+
+        self._autofill_saved_credentials(auto_submit=True)
+        self._valor_probe_attempts = 0
+        QTimer.singleShot(1800, self._probe_pressreader_resources)
+
+    def _probe_pressreader_resources(self) -> None:
+        if not self._valor_hd_active:
+            return
+
+        try:
+            self.page.runJavaScript(
+                PRESSREADER_RESOURCES_JS,
+                self._pressreader_probe_result,
+            )
+        except Exception as exc:
+            self._finish_pressreader_hd_error(
+                f"Não foi possível ler os recursos HD do PressReader: {exc}"
+            )
+
+    def _pressreader_probe_result(self, raw) -> None:
+        if not self._valor_hd_active:
+            return
+
+        try:
+            data = json.loads(str(raw or ""))
+        except Exception:
+            data = {}
+
+        current = str(data.get("href") or self.page.url().toString() or "")
+        has_password = bool(data.get("hasPassword"))
+        expected = self._pressreader_page_expected_path(self._valor_page_number)
+
+        if has_password or any(
+            marker in current.lower()
+            for marker in ("/login", "/signin", "sign-in", "/auth")
+        ):
+            self._autofill_saved_credentials(auto_submit=True)
+            if self._valor_probe_attempts < 2:
+                self._valor_probe_attempts += 1
+                QTimer.singleShot(1700, self._probe_pressreader_resources)
+                return
+            self._finish_pressreader_hd_error(
+                "A sessão do PressReader precisa ser renovada. Use “Entrar / renovar sessão” "
+                "uma vez e tente novamente."
+            )
+            return
+
+        resources = data.get("resources")
+        if not isinstance(resources, list):
+            resources = []
+
+        best_url = ""
+        best_score = -1
+        for item in resources:
+            url = str(item or "").strip()
+            score = pressreader_image_candidate_score(
+                url,
+                expected_page=self._valor_page_number,
+            )
+            if score is not None and score > best_score:
+                best_url = url
+                best_score = score
+
+        if best_url:
+            page_number = self._valor_page_number
+            self._valor_image_urls[page_number] = best_url
+            self._emit_status(
+                f"{self.provider.name}: página {page_number:02d} localizada no CDN HD."
+            )
+            self._valor_page_number += 1
+            self._valor_probe_attempts = 0
+            self._valor_reload_attempts = 0
+
+            if self._valor_page_number > int(self.provider.pressreader_max_pages):
+                self._finish_pressreader_collection()
+                return
+
+            next_url = self.provider.pressreader_page_url(
+                self.target_date,
+                self._valor_page_number,
+            )
+            QTimer.singleShot(350, lambda: self.view.load(QUrl(next_url)))
+            return
+
+        if self._valor_probe_attempts < 3:
+            self._valor_probe_attempts += 1
+            try:
+                self.page.runJavaScript(
+                    "(function(){try{window.scrollTo(0,0);window.dispatchEvent(new Event('resize'));}catch(e){} return true;})()"
+                )
+            except Exception:
+                pass
+            QTimer.singleShot(1200, self._probe_pressreader_resources)
+            return
+
+        # Uma recarga reduz o risco de considerar como fim da edição uma página
+        # que apenas demorou a renderizar no Chromium oculto.
+        if self._valor_reload_attempts < 1 and expected in current:
+            self._valor_reload_attempts += 1
+            self._valor_probe_attempts = 0
+            self._emit_status(
+                f"{self.provider.name}: página {self._valor_page_number:02d} demorou a carregar; tentando novamente…"
+            )
+            self.view.reload()
+            return
+
+        collected = len(self._valor_image_urls)
+        if collected >= int(self.provider.min_edition_pages):
+            self._finish_pressreader_collection()
+            return
+
+        if expected not in current:
+            detail = "a edição/data não foi aberta pelo PressReader"
+        else:
+            detail = "não apareceu uma imagem de página válida no CDN"
+        self._finish_pressreader_hd_error(
+            f"{detail}. Foram localizadas somente {collected} páginas; "
+            f"o mínimo esperado é {self.provider.min_edition_pages}."
+        )
+
+    def _finish_pressreader_collection(self) -> None:
+        if not self._valor_hd_active:
+            return
+
+        self._valor_hd_active = False
+        self._auto_download_requested = False
+        self._save_cookie_vault()
+
+        pages = sorted(self._valor_image_urls)
+        if not pages or pages != list(range(1, pages[-1] + 1)):
+            self._finish_pressreader_hd_error(
+                "A sequência das páginas do Valor veio incompleta. Nenhum PDF foi gerado."
+            )
+            return
+
+        target = _output_target(self.paths, self.provider, self.target_date)
+        thread = PressReaderHdPdfThread(
+            paths=self.paths,
+            provider=self.provider,
+            target_date=self.target_date,
+            page_urls=dict(self._valor_image_urls),
+            output_path=target,
+            parent=self,
+        )
+        thread.status_changed.connect(self._emit_status)
+        thread.failed.connect(self._pressreader_thread_failed)
+        thread.completed.connect(self._pressreader_thread_completed)
+        thread.finished.connect(self._pressreader_thread_finished)
+        self._pressreader_thread = thread
+        self._emit_status(
+            f"{self.provider.name}: {len(pages)} páginas localizadas; baixando as imagens HD…"
+        )
+        thread.start()
+
+    def _finish_pressreader_hd_error(self, message: str) -> None:
+        self._valor_hd_active = False
+        self._auto_download_requested = False
+        self.download_button.setEnabled(self.provider.can_try_download)
+        self._emit_status(f"{self.provider.name}: {message}")
+
+    def _pressreader_thread_failed(self, message: str) -> None:
+        self.download_button.setEnabled(self.provider.can_try_download)
+        self._emit_status(f"{self.provider.name}: {message}")
+
+    def _pressreader_thread_completed(
+        self,
+        path: str,
+        pages: int,
+        method: str,
+    ) -> None:
+        self.download_button.setEnabled(self.provider.can_try_download)
+        self._emit_status(
+            f"{self.provider.name}: PDF HD concluído com {pages} páginas: {path}"
+        )
+        self.pdf_completed.emit(path, pages, method)
+
+    def _pressreader_thread_finished(self) -> None:
+        thread = self._pressreader_thread
+        self._pressreader_thread = None
+        if thread is not None:
+            thread.deleteLater()
 
     def _start_direct_pdf_download(self, url: str) -> None:
         if self._direct_thread is not None and self._direct_thread.isRunning():
@@ -1284,6 +1541,10 @@ class DigitalNewspaperBrowserDialog(QDialog):
             thread.deleteLater()
 
     def _load_finished(self, ok: bool) -> None:
+        if self._valor_hd_active:
+            self._pressreader_load_finished(ok)
+            return
+
         if not ok:
             if self._auto_download_active:
                 self._advance_auto_entry()
@@ -1600,9 +1861,14 @@ class DigitalNewspaperBrowserDialog(QDialog):
         self.status_changed.emit(text)
 
     def shutdown(self) -> None:
+        self._valor_hd_active = False
         if self._direct_thread is not None and self._direct_thread.isRunning():
             self._direct_thread.requestInterruption()
             self._direct_thread.wait(1500)
+
+        if self._pressreader_thread is not None and self._pressreader_thread.isRunning():
+            self._pressreader_thread.requestInterruption()
+            self._pressreader_thread.wait(1800)
 
         if self._cookie_save_timer.isActive():
             self._cookie_save_timer.stop()

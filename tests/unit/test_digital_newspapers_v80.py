@@ -23,8 +23,10 @@ def test_v80_uses_the_real_reader_entry_points():
     assert get_provider("o-globo").edition_url == (
         "https://jornaldigital.oglobo.globo.com/"
     )
+    # V84 substituiu somente o ponto de entrada do Valor pelo fluxo PressReader
+    # já comprovado no APK Extrator Valor. Os demais leitores da V80 permanecem.
     assert get_provider("valor-economico").edition_url == (
-        "https://jornaldigital.valor.globo.com/"
+        "https://valoreconomico.pressreader.com/valor-economico"
     )
     assert get_provider("a-tarde").edition_url == (
         "https://flip.atarde.com.br/edicaodehoje/"
