@@ -3,6 +3,8 @@ from __future__ import annotations
 from datetime import datetime
 import json
 import logging
+import threading
+import time
 from typing import Any
 
 import requests
@@ -43,6 +45,15 @@ class AuthApiError(RuntimeError):
 
 
 class AuthApiClient:
+    """Cliente de autenticação com sessão HTTP reutilizável.
+
+    V88:
+    - reaproveita conexão/TLS entre operações;
+    - separa timeout de conexão do timeout de resposta;
+    - mede o tempo real do Apps Script sem registrar credenciais;
+    - preserva a política V71 do Proxy Geral.
+    """
+
     def __init__(
         self,
         api_url: str,
@@ -55,6 +66,27 @@ class AuthApiClient:
         self.device = device
         self.proxy_settings = proxy_settings
         self.timeout = float(timeout)
+
+        self.connect_timeout = min(
+            6.0,
+            max(3.0, self.timeout / 3.0),
+        )
+        self.read_timeout = self.timeout
+
+        self._session = requests.Session()
+        self._request_lock = threading.RLock()
+        self._last_request_ms = 0
+
+    @property
+    def last_request_ms(self) -> int:
+        return int(self._last_request_ms)
+
+    @property
+    def request_timeout(self) -> tuple[float, float]:
+        return (
+            float(self.connect_timeout),
+            float(self.read_timeout),
+        )
 
     def _proxy_config(self):
         if self.proxy_settings is None:
@@ -98,16 +130,19 @@ class AuthApiClient:
             proxies = self._proxies(cfg)
             verify = self.proxy_settings.requests_verify(cfg)
 
-        session = requests.Session()
+        # V71 preservado: quando o Proxy Geral está ativo, não herdar
+        # HTTP_PROXY/HTTPS_PROXY/NO_PROXY do Windows/Ubuntu.
+        self._session.trust_env = not (
+            cfg is not None
+            and cfg.enabled
+        )
 
-        # V71:
-        # Proxy Geral ativo = não herdar HTTP_PROXY/HTTPS_PROXY/NO_PROXY
-        # do Ubuntu/Windows. A sessão usa exclusivamente a configuração
-        # escolhida dentro da Central.
-        if cfg is not None and cfg.enabled:
-            session.trust_env = False
-
-        return session, cfg, proxies, verify
+        return (
+            self._session,
+            cfg,
+            proxies,
+            verify,
+        )
 
     def _headers(
         self,
@@ -115,18 +150,51 @@ class AuthApiClient:
         post: bool = False,
     ) -> dict[str, str]:
         headers = {
-            "User-Agent": "CentralInteligenteDeMidia/AuthClient-1.2",
+            "User-Agent": "CentralInteligenteDeMidia/AuthClient-1.3",
             "Accept": "application/json",
             "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
         }
 
         if post:
-            # O Apps Script lê e faz JSON.parse(e.postData.contents),
-            # portanto o conteúdo continua JSON, mas usamos text/plain
-            # para máxima compatibilidade com filtros/proxies corporativos.
             headers["Content-Type"] = "text/plain; charset=utf-8"
 
         return headers
+
+    def _perform_request(
+        self,
+        method: str,
+        *,
+        operation: str,
+        **kwargs,
+    ) -> requests.Response:
+        started = time.monotonic()
+
+        try:
+            with self._request_lock:
+                response = self._session.request(
+                    method,
+                    self.api_url,
+                    timeout=self.request_timeout,
+                    allow_redirects=True,
+                    **kwargs,
+                )
+
+            return response
+
+        finally:
+            elapsed = int(
+                (time.monotonic() - started)
+                * 1000
+            )
+            self._last_request_ms = elapsed
+
+            # Não registra URL com credenciais, payload, token ou senha.
+            log.info(
+                "AUTH timing: operação=%s duração_ms=%s",
+                operation,
+                elapsed,
+            )
 
     @staticmethod
     def _safe_response_excerpt(
@@ -140,7 +208,6 @@ class AuthApiClient:
         if not text:
             return ""
 
-        # Limita para não despejar páginas HTML inteiras na interface.
         return " ".join(text.split())[:220]
 
     def _http_error(
@@ -202,7 +269,6 @@ class AuthApiClient:
     ) -> AuthApiError:
         detail = str(exc) or exc.__class__.__name__
 
-        # Nunca expõe credencial de proxy nos detalhes.
         if self.proxy_settings is not None:
             try:
                 cfg = self.proxy_settings.load()
@@ -222,13 +288,12 @@ class AuthApiClient:
         )
 
     def test_server(self) -> tuple[bool, str]:
-        session, _cfg, proxies, verify = self._request_context()
+        _session, _cfg, proxies, verify = self._request_context()
 
         try:
-            response = session.get(
-                self.api_url,
-                timeout=self.timeout,
-                allow_redirects=True,
+            response = self._perform_request(
+                "GET",
+                operation="test_get",
                 proxies=proxies,
                 verify=verify,
                 headers=self._headers(),
@@ -258,7 +323,7 @@ class AuthApiClient:
 
                 return True, (
                     "Servidor de autenticação acessível "
-                    f"(versão {version})."
+                    f"(versão {version}; {self.last_request_ms} ms)."
                 )
 
             return False, "Servidor respondeu, mas não confirmou status online."
@@ -287,28 +352,24 @@ class AuthApiClient:
                 + (str(exc) or exc.__class__.__name__)
             )
 
-        finally:
-            session.close()
-
     def test_post_transport(self) -> tuple[bool, str]:
         """Testa o mesmo canal POST usado no login sem enviar senha real."""
 
-        session, _cfg, proxies, verify = self._request_context()
+        _session, _cfg, proxies, verify = self._request_context()
 
         payload = {
             "action": "__connection_test__",
         }
 
         try:
-            response = session.post(
-                self.api_url,
+            response = self._perform_request(
+                "POST",
+                operation="test_post",
                 data=json.dumps(
                     payload,
                     ensure_ascii=False,
                     separators=(",", ":"),
                 ).encode("utf-8"),
-                timeout=self.timeout,
-                allow_redirects=True,
                 proxies=proxies,
                 verify=verify,
                 headers=self._headers(post=True),
@@ -323,16 +384,18 @@ class AuthApiClient:
             if not isinstance(data, dict):
                 return False, "POST respondeu, mas o conteúdo não é JSON."
 
-            # A ação propositalmente não existe. Se o Apps Script responder
-            # UNKNOWN_ACTION, o POST chegou ao doPost() corretamente.
             code = str(data.get("code") or "").strip().upper()
 
             if code == "UNKNOWN_ACTION":
-                return True, "Canal POST do login acessível pelo proxy."
+                return True, (
+                    "Canal POST do login acessível pelo proxy "
+                    f"({self.last_request_ms} ms)."
+                )
 
-            # Também aceitamos qualquer JSON válido do servidor: o transporte
-            # chegou ao Apps Script.
-            return True, "Canal POST do login respondeu corretamente."
+            return True, (
+                "Canal POST do login respondeu corretamente "
+                f"({self.last_request_ms} ms)."
+            )
 
         except requests.exceptions.ProxyError:
             return False, "O proxy recusou a conexão POST do login."
@@ -352,22 +415,26 @@ class AuthApiClient:
                 + (str(exc) or exc.__class__.__name__)
             )
 
-        finally:
-            session.close()
+    def _post(
+        self,
+        payload: dict[str, Any],
+    ) -> dict[str, Any]:
+        _session, _cfg, proxies, verify = self._request_context()
 
-    def _post(self, payload: dict[str, Any]) -> dict[str, Any]:
-        session, _cfg, proxies, verify = self._request_context()
+        operation = str(
+            payload.get("action")
+            or "post"
+        ).strip() or "post"
 
         try:
-            response = session.post(
-                self.api_url,
+            response = self._perform_request(
+                "POST",
+                operation=operation,
                 data=json.dumps(
                     payload,
                     ensure_ascii=False,
                     separators=(",", ":"),
                 ).encode("utf-8"),
-                timeout=self.timeout,
-                allow_redirects=True,
                 proxies=proxies,
                 verify=verify,
                 headers=self._headers(post=True),
@@ -399,9 +466,6 @@ class AuthApiClient:
 
         except requests.exceptions.RequestException as exc:
             raise self._network_error(exc) from exc
-
-        finally:
-            session.close()
 
         try:
             data = response.json()
@@ -501,6 +565,12 @@ class AuthApiClient:
                 "device_id": self.device.device_id,
             }
         )
+
+    def close(self) -> None:
+        try:
+            self._session.close()
+        except Exception:
+            pass
 
     @staticmethod
     def _session_from(data: dict[str, Any]) -> AuthSession:
