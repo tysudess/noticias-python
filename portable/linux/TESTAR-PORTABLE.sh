@@ -78,6 +78,10 @@ echo "DISPLAY=${DISPLAY:-}"
 echo "WAYLAND_DISPLAY=${WAYLAND_DISPLAY:-}"
 echo "XDG_SESSION_TYPE=${XDG_SESSION_TYPE:-}"
 
+if [ "${XDG_SESSION_TYPE:-}" = "wayland" ]; then
+  echo "[AVISO] Sessão Wayland: o gravador x11grab exige Ubuntu on Xorg para captura completa."
+fi
+
 echo
 echo "Dependências do executável principal:"
 if command -v ldd >/dev/null 2>&1; then
@@ -100,6 +104,47 @@ echo "Versões dos binários:"
 "$HERE/bin/ffprobe" -version 2>/dev/null | head -n 1 || true
 "$HERE/bin/yt-dlp" --version 2>/dev/null || true
 "$HERE/bin/deno" --version 2>/dev/null | head -n 3 || true
+
+echo
+echo "FFmpeg / captura X11:"
+if [ -x "$HERE/bin/ffmpeg" ]; then
+  FFMPEG_DEVICES="$($HERE/bin/ffmpeg -hide_banner -devices 2>&1 || true)"
+
+  if printf '%s\n' "$FFMPEG_DEVICES" | grep -qi "x11grab"; then
+    echo "[OK] FFmpeg possui o dispositivo x11grab"
+  else
+    echo "[ERRO] FFmpeg do portable não possui x11grab"
+    fail=1
+  fi
+
+  if [ -n "${DISPLAY:-}" ] && [ "${XDG_SESSION_TYPE:-x11}" != "wayland" ]; then
+    X11_PROBE_LOG="$HERE/logs/diagnostico-x11grab.txt"
+
+    timeout 8 \
+      "$HERE/bin/ffmpeg" \
+      -hide_banner \
+      -loglevel error \
+      -f x11grab \
+      -framerate 1 \
+      -video_size 16x16 \
+      -i "${DISPLAY}+0,0" \
+      -frames:v 1 \
+      -f null - \
+      >"$X11_PROBE_LOG" 2>&1
+
+    X11_STATUS=$?
+
+    if [ "$X11_STATUS" -eq 0 ]; then
+      echo "[OK] x11grab abriu o DISPLAY ${DISPLAY} e capturou 1 frame"
+    else
+      echo "[ERRO] x11grab não conseguiu capturar o DISPLAY ${DISPLAY} (código $X11_STATUS)"
+      tail -n 20 "$X11_PROBE_LOG" || true
+      fail=1
+    fi
+  else
+    echo "[INFO] Teste real de 1 frame não executado: DISPLAY X11 não disponível nesta execução."
+  fi
+fi
 
 echo
 echo "Áudio:"

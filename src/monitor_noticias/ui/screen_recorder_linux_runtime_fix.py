@@ -4,12 +4,8 @@ import os
 from pathlib import Path
 import sys
 
-from monitor_noticias.platform.current import (
-    linux_session_type,
-)
-from monitor_noticias.ui.screen_recorder_page import (
-    ScreenRecorderPage,
-)
+from monitor_noticias.platform.current import linux_session_type
+from monitor_noticias.ui.screen_recorder_page import ScreenRecorderPage
 
 
 _INSTALLED = False
@@ -26,24 +22,35 @@ def _write_runtime_diagnostic(page) -> None:
             exist_ok=True,
         )
 
-        ffprobe = (
-            Path(page.app_root)
-            / "bin"
-            / "ffprobe"
-        )
+        ffmpeg = Path(page.ffmpeg)
+        runtime_paths = getattr(page, "_runtime_paths", None)
+
+        if runtime_paths is not None:
+            try:
+                ffprobe = Path(
+                    runtime_paths.runtime_binary("ffprobe")
+                )
+            except Exception:
+                ffprobe = Path(page.app_root) / "bin" / "ffprobe"
+        else:
+            ffprobe = Path(page.app_root) / "bin" / "ffprobe"
 
         log_path.write_text(
             "\n".join(
                 [
-                    "Central V97 — Gravador Ubuntu",
+                    "Central V98 — Gravador Ubuntu",
                     f"session={linux_session_type()}",
                     f"DISPLAY={os.environ.get('DISPLAY', '')}",
                     f"WAYLAND_DISPLAY={os.environ.get('WAYLAND_DISPLAY', '')}",
+                    f"XDG_SESSION_TYPE={os.environ.get('XDG_SESSION_TYPE', '')}",
                     f"bundle_root={page.app_root}",
-                    f"ffmpeg={page.ffmpeg}",
-                    f"ffmpeg_exists={Path(page.ffmpeg).is_file()}",
+                    f"logs_dir={page.logs_dir}",
+                    f"ffmpeg={ffmpeg}",
+                    f"ffmpeg_exists={ffmpeg.is_file()}",
+                    f"ffmpeg_executable={os.access(ffmpeg, os.X_OK)}",
                     f"ffprobe={ffprobe}",
                     f"ffprobe_exists={ffprobe.is_file()}",
+                    f"ffprobe_executable={os.access(ffprobe, os.X_OK)}",
                 ]
             )
             + "\n",
@@ -56,12 +63,11 @@ def _write_runtime_diagnostic(page) -> None:
 def install_screen_recorder_linux_runtime_fix() -> None:
     """Reaplica os binários do bundle depois do patch A/V V95.
 
-    No Linux, linux_boot_patch cria diretórios graváveis usando state_root e
-    depois aponta FFmpeg para o bundle. A V95 voltava a resolver FFmpeg usando
-    self.app_root (state_root), sobrescrevendo o caminho correto com um
-    `.../bin/ffmpeg` inexistente.
-
-    Este patch é instalado DEPOIS da V95 e corrige apenas Linux.
+    A implementação original da página recebe no Linux a raiz gravável para os
+    diretórios de dados. O patch A/V V95 voltava a resolver ``bin/ffmpeg`` a
+    partir dessa raiz e podia apontar para um arquivo inexistente. O bundle real
+    continua sendo a fonte de FFmpeg/FFprobe; logs/temp/vídeos permanecem no
+    state_root gravável.
     """
 
     global _INSTALLED
@@ -109,29 +115,16 @@ def install_screen_recorder_linux_runtime_fix() -> None:
                     )
                 )
             except Exception:
-                ffmpeg = (
-                    bundle_root
-                    / "bin"
-                    / "ffmpeg"
-                )
+                ffmpeg = bundle_root / "bin" / "ffmpeg"
         else:
-            ffmpeg = (
-                bundle_root
-                / "bin"
-                / "ffmpeg"
-            )
+            ffmpeg = bundle_root / "bin" / "ffmpeg"
 
-        # Importante: os diretórios de gravação/log/temp já foram definidos
-        # durante __init__ para o state_root gravável. Alterar app_root aqui
-        # só corrige as consultas V95 a bin/ffmpeg e bin/ffprobe.
         self.app_root = bundle_root
         self.ffmpeg = ffmpeg
 
-        _write_runtime_diagnostic(
-            self
-        )
+        _write_runtime_diagnostic(self)
 
-    patched_init._central_linux_runtime_v97 = True
+    patched_init._central_linux_runtime_v98 = True
     cls.__init__ = patched_init
 
     _INSTALLED = True

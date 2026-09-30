@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 import os
+from pathlib import Path
 import subprocess
 import time
 
@@ -19,6 +20,23 @@ from monitor_noticias.ui.screen_recorder_linux import (
 
 
 _INSTALLED = False
+_X11_PREFLIGHT_CACHE: dict[tuple[str, str], tuple[bool, str]] = {}
+
+
+def _append_log(page, message: str) -> None:
+    try:
+        path = Path(page.logs_dir) / "screen_recorder.log"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open(
+            "a",
+            encoding="utf-8",
+            errors="ignore",
+        ) as handle:
+            handle.write(
+                f"[LINUX V98] {datetime.now().isoformat()} | {message}\n"
+            )
+    except Exception:
+        pass
 
 
 def _display_input(rect: QRect) -> str:
@@ -30,6 +48,122 @@ def _display_input(rect: QRect) -> str:
         )
 
     return f"{display}+{rect.x()},{rect.y()}"
+
+
+def _ffmpeg_supports_x11grab(ffmpeg: Path) -> tuple[bool, str]:
+    try:
+        cp = subprocess.run(
+            [
+                str(ffmpeg),
+                "-hide_banner",
+                "-devices",
+            ],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=8,
+            check=False,
+        )
+    except Exception as exc:
+        return False, f"não foi possível consultar FFmpeg: {exc}"
+
+    output = cp.stdout or ""
+
+    if cp.returncode != 0:
+        return False, (
+            f"FFmpeg -devices retornou código {cp.returncode}: "
+            + " ".join(output.split())[-500:]
+        )
+
+    if "x11grab" not in output.lower():
+        return False, (
+            "o FFmpeg incluído no portable não possui o dispositivo x11grab"
+        )
+
+    return True, "x11grab disponível"
+
+
+def _probe_x11_capture(ffmpeg: Path) -> tuple[bool, str]:
+    """Executa uma captura real de 1 frame para validar DISPLAY/Xauthority."""
+
+    display = (os.environ.get("DISPLAY") or "").strip()
+    key = (str(ffmpeg), display)
+
+    cached = _X11_PREFLIGHT_CACHE.get(key)
+    if cached is not None:
+        return cached
+
+    supported, detail = _ffmpeg_supports_x11grab(ffmpeg)
+    if not supported:
+        result = (False, detail)
+        _X11_PREFLIGHT_CACHE[key] = result
+        return result
+
+    if not display:
+        result = (False, "DISPLAY não está definido")
+        _X11_PREFLIGHT_CACHE[key] = result
+        return result
+
+    command = [
+        str(ffmpeg),
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-f",
+        "x11grab",
+        "-framerate",
+        "1",
+        "-video_size",
+        "16x16",
+        "-i",
+        f"{display}+0,0",
+        "-frames:v",
+        "1",
+        "-f",
+        "null",
+        "-",
+    ]
+
+    try:
+        cp = subprocess.run(
+            command,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=6,
+            check=False,
+        )
+    except subprocess.TimeoutExpired:
+        result = (
+            False,
+            "o teste x11grab excedeu 6 s ao acessar o DISPLAY",
+        )
+        _X11_PREFLIGHT_CACHE[key] = result
+        return result
+    except Exception as exc:
+        result = (
+            False,
+            f"falha ao executar o teste x11grab: {exc}",
+        )
+        _X11_PREFLIGHT_CACHE[key] = result
+        return result
+
+    if cp.returncode != 0:
+        tail = " ".join((cp.stdout or "").split())[-700:]
+        result = (
+            False,
+            f"x11grab não conseguiu ler {display} (código {cp.returncode}): {tail}",
+        )
+        _X11_PREFLIGHT_CACHE[key] = result
+        return result
+
+    result = (True, f"x11grab validado em {display}")
+    _X11_PREFLIGHT_CACHE[key] = result
+    return result
 
 
 def _patch_audio(cls) -> None:
@@ -126,6 +260,14 @@ def _patch_audio(cls) -> None:
     cls._load_audio_devices = patched
 
 
+def _set_toggle_off(self, message: str) -> None:
+    self.power_button.blockSignals(True)
+    self.power_button.setChecked(False)
+    self.power_button.blockSignals(False)
+    self._module_enabled = False
+    self._apply_state(self.OFF, message)
+
+
 def _patch_toggle(cls) -> None:
     original = cls._toggle_module
 
@@ -175,53 +317,72 @@ def _patch_toggle(cls) -> None:
             return
 
         session = linux_session_type()
+        display = (os.environ.get("DISPLAY") or "").strip()
+        wayland_display = (
+            os.environ.get("WAYLAND_DISPLAY") or ""
+        ).strip()
+
+        _append_log(
+            self,
+            "ativação: "
+            f"session={session} DISPLAY={display!r} "
+            f"WAYLAND_DISPLAY={wayland_display!r} ffmpeg={self.ffmpeg}",
+        )
 
         if session == "wayland":
-            self.power_button.blockSignals(True)
-            self.power_button.setChecked(False)
-            self.power_button.blockSignals(False)
-            self._module_enabled = False
-
-            self._apply_state(
-                self.OFF,
-                "Wayland detectado. A captura requer "
-                "autorização pelo portal ScreenCast/PipeWire.",
+            _set_toggle_off(
+                self,
+                "Wayland detectado. O backend x11grab não pode gravar "
+                "com segurança a área de trabalho Wayland completa.",
             )
 
             QMessageBox.information(
                 self,
                 "Gravador de Tela — Wayland",
-                "Esta sessão usa Wayland.\n\n"
-                "A captura precisa passar pelo portal ScreenCast "
-                "do sistema, com autorização explícita do usuário.\n\n"
-                "O backend X11 já está ativo nesta versão; "
-                "o portal Wayland será conectado na próxima etapa.",
+                "Esta sessão usa Wayland. O x11grab do FFmpeg só captura "
+                "uma sessão X11 real; usar o DISPLAY do XWayland poderia "
+                "gerar vídeo incompleto ou preto.\n\n"
+                "Para gravação completa no Ubuntu, entre em uma sessão "
+                "‘Ubuntu on Xorg’. O diagnóstico foi gravado em "
+                "logs/screen_recorder.log.",
             )
             return
 
-        if session != "x11" or not os.environ.get("DISPLAY"):
-            self.power_button.blockSignals(True)
-            self.power_button.setChecked(False)
-            self.power_button.blockSignals(False)
-            self._module_enabled = False
-
-            self._apply_state(
-                self.OFF,
-                "Não foi possível identificar uma sessão X11 "
-                "compatível para captura.",
+        if session != "x11" or not display:
+            _set_toggle_off(
+                self,
+                "Não foi possível identificar uma sessão X11 com DISPLAY.",
             )
             return
 
-        if not self.ffmpeg.is_file():
-            self.power_button.blockSignals(True)
-            self.power_button.setChecked(False)
-            self.power_button.blockSignals(False)
-            self._module_enabled = False
+        if not Path(self.ffmpeg).is_file():
+            _set_toggle_off(
+                self,
+                "FFmpeg do Ubuntu não foi encontrado.",
+            )
 
             QMessageBox.critical(
                 self,
                 "FFmpeg não encontrado",
-                "O binário FFmpeg do Ubuntu não foi encontrado.",
+                f"O binário FFmpeg não foi encontrado em:\n{self.ffmpeg}",
+            )
+            return
+
+        ok, diagnostic = _probe_x11_capture(
+            Path(self.ffmpeg)
+        )
+        _append_log(self, "preflight x11: " + diagnostic)
+
+        if not ok:
+            _set_toggle_off(
+                self,
+                "FFmpeg/x11grab não conseguiu acessar a sessão gráfica.",
+            )
+            QMessageBox.critical(
+                self,
+                "Falha no x11grab",
+                diagnostic
+                + "\n\nDetalhes: logs/screen_recorder.log",
             )
             return
 
@@ -233,7 +394,7 @@ def _patch_toggle(cls) -> None:
 
         self._apply_state(
             self.IDLE,
-            "Gravador Ubuntu X11 ligado e pronto.",
+            "Gravador Ubuntu X11 ligado e validado pelo FFmpeg.",
         )
 
         self._update_capture_labels()
@@ -255,12 +416,19 @@ def _patch_start_segment(cls) -> None:
 
         if linux_session_type() != "x11":
             self.status_text.setText(
-                "Captura de vídeo Linux disponível somente "
-                "para X11 nesta versão."
+                "Captura Linux requer sessão X11."
+            )
+            _append_log(
+                self,
+                "segmento recusado: sessão não é X11",
             )
             return False
 
         if self._session_dir is None:
+            _append_log(
+                self,
+                "segmento recusado: _session_dir ausente",
+            )
             return False
 
         segment_number = len(self._segments) + 1
@@ -279,13 +447,15 @@ def _patch_start_segment(cls) -> None:
 
         audio_started_at = None
         self._audio_engine = None
+        active_audio_device = self._session_audio_device
 
-        if self._session_audio_device is not None:
+        if active_audio_device is not None:
             try:
                 recorder = LinuxPulseSegmentRecorder(
-                    self._session_audio_device,
+                    active_audio_device,
                     audio_path,
-                    self.ffmpeg,
+                    Path(self.ffmpeg),
+                    Path(self.logs_dir) / "screen_recorder.log",
                 )
                 recorder.start()
 
@@ -296,20 +466,29 @@ def _patch_start_segment(cls) -> None:
                     or time.perf_counter()
                 )
             except Exception as exc:
+                # Áudio não pode impedir uma captura de vídeo válida. Mantém
+                # o erro visível/logado e segue em vídeo-only neste segmento.
+                _append_log(
+                    self,
+                    "áudio falhou; continuando sem áudio: "
+                    f"{exc.__class__.__name__}: {exc}",
+                )
                 self.audio_status.setText(
-                    f"Falha ao iniciar áudio Linux: {exc}"
+                    "Áudio Linux falhou; gravação seguirá sem áudio. "
+                    "Consulte screen_recorder.log."
                 )
-                self.status_text.setText(
-                    "A gravação não iniciou porque "
-                    "o áudio selecionado falhou."
-                )
-                return False
+                self._stop_audio_engine()
+                active_audio_device = None
 
         try:
             input_name = _display_input(rect)
         except Exception as exc:
             self._stop_audio_engine()
             self.status_text.setText(str(exc))
+            _append_log(
+                self,
+                f"DISPLAY inválido: {exc}",
+            )
             return False
 
         command = [
@@ -371,18 +550,17 @@ def _patch_start_segment(cls) -> None:
         ]
 
         try:
-            # No X11 a moldura é escondida para não aparecer no vídeo.
             self._capture_overlay.hide()
             QApplication.processEvents()
 
-            log_path = self.logs_dir / "screen_recorder.log"
+            log_path = Path(self.logs_dir) / "screen_recorder.log"
             self._log_handle = open(log_path, "ab", buffering=0)
 
             self._log_handle.write(
                 (
                     "\n\n=== "
                     + datetime.now().isoformat()
-                    + " ===\n"
+                    + " | VIDEO X11 V98 ===\n"
                     + " ".join(command)
                     + "\n"
                 ).encode(
@@ -402,6 +580,15 @@ def _patch_start_segment(cls) -> None:
             video_started_at = time.perf_counter()
             self._segment_started_at = time.monotonic()
 
+            # Captura erros de abertura do DISPLAY/codec que normalmente surgem
+            # logo depois do Popen e antes do primeiro frame.
+            deadline = time.monotonic() + 0.30
+            while time.monotonic() < deadline:
+                if self._process.poll() is not None:
+                    break
+                QApplication.processEvents()
+                time.sleep(0.025)
+
         except Exception as exc:
             self._stop_audio_engine()
             self._close_log()
@@ -409,18 +596,32 @@ def _patch_start_segment(cls) -> None:
             self.status_text.setText(
                 f"Falha ao iniciar: {exc}"
             )
+            _append_log(
+                self,
+                f"Popen vídeo falhou: {exc.__class__.__name__}: {exc}",
+            )
             return False
 
         if self._process.poll() is not None:
+            code = self._process.returncode
+            self._process = None
             self._stop_audio_engine()
             self._close_log()
             self._update_capture_overlay()
+            self.status_text.setText(
+                "FFmpeg encerrou ao abrir x11grab "
+                f"(código {code}). Consulte screen_recorder.log."
+            )
+            _append_log(
+                self,
+                f"FFmpeg vídeo encerrou na partida; código={code}",
+            )
             return False
 
         audio_offset = 0.0
 
         if (
-            self._session_audio_device is not None
+            active_audio_device is not None
             and audio_started_at is not None
         ):
             audio_offset = audio_started_at - video_started_at
@@ -428,20 +629,27 @@ def _patch_start_segment(cls) -> None:
         self._segments.append(segment)
         self._audio_segments.append(
             audio_path
-            if self._session_audio_device is not None
+            if active_audio_device is not None
             else None
         )
         self._segment_audio_offsets.append(audio_offset)
 
-        if self._session_audio_device is None:
+        if active_audio_device is None:
             self.audio_value.setText("Sem áudio")
         else:
             self.audio_value.setText(
                 "Sistema"
-                if self._session_audio_device.kind == "system"
+                if active_audio_device.kind == "system"
                 else "Microfone"
             )
 
+        _append_log(
+            self,
+            "segmento iniciado: "
+            f"DISPLAY={os.environ.get('DISPLAY', '')} "
+            f"rect={rect.x()},{rect.y()} {rect.width()}x{rect.height()} "
+            f"fps={fps} audio={'sim' if active_audio_device else 'não'}",
+        )
         return True
 
     patched._central_linux_x11 = True

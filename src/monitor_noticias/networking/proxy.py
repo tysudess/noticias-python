@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 import logging
 from pathlib import Path
+import time
 from typing import Protocol
 from urllib.parse import quote
 
@@ -151,10 +152,21 @@ class ProxySettings:
             )
 
     def _load_password(self) -> str:
+        """Lê o segredo uma única vez por carregamento de configuração.
+
+        No Linux, ``LinuxKeyringTextStore.exists()`` chama ``load()``. O código
+        anterior fazia ``exists()`` e depois ``load()`` novamente, resultando em
+        duas viagens D-Bus/Secret Service a cada ``ProxySettings.load()``.
+        Como autenticação e Capas consultam o Proxy Geral repetidamente, isso
+        multiplicava a latência antes mesmo da requisição HTTP real.
+
+        Todos os stores atuais já tratam ausência em ``load()`` retornando texto
+        vazio, então não é necessário consultar ``exists()`` antes.
+        """
+        started = time.monotonic()
+
         try:
-            if not self.secret_store.exists():
-                return ""
-            return self.secret_store.load()
+            return str(self.secret_store.load() or "")
 
         except CredentialStoreUnavailable as exc:
             log.warning(
@@ -168,6 +180,15 @@ class ProxySettings:
                 "Falha inesperada ao carregar a senha do Proxy Geral."
             )
             return ""
+
+        finally:
+            elapsed_ms = int((time.monotonic() - started) * 1000)
+            if elapsed_ms >= 250:
+                log.warning(
+                    "Proxy Geral: leitura do cofre seguro demorou %s ms (%s).",
+                    elapsed_ms,
+                    self.secure_backend_label,
+                )
 
     def load(self) -> ProxyConfig:
         self.migrate_host()

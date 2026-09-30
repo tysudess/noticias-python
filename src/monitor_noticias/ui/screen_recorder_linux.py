@@ -93,8 +93,17 @@ def list_linux_audio_devices() -> tuple[list[AudioDevice], str]:
     sources = _pulse_sources()
     default_sink = _pactl_value("get-default-sink")
     default_source = _pactl_value("get-default-source")
+    info_code, info_text = _run_text(["pactl", "info"])
+    server_name = ""
+
+    if info_code == 0:
+        for line in info_text.splitlines():
+            if line.lower().startswith("server name:"):
+                server_name = line.split(":", 1)[1].strip()
+                break
 
     diagnostic = [
+        f"Servidor de áudio: {server_name or '(não informado)'}",
         f"Fontes Pulse encontradas: {len(sources)}",
         f"Default sink: {default_sink or '(não informado)'}",
         f"Default source: {default_source or '(não informado)'}",
@@ -175,16 +184,19 @@ class LinuxPulseSegmentRecorder:
         device: AudioDevice,
         output: Path,
         ffmpeg: Path,
+        log_path: Path | None = None,
     ) -> None:
         self.device = device
         self.output = Path(output)
         self.ffmpeg = Path(ffmpeg)
+        self.log_path = Path(log_path) if log_path is not None else None
 
         self._process: subprocess.Popen[bytes] | None = None
         self._error: str | None = None
         self._started_at: float | None = None
         self._first_callback_at: float | None = None
         self._stopped_at: float | None = None
+        self._log_handle = None
 
     @property
     def error(self) -> str | None:
@@ -201,6 +213,16 @@ class LinuxPulseSegmentRecorder:
     @property
     def stopped_at(self) -> float | None:
         return self._stopped_at
+
+    def _close_log(self) -> None:
+        handle = self._log_handle
+        self._log_handle = None
+        if handle is not None:
+            try:
+                handle.flush()
+                handle.close()
+            except Exception:
+                pass
 
     def start(self) -> None:
         if not self.ffmpeg.is_file():
@@ -234,11 +256,25 @@ class LinuxPulseSegmentRecorder:
         ]
 
         try:
+            stderr_target = subprocess.DEVNULL
+
+            if self.log_path is not None:
+                self.log_path.parent.mkdir(parents=True, exist_ok=True)
+                self._log_handle = self.log_path.open("ab", buffering=0)
+                self._log_handle.write(
+                    (
+                        "\n[AUDIO LINUX] comando: "
+                        + " ".join(command)
+                        + "\n"
+                    ).encode("utf-8", errors="ignore")
+                )
+                stderr_target = self._log_handle
+
             self._process = subprocess.Popen(
                 command,
                 stdin=subprocess.PIPE,
                 stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
+                stderr=stderr_target,
                 start_new_session=True,
             )
 
@@ -246,13 +282,22 @@ class LinuxPulseSegmentRecorder:
             self._started_at = now
             self._first_callback_at = now
 
-            time.sleep(0.08)
+            # FFmpeg/Pulse pode encerrar alguns milissegundos depois do Popen.
+            # Uma janela curta captura esse erro inicial e deixa o diagnóstico
+            # no mesmo log do gravador.
+            deadline = time.monotonic() + 0.25
+            while time.monotonic() < deadline:
+                if self._process.poll() is not None:
+                    break
+                time.sleep(0.025)
 
             if self._process.poll() is not None:
                 code = self._process.returncode
                 self._process = None
+                self._close_log()
                 raise RuntimeError(
-                    f"FFmpeg/Pulse encerrou ao iniciar (código {code})."
+                    "FFmpeg/Pulse encerrou ao iniciar "
+                    f"(código {code}); consulte screen_recorder.log."
                 )
 
         except Exception as exc:
@@ -284,4 +329,5 @@ class LinuxPulseSegmentRecorder:
                     except Exception:
                         pass
 
+        self._close_log()
         self._stopped_at = time.perf_counter()
