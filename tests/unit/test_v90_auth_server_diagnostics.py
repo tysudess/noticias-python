@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import re
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -10,10 +11,30 @@ def _read(path: str) -> str:
     return (ROOT / path).read_text(encoding="utf-8")
 
 
+def _auth_version(source: str) -> tuple[int, int, int]:
+    match = re.search(
+        r'const\s+AUTH_VERSION\s*=\s*"(\d+)\.(\d+)\.(\d+)"\s*;',
+        source,
+    )
+
+    assert match is not None, (
+        "AUTH_VERSION sem formato semântico válido em tools/auth_server/Code.gs"
+    )
+
+    return tuple(
+        int(part)
+        for part in match.groups()
+    )
+
+
 def test_v90_apps_script_keeps_all_auth_actions_and_bumps_version():
     source = _read("tools/auth_server/Code.gs")
 
-    assert 'const AUTH_VERSION = "1.2.0"' in source
+    # V90 introduziu a linha 1.2.x. Versões posteriores do Auth Server
+    # (por exemplo, V94 = 1.3.0) devem continuar aprovadas desde que não
+    # regridam abaixo da versão mínima introduzida pela V90.
+    assert _auth_version(source) >= (1, 2, 0)
+
     assert 'action === "login"' in source
     assert 'action === "validate"' in source
     assert 'action === "logout"' in source

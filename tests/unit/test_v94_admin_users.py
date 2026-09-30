@@ -1,4 +1,5 @@
 from pathlib import Path
+import re
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -6,6 +7,22 @@ ROOT = Path(__file__).resolve().parents[2]
 
 def _read(relative: str) -> str:
     return (ROOT / relative).read_text(encoding="utf-8")
+
+
+def _auth_version(source: str) -> tuple[int, int, int]:
+    match = re.search(
+        r'const\s+AUTH_VERSION\s*=\s*"(\d+)\.(\d+)\.(\d+)"\s*;',
+        source,
+    )
+
+    assert match is not None, (
+        "AUTH_VERSION sem formato semântico válido em tools/auth_server/Code.gs"
+    )
+
+    return tuple(
+        int(part)
+        for part in match.groups()
+    )
 
 
 def test_admin_tab_is_installed_only_for_admin_profile():
@@ -50,7 +67,10 @@ def test_server_rechecks_admin_profile_for_every_admin_action():
         "tools/auth_server/Code.gs"
     )
 
-    assert 'const AUTH_VERSION = "1.3.0";' in source
+    # A V94 introduziu o Auth Server 1.3.0. Não congelar o teste nessa
+    # versão exata, pois novas funções podem elevar a versão novamente.
+    assert _auth_version(source) >= (1, 3, 0)
+
     assert 'action === "admin_list_users"' in source
     assert 'action === "admin_create_user"' in source
     assert 'action === "admin_reset_password"' in source
