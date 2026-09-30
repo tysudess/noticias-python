@@ -1,4 +1,4 @@
-const AUTH_VERSION = "1.2.0";
+const AUTH_VERSION = "1.3.0";
 
 const SHEET_USERS = "USUARIOS";
 const SHEET_DEVICES = "DISPOSITIVOS";
@@ -294,6 +294,12 @@ function doPost(e) {
       response = logout_(request);
     } else if (action === "change_password") {
       response = changePassword_(request);
+    } else if (action === "admin_list_users") {
+      response = adminListUsers_(request);
+    } else if (action === "admin_create_user") {
+      response = adminCreateUser_(request);
+    } else if (action === "admin_reset_password") {
+      response = adminResetPassword_(request);
     } else {
       response = {
         ok: false,
@@ -695,6 +701,546 @@ function logout_(request) {
     }
 
     return { ok: true };
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+
+/* -------------------------------------------------------------------------
+ * V94 — Administração de usuários via Central
+ * ------------------------------------------------------------------------- */
+
+function requireAdminSession_(request) {
+  const token = String(request.token || "");
+  const deviceId = normalizeDeviceId_(request.device_id);
+
+  if (!token || !deviceId) {
+    return {
+      ok: false,
+      response: {
+        ok: false,
+        code: "SESSION_INVALID",
+        message: "Sessão administrativa inválida.",
+      },
+    };
+  }
+
+  const session = findSessionByToken_(token);
+
+  if (!session) {
+    return {
+      ok: false,
+      response: {
+        ok: false,
+        code: "SESSION_INVALID",
+        message: "Sessão inválida ou encerrada.",
+      },
+    };
+  }
+
+  if (session.revoked || session.deviceId !== deviceId) {
+    return {
+      ok: false,
+      response: {
+        ok: false,
+        code: "SESSION_REVOKED",
+        message: "Sessão revogada.",
+      },
+    };
+  }
+
+  const now = new Date();
+
+  if (session.expiresAt.getTime() <= now.getTime()) {
+    bestEffortRevokeSession_(session.row);
+
+    return {
+      ok: false,
+      response: {
+        ok: false,
+        code: "SESSION_EXPIRED",
+        message: "Sessão expirada. Faça login novamente.",
+      },
+    };
+  }
+
+  const user = findUser_(session.username);
+
+  if (!user) {
+    return {
+      ok: false,
+      response: {
+        ok: false,
+        code: "USER_NOT_FOUND",
+        message: "Usuário administrador não encontrado.",
+      },
+    };
+  }
+
+  const accessError = userAccessError_(user);
+
+  if (accessError) {
+    return {
+      ok: false,
+      response: {
+        ok: false,
+        code: accessError.code,
+        message: accessError.message,
+      },
+    };
+  }
+
+  if (String(user.profile || "").toUpperCase() !== "ADMIN") {
+    logEvent_(
+      "ADMIN_DENIED",
+      user.username,
+      deviceId,
+      "Tentativa de acesso ao gerenciamento de usuários."
+    );
+
+    return {
+      ok: false,
+      response: {
+        ok: false,
+        code: "ADMIN_REQUIRED",
+        message: "Esta função é exclusiva do administrador.",
+      },
+    };
+  }
+
+  return {
+    ok: true,
+    session: session,
+    user: user,
+  };
+}
+
+
+function dateToIsoDate_(value) {
+  if (!value) {
+    return "";
+  }
+
+  const date = new Date(value);
+
+  if (isNaN(date.getTime())) {
+    return "";
+  }
+
+  return Utilities.formatDate(
+    date,
+    Session.getScriptTimeZone() || "America/Sao_Paulo",
+    "yyyy-MM-dd"
+  );
+}
+
+
+function dateToIsoDateTime_(value) {
+  if (!value) {
+    return "";
+  }
+
+  const date = new Date(value);
+
+  if (isNaN(date.getTime())) {
+    return "";
+  }
+
+  return date.toISOString();
+}
+
+
+function adminPublicUserFromRow_(row) {
+  return {
+    username: normalizeUsername_(row[0]),
+    name: String(row[1] || ""),
+    status: String(row[2] || "").toUpperCase(),
+    profile: String(row[7] || "CONSULTA").toUpperCase(),
+    validity: dateToIsoDate_(row[8]),
+    max_devices: Math.max(1, Number(row[9] || 1)),
+    permissions: String(row[10] || ""),
+    created_at: dateToIsoDateTime_(row[11]),
+    last_login: dateToIsoDateTime_(row[12]),
+    must_change_password: passwordChangeRequired_(row),
+  };
+}
+
+
+function adminListUsers_(request) {
+  const admin = requireAdminSession_(request);
+
+  if (!admin.ok) {
+    return admin.response;
+  }
+
+  const sheet = getSheet_(SHEET_USERS);
+  const values = sheet.getDataRange().getValues();
+  const users = [];
+
+  for (let i = 1; i < values.length; i++) {
+    const username = normalizeUsername_(values[i][0]);
+
+    if (!username) {
+      continue;
+    }
+
+    users.push(
+      adminPublicUserFromRow_(values[i])
+    );
+  }
+
+  users.sort(function (a, b) {
+    return String(a.username).localeCompare(
+      String(b.username)
+    );
+  });
+
+  logEvent_(
+    "ADMIN_LIST_USERS",
+    admin.user.username,
+    admin.session.deviceId,
+    "Lista de usuários consultada pela Central."
+  );
+
+  return {
+    ok: true,
+    users: users,
+  };
+}
+
+
+function parseAdminValidity_(raw) {
+  const value = String(raw || "").trim();
+
+  if (!value) {
+    return "";
+  }
+
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
+
+  if (!match) {
+    throw new Error(
+      "Validade inválida. Use o formato AAAA-MM-DD."
+    );
+  }
+
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  const date = new Date(year, month - 1, day);
+
+  if (
+    date.getFullYear() !== year
+    || date.getMonth() !== month - 1
+    || date.getDate() !== day
+  ) {
+    throw new Error("Data de validade inválida.");
+  }
+
+  return date;
+}
+
+
+function sanitizeAdminPermissions_(raw) {
+  const text = String(raw || "").trim();
+
+  if (!text) {
+    return "";
+  }
+
+  if (text === "*") {
+    return "*";
+  }
+
+  const output = [];
+
+  text
+    .split(",")
+    .map(function (value) {
+      return value.trim().toLowerCase();
+    })
+    .filter(Boolean)
+    .forEach(function (permission) {
+      if (
+        ALL_PERMISSIONS.indexOf(permission) >= 0
+        && output.indexOf(permission) < 0
+      ) {
+        output.push(permission);
+      }
+    });
+
+  if (!output.length) {
+    throw new Error(
+      "Nenhuma permissão informada é reconhecida."
+    );
+  }
+
+  if (output.indexOf("home") < 0) {
+    output.unshift("home");
+  }
+
+  return output.join(",");
+}
+
+
+function adminCreateUser_(request) {
+  const lock = LockService.getScriptLock();
+  lock.waitLock(20000);
+
+  try {
+    const admin = requireAdminSession_(request);
+
+    if (!admin.ok) {
+      return admin.response;
+    }
+
+    const username = normalizeUsername_(request.username);
+    const name = String(request.name || "").trim().slice(0, 160);
+    const temporaryPassword = String(
+      request.temporary_password || ""
+    );
+    const profile = String(
+      request.profile || "CONSULTA"
+    ).trim().toUpperCase();
+
+    if (!/^[a-z0-9._-]{3,64}$/.test(username)) {
+      return {
+        ok: false,
+        code: "USERNAME_INVALID",
+        message: (
+          "O usuário deve ter de 3 a 64 caracteres e usar apenas "
+          + "letras, números, ponto, hífen ou sublinhado."
+        ),
+      };
+    }
+
+    if (!name) {
+      return {
+        ok: false,
+        code: "NAME_REQUIRED",
+        message: "Informe o nome do usuário.",
+      };
+    }
+
+    if (temporaryPassword.length < 8) {
+      return {
+        ok: false,
+        code: "PASSWORD_TOO_SHORT",
+        message: "A senha temporária precisa ter pelo menos 8 caracteres.",
+      };
+    }
+
+    if (
+      ["ADMIN", "OPERADOR", "EDICAO", "CONSULTA"].indexOf(profile)
+      < 0
+    ) {
+      return {
+        ok: false,
+        code: "PROFILE_INVALID",
+        message: "Perfil de usuário inválido.",
+      };
+    }
+
+    if (findUser_(username)) {
+      return {
+        ok: false,
+        code: "USER_EXISTS",
+        message: "Já existe um usuário com esse nome.",
+      };
+    }
+
+    let validity;
+
+    try {
+      validity = parseAdminValidity_(request.validity);
+    } catch (error) {
+      return {
+        ok: false,
+        code: "VALIDITY_INVALID",
+        message: String(error.message || error),
+      };
+    }
+
+    let permissions;
+
+    try {
+      permissions = sanitizeAdminPermissions_(
+        request.permissions
+      );
+    } catch (error) {
+      return {
+        ok: false,
+        code: "PERMISSIONS_INVALID",
+        message: String(error.message || error),
+      };
+    }
+
+    const maxDevices = Math.max(
+      1,
+      Math.min(20, Number(request.max_devices || 1))
+    );
+
+    const iterations = getPasswordIterations_();
+    const salt = randomHex_(24);
+    const passwordHash = hashPassword_(
+      temporaryPassword,
+      salt,
+      iterations
+    );
+    const now = new Date();
+
+    const sheet = getSheet_(SHEET_USERS);
+
+    sheet.appendRow([
+      username,
+      name,
+      "ATIVO",
+      "",
+      salt,
+      passwordHash,
+      iterations,
+      profile,
+      validity,
+      maxDevices,
+      permissions,
+      now,
+      "",
+      "Criado pela aba Administração da Central.",
+      true,
+    ]);
+
+    logEvent_(
+      "ADMIN_USER_CREATED",
+      admin.user.username,
+      admin.session.deviceId,
+      (
+        "Usuário criado: "
+        + username
+        + " / perfil "
+        + profile
+      )
+    );
+
+    const created = findUser_(username);
+
+    return {
+      ok: true,
+      user: created
+        ? {
+            username: created.username,
+            name: created.name,
+            status: created.status,
+            profile: created.profile,
+            validity: dateToIsoDate_(created.expiresAt),
+            max_devices: created.maxDevices,
+            permissions: created.permissions,
+            must_change_password: created.mustChangePassword,
+          }
+        : {
+            username: username,
+            name: name,
+            status: "ATIVO",
+            profile: profile,
+            validity: dateToIsoDate_(validity),
+            max_devices: maxDevices,
+            permissions: permissions,
+            must_change_password: true,
+          },
+    };
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+
+function adminResetPassword_(request) {
+  const lock = LockService.getScriptLock();
+  lock.waitLock(20000);
+
+  try {
+    const admin = requireAdminSession_(request);
+
+    if (!admin.ok) {
+      return admin.response;
+    }
+
+    const username = normalizeUsername_(request.username);
+    const temporaryPassword = String(
+      request.temporary_password || ""
+    );
+
+    if (!username) {
+      return {
+        ok: false,
+        code: "USERNAME_REQUIRED",
+        message: "Informe o usuário.",
+      };
+    }
+
+    if (username === admin.user.username) {
+      return {
+        ok: false,
+        code: "ADMIN_SELF_RESET",
+        message: (
+          "Para alterar a própria senha administrativa, use Minha conta. "
+          + "Isso preserva corretamente a sessão atual."
+        ),
+      };
+    }
+
+    if (temporaryPassword.length < 8) {
+      return {
+        ok: false,
+        code: "PASSWORD_TOO_SHORT",
+        message: "A senha temporária precisa ter pelo menos 8 caracteres.",
+      };
+    }
+
+    const user = findUser_(username);
+
+    if (!user) {
+      return {
+        ok: false,
+        code: "USER_NOT_FOUND",
+        message: "Usuário não encontrado.",
+      };
+    }
+
+    const iterations = getPasswordIterations_();
+    const salt = randomHex_(24);
+    const passwordHash = hashPassword_(
+      temporaryPassword,
+      salt,
+      iterations
+    );
+
+    const sheet = getSheet_(SHEET_USERS);
+
+    // NOVA_SENHA permanece vazia. A senha digitada no aplicativo nunca é
+    // armazenada em texto puro na planilha.
+    sheet.getRange(user.row, 4, 1, 4).setValues([[
+      "",
+      salt,
+      passwordHash,
+      iterations,
+    ]]);
+    sheet.getRange(user.row, 15).setValue(true);
+
+    revokeSessionsForUser_(username);
+
+    logEvent_(
+      "ADMIN_PASSWORD_RESET",
+      admin.user.username,
+      admin.session.deviceId,
+      "Senha temporária redefinida para o usuário " + username + "."
+    );
+
+    return {
+      ok: true,
+      username: username,
+      must_change_password: true,
+    };
   } finally {
     lock.releaseLock();
   }

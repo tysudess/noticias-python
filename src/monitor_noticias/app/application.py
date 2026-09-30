@@ -282,8 +282,19 @@ class Application:
             from monitor_noticias.ui.auth_window_integration import (
                 install_authenticated_window,
             )
+            from monitor_noticias.ui.admin_users_integration import (
+                install_admin_users_page,
+            )
 
             install_authenticated_window(
+                window,
+                auth_runtime,
+                auth_session,
+            )
+
+            # V94: a função verifica novamente o perfil e só instala a aba
+            # para sessões autenticadas cujo perfil seja ADMIN.
+            install_admin_users_page(
                 window,
                 auth_runtime,
                 auth_session,
