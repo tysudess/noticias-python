@@ -14,16 +14,19 @@ def install_screen_recorder(window) -> ScreenRecorderPage:
     A página é um QWidget nativo do PySide6 e entra no mesmo QStackedWidget
     usado por Notícias, Capas, Editor de PDF e Editor de Vídeo.
 
-    V95 instala, antes de criar a página, a camada de sincronismo A/V. Isso é
-    feito aqui para que ela envolva também o backend Linux que já foi aplicado
-    durante a inicialização da aplicação.
+    V95 instala a camada de sincronismo A/V.
+    V97 reaplica no Linux os binários reais do bundle depois da V95.
     """
 
     from monitor_noticias.ui.screen_recorder_sync_patch import (
         install_screen_recorder_sync_patch,
     )
+    from monitor_noticias.ui.screen_recorder_linux_runtime_fix import (
+        install_screen_recorder_linux_runtime_fix,
+    )
 
     install_screen_recorder_sync_patch()
+    install_screen_recorder_linux_runtime_fix()
 
     existing = getattr(
         window,

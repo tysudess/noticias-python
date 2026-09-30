@@ -9,6 +9,35 @@ from .logging_setup import configure_logging
 from .paths import AppPaths
 
 
+def _install_linux_runtime_environment() -> None:
+    """Configura estabilidade do Qt/Chromium antes dos imports PySide6."""
+
+    if not sys.platform.startswith("linux"):
+        return
+
+    existing = (
+        os.environ.get(
+            "QTWEBENGINE_CHROMIUM_FLAGS",
+            "",
+        )
+        or ""
+    ).strip()
+
+    flags = existing.split()
+
+    for flag in (
+        "--disable-gpu",
+        "--disable-gpu-compositing",
+        "--disable-dev-shm-usage",
+    ):
+        if flag not in flags:
+            flags.append(flag)
+
+    os.environ[
+        "QTWEBENGINE_CHROMIUM_FLAGS"
+    ] = " ".join(flags)
+
+
 class Application:
     def __init__(
         self,
@@ -27,6 +56,9 @@ class Application:
         log.info(
             "Inicializando Central Inteligente de Mídia PySide6"
         )
+
+        # Precisa ocorrer antes de qualquer import de QtWebEngine.
+        _install_linux_runtime_environment()
 
         from monitor_noticias.platform.tls import (
             install_system_trust_store,
@@ -88,6 +120,9 @@ class Application:
         from monitor_noticias.ui.settings_proxy_toggle_patch import (
             install_settings_proxy_toggle_patch,
         )
+        from monitor_noticias.ui.covers_linux_stability_patch import (
+            install_covers_linux_stability_patch,
+        )
         from monitor_noticias.ui.covers_web_proxy_patch import (
             install_covers_web_proxy_patch,
         )
@@ -117,6 +152,9 @@ class Application:
         install_settings_credentials_patch()
         install_settings_proxy_toggle_patch()
 
+        # Linux primeiro: o patch de proxy do navegador passa a envolver a
+        # implementação estável da QWebEngineView, preservando autenticação.
+        install_covers_linux_stability_patch()
         install_covers_web_proxy_patch()
         install_covers_browser_capture_patch()
         install_valor_gmail_only_patch()
@@ -197,12 +235,17 @@ class Application:
         )
 
         if auth_server_configured():
+            from monitor_noticias.auth.linux_auth_transport_patch import (
+                install_linux_auth_transport_patch,
+            )
             from monitor_noticias.auth.runtime import (
                 AuthRuntime,
             )
             from monitor_noticias.ui.login_dialog import (
                 LoginDialog,
             )
+
+            install_linux_auth_transport_patch()
 
             auth_runtime = AuthRuntime(
                 self.paths
