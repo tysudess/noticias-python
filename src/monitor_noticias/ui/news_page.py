@@ -7,9 +7,9 @@ from PySide6.QtCore import (
 )
 from PySide6.QtGui import QColor, QFont, QFontMetrics, QPainter, QPen
 from PySide6.QtWidgets import (
-    QCheckBox, QDateEdit, QFrame, QHBoxLayout, QLabel, QLineEdit, QListView,
-    QProgressBar, QPushButton, QStyledItemDelegate, QStyleOptionViewItem,
-    QTimeEdit, QVBoxLayout, QWidget,
+    QCheckBox, QComboBox, QDateEdit, QFrame, QHBoxLayout, QLabel, QLineEdit,
+    QListView, QProgressBar, QPushButton, QStyledItemDelegate,
+    QStyleOptionViewItem, QTimeEdit, QVBoxLayout, QWidget,
 )
 
 from monitor_noticias.ui.controller import MainUiController, UiState
@@ -292,6 +292,9 @@ class NewsDelegate(QStyledItemDelegate):
 class NewsPage(QWidget):
     extract_requested = Signal(str)
 
+    SORT_RECENT = "recent"
+    SORT_NEW = "new"
+
     def __init__(self, controller: MainUiController) -> None:
         super().__init__()
         self.controller = controller
@@ -529,10 +532,17 @@ class NewsPage(QWidget):
         list_head.addWidget(self.count)
         list_head.addStretch()
 
-        sort_label = QLabel("Mais recentes ⌄")
-        sort_label.setObjectName("sortPill")
+        self.sort_mode = QComboBox()
+        self.sort_mode.setObjectName("sortPill")
+        self.sort_mode.setMinimumWidth(145)
+        self.sort_mode.addItem("Mais recentes", self.SORT_RECENT)
+        self.sort_mode.addItem("Novas", self.SORT_NEW)
+        self.sort_mode.setToolTip(
+            "Mais recentes: ordena todas por data e hora. "
+            "Novas: mostra somente as notícias novas da execução atual."
+        )
 
-        list_head.addWidget(sort_label)
+        list_head.addWidget(self.sort_mode)
         root.addLayout(list_head)
 
         self.model = NewsModel(self)
@@ -562,6 +572,7 @@ class NewsPage(QWidget):
 
         self.query.textChanged.connect(self._filters_changed)
         self.only_demands.toggled.connect(self._filters_changed)
+        self.sort_mode.currentIndexChanged.connect(self._filters_changed)
 
         self.setStyleSheet(self._stylesheet())
 
@@ -690,13 +701,31 @@ class NewsPage(QWidget):
             font-weight:900;
         }
 
-        QLabel#sortPill {
+        QComboBox#sortPill {
             background:white;
             color:#375B88;
             border:1px solid #D5E4F4;
             border-radius:8px;
-            padding:6px 11px;
+            padding:6px 30px 6px 11px;
+            min-height:26px;
             font-size:10px;
+            font-weight:700;
+        }
+        QComboBox#sortPill:hover {
+            background:#F7FBFF;
+            border-color:#BBD4EE;
+        }
+        QComboBox#sortPill::drop-down {
+            border:0;
+            width:24px;
+        }
+        QComboBox#sortPill QAbstractItemView {
+            background:#FFFFFF;
+            color:#375B88;
+            border:1px solid #D5E4F4;
+            selection-background-color:#EAF4FF;
+            selection-color:#087AF7;
+            padding:4px;
         }
 
         QListView#newsListView {
@@ -757,8 +786,19 @@ class NewsPage(QWidget):
     def _filters_changed(self, *_args) -> None:
         self.refresh(self.controller.state)
 
+    def _sort_mode(self) -> str:
+        return str(
+            self.sort_mode.currentData()
+            or self.SORT_RECENT
+        )
+
     def _rows(self, state: UiState):
         query = self.query.text().strip().lower()
+        new_links = set(
+            getattr(state, "new_news_links", ())
+            or ()
+        )
+        show_new_only = self._sort_mode() == self.SORT_NEW
 
         rows = [
             news
@@ -777,8 +817,14 @@ class NewsPage(QWidget):
                     f"{news.matchedDemand}"
                 ).lower()
             )
+            and (
+                not show_new_only
+                or news.link in new_links
+            )
         ]
 
+        # Tanto em "Mais recentes" quanto em "Novas", a ordem continua
+        # cronológica: notícia com data/hora mais recente aparece primeiro.
         return sorted(
             rows,
             key=lambda news: getattr(news, "date", 0),
@@ -795,10 +841,16 @@ class NewsPage(QWidget):
             state.new_news_links,
         )
 
-        self.count.setText(
-            f"▣  Notícias encontradas   "
-            f"{len(rows)} resultado(s) para o período selecionado"
-        )
+        if self._sort_mode() == self.SORT_NEW:
+            self.count.setText(
+                f"▣  Notícias encontradas   "
+                f"{len(rows)} nova(s) encontrada(s) nesta execução"
+            )
+        else:
+            self.count.setText(
+                f"▣  Notícias encontradas   "
+                f"{len(rows)} resultado(s) para o período selecionado"
+            )
 
         self.search24.setEnabled(
             not state.news_busy
