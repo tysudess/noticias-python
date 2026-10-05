@@ -40,22 +40,25 @@ def test_covers_linux_teardown_does_not_create_replacement_page():
     assert "faulthandler.enable" in text
 
 
-def test_recorder_has_real_x11_preflight_and_video_only_audio_fallback():
+def test_recorder_uses_qt_screen_pipe_and_keeps_video_only_audio_fallback():
     text = (
         SRC / "ui" / "screen_recorder_linux_patch.py"
     ).read_text(encoding="utf-8")
 
-    assert '"-f",\n        "x11grab"' in text
-    assert '"-frames:v",\n        "1"' in text
+    assert "grabWindow(" in text
+    assert '"rawvideo"' in text
+    assert 'f"pipe:{read_fd}"' in text
     assert "continuando sem áudio" in text
-    assert "_probe_x11_capture" in text
+    assert "_probe_x11_capture" not in text
+    assert '"x11grab"' not in text
 
 
-def test_portable_diagnostic_checks_x11grab():
+def test_portable_diagnostic_checks_encoder_not_x11grab():
     text = (
         ROOT / "portable" / "linux" / "TESTAR-PORTABLE.sh"
     ).read_text(encoding="utf-8")
 
-    assert "-devices" in text
-    assert "x11grab" in text
-    assert "-frames:v 1" in text
+    assert "-encoders" in text
+    assert "libx264" in text
+    assert "rawvideo pipe" in text
+    assert "-frames:v 1" not in text

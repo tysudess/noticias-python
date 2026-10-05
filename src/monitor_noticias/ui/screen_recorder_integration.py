@@ -12,10 +12,11 @@ def install_screen_recorder(window) -> ScreenRecorderPage:
     """Instala o Gravador de Tela sem reescrever o MainWindow inteiro.
 
     A página é um QWidget nativo do PySide6 e entra no mesmo QStackedWidget
-    usado por Notícias, Capas, Editor de PDF e Editor de Vídeo.
+    usado por Notícias, Editor de PDF e Editor de Vídeo.
 
     V95 instala a camada de sincronismo A/V.
-    V97 reaplica no Linux os binários reais do bundle depois da V95.
+    V101 reaplica no Linux os binários reais do bundle e, depois do V95,
+    instala o fechamento seguro do pipe de frames Qt antes de pausa/STOP.
     """
 
     from monitor_noticias.ui.screen_recorder_sync_patch import (
@@ -24,9 +25,13 @@ def install_screen_recorder(window) -> ScreenRecorderPage:
     from monitor_noticias.ui.screen_recorder_linux_runtime_fix import (
         install_screen_recorder_linux_runtime_fix,
     )
+    from monitor_noticias.ui.screen_recorder_linux_patch import (
+        install_linux_screen_recorder_post_sync_patch,
+    )
 
     install_screen_recorder_sync_patch()
     install_screen_recorder_linux_runtime_fix()
+    install_linux_screen_recorder_post_sync_patch()
 
     existing = getattr(
         window,

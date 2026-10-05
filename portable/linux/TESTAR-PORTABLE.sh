@@ -77,9 +77,10 @@ echo "Sessão gráfica:"
 echo "DISPLAY=${DISPLAY:-}"
 echo "WAYLAND_DISPLAY=${WAYLAND_DISPLAY:-}"
 echo "XDG_SESSION_TYPE=${XDG_SESSION_TYPE:-}"
+echo "XAUTHORITY=${XAUTHORITY:-}"
 
 if [ "${XDG_SESSION_TYPE:-}" = "wayland" ]; then
-  echo "[AVISO] Sessão Wayland: o gravador x11grab exige Ubuntu on Xorg para captura completa."
+  echo "[AVISO] Sessão Wayland: o backend V101 usa QScreen/Qt em Ubuntu on Xorg."
 fi
 
 echo
@@ -106,44 +107,19 @@ echo "Versões dos binários:"
 "$HERE/bin/deno" --version 2>/dev/null | head -n 3 || true
 
 echo
-echo "FFmpeg / captura X11:"
+echo "FFmpeg / codificação do Gravador:"
 if [ -x "$HERE/bin/ffmpeg" ]; then
-  FFMPEG_DEVICES="$($HERE/bin/ffmpeg -hide_banner -devices 2>&1 || true)"
+  FFMPEG_ENCODERS="$($HERE/bin/ffmpeg -hide_banner -encoders 2>&1 || true)"
 
-  if printf '%s\n' "$FFMPEG_DEVICES" | grep -qi "x11grab"; then
-    echo "[OK] FFmpeg possui o dispositivo x11grab"
+  if printf '%s\n' "$FFMPEG_ENCODERS" | grep -qi "libx264"; then
+    echo "[OK] FFmpeg possui libx264"
   else
-    echo "[ERRO] FFmpeg do portable não possui x11grab"
+    echo "[ERRO] FFmpeg do portable não possui libx264"
     fail=1
   fi
 
-  if [ -n "${DISPLAY:-}" ] && [ "${XDG_SESSION_TYPE:-x11}" != "wayland" ]; then
-    X11_PROBE_LOG="$HERE/logs/diagnostico-x11grab.txt"
-
-    timeout 8 \
-      "$HERE/bin/ffmpeg" \
-      -hide_banner \
-      -loglevel error \
-      -f x11grab \
-      -framerate 1 \
-      -video_size 16x16 \
-      -i "${DISPLAY}+0,0" \
-      -frames:v 1 \
-      -f null - \
-      >"$X11_PROBE_LOG" 2>&1
-
-    X11_STATUS=$?
-
-    if [ "$X11_STATUS" -eq 0 ]; then
-      echo "[OK] x11grab abriu o DISPLAY ${DISPLAY} e capturou 1 frame"
-    else
-      echo "[ERRO] x11grab não conseguiu capturar o DISPLAY ${DISPLAY} (código $X11_STATUS)"
-      tail -n 20 "$X11_PROBE_LOG" || true
-      fail=1
-    fi
-  else
-    echo "[INFO] Teste real de 1 frame não executado: DISPLAY X11 não disponível nesta execução."
-  fi
+  echo "[INFO] V101: a tela é capturada pelo Qt/X11 e enviada ao FFmpeg por rawvideo pipe."
+  echo "[INFO] O FFmpeg não precisa mais abrir o DISPLAY via x11grab."
 fi
 
 echo

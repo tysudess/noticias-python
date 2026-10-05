@@ -38,11 +38,14 @@ def _write_runtime_diagnostic(page) -> None:
         log_path.write_text(
             "\n".join(
                 [
-                    "Central V98 — Gravador Ubuntu",
+                    "Central V101 — Gravador Ubuntu",
+                    "capture_backend=qt-screen-rawvideo-pipe",
+                    "ffmpeg_role=encode-only",
                     f"session={linux_session_type()}",
                     f"DISPLAY={os.environ.get('DISPLAY', '')}",
                     f"WAYLAND_DISPLAY={os.environ.get('WAYLAND_DISPLAY', '')}",
                     f"XDG_SESSION_TYPE={os.environ.get('XDG_SESSION_TYPE', '')}",
+                    f"XAUTHORITY={os.environ.get('XAUTHORITY', '')}",
                     f"bundle_root={page.app_root}",
                     f"logs_dir={page.logs_dir}",
                     f"ffmpeg={ffmpeg}",
@@ -63,11 +66,9 @@ def _write_runtime_diagnostic(page) -> None:
 def install_screen_recorder_linux_runtime_fix() -> None:
     """Reaplica os binários do bundle depois do patch A/V V95.
 
-    A implementação original da página recebe no Linux a raiz gravável para os
-    diretórios de dados. O patch A/V V95 voltava a resolver ``bin/ffmpeg`` a
-    partir dessa raiz e podia apontar para um arquivo inexistente. O bundle real
-    continua sendo a fonte de FFmpeg/FFprobe; logs/temp/vídeos permanecem no
-    state_root gravável.
+    Os diretórios de sessão/log continuam na raiz gravável Linux, enquanto
+    FFmpeg/FFprobe continuam vindo do bundle portable. V101 usa o FFmpeg apenas
+    para codificar frames BGRA entregues pelo Qt; o binário não abre o DISPLAY.
     """
 
     global _INSTALLED
@@ -124,7 +125,7 @@ def install_screen_recorder_linux_runtime_fix() -> None:
 
         _write_runtime_diagnostic(self)
 
-    patched_init._central_linux_runtime_v98 = True
+    patched_init._central_linux_runtime_v101 = True
     cls.__init__ = patched_init
 
     _INSTALLED = True
