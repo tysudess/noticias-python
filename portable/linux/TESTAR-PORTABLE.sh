@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 set -u
+set -o pipefail
 
 HERE="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
 LOG="$HERE/logs/diagnostico-portable.txt"
@@ -91,7 +92,7 @@ if command -v ldd >/dev/null 2>&1; then
   if ldd "$HERE/CentralInteligenteDeMidia" 2>/dev/null |
      grep -q "not found"; then
     echo
-    echo "[ERRO] Há bibliotecas do sistema não encontradas."
+echo "[ERRO] Há bibliotecas do sistema não encontradas."
     fail=1
   fi
 else
@@ -109,7 +110,7 @@ echo "Versões dos binários:"
 echo
 echo "FFmpeg / codificação do Gravador:"
 if [ -x "$HERE/bin/ffmpeg" ]; then
-  FFMPEG_ENCODERS="$($HERE/bin/ffmpeg -hide_banner -encoders 2>&1 || true)"
+  FFMPEG_ENCODERS="$("$HERE/bin/ffmpeg" -hide_banner -encoders 2>&1 || true)"
 
   if printf '%s\n' "$FFMPEG_ENCODERS" | grep -qi "libx264"; then
     echo "[OK] FFmpeg possui libx264"
@@ -118,8 +119,45 @@ if [ -x "$HERE/bin/ffmpeg" ]; then
     fail=1
   fi
 
-  echo "[INFO] V101: a tela é capturada pelo Qt/X11 e enviada ao FFmpeg por rawvideo pipe."
-  echo "[INFO] O FFmpeg não precisa mais abrir o DISPLAY via x11grab."
+  echo "[INFO] V102 valida o input rawvideo/BGRA por uma codificação sintética."
+  echo "[INFO] O teste não captura a tela nem depende de DISPLAY."
+
+  SMOKE_OUT="$HERE/temp/screen_recorder_ffmpeg_smoke.mp4"
+  mkdir -p "$HERE/temp"
+  rm -f "$SMOKE_OUT"
+
+  if dd if=/dev/zero bs=16384 count=2 2>/dev/null |
+     "$HERE/bin/ffmpeg" \
+       -y \
+       -hide_banner \
+       -loglevel error \
+       -f rawvideo \
+       -pixel_format bgra \
+       -video_size 64x64 \
+       -framerate 1 \
+       -i pipe:0 \
+       -frames:v 2 \
+       -an \
+       -c:v libx264 \
+       -preset ultrafast \
+       -pix_fmt yuv420p \
+       "$SMOKE_OUT"; then
+    if [ -s "$SMOKE_OUT" ]; then
+      PROBED_DURATION="$("$HERE/bin/ffprobe" -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 "$SMOKE_OUT" 2>/dev/null || true)"
+      if awk -v duration="${PROBED_DURATION:-0}" 'BEGIN { exit !(duration + 0 > 0) }'; then
+        echo "[OK] FFmpeg recebeu rawvideo por pipe e gerou MP4 válido (${PROBED_DURATION}s)"
+      else
+        echo "[ERRO] FFmpeg gerou um arquivo, mas o FFprobe não confirmou duração válida."
+        fail=1
+      fi
+    else
+      echo "[ERRO] FFmpeg encerrou sem produzir o MP4 sintético."
+      fail=1
+    fi
+  else
+    echo "[ERRO] FFmpeg falhou na codificação sintética rawvideo/BGRA."
+    fail=1
+  fi
 fi
 
 echo

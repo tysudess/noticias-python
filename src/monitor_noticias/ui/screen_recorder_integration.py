@@ -17,6 +17,7 @@ def install_screen_recorder(window) -> ScreenRecorderPage:
     V95 instala a camada de sincronismo A/V.
     V101 reaplica no Linux os binários reais do bundle e, depois do V95,
     instala o fechamento seguro do pipe de frames Qt antes de pausa/STOP.
+    V102 corrige a inicialização dos dois processos FFmpeg no Linux.
     """
 
     from monitor_noticias.ui.screen_recorder_sync_patch import (
@@ -28,10 +29,14 @@ def install_screen_recorder(window) -> ScreenRecorderPage:
     from monitor_noticias.ui.screen_recorder_linux_patch import (
         install_linux_screen_recorder_post_sync_patch,
     )
+    from monitor_noticias.ui.screen_recorder_linux_ffmpeg_fix import (
+        install_linux_ffmpeg_input_option_fix,
+    )
 
     install_screen_recorder_sync_patch()
     install_screen_recorder_linux_runtime_fix()
     install_linux_screen_recorder_post_sync_patch()
+    install_linux_ffmpeg_input_option_fix()
 
     existing = getattr(
         window,
