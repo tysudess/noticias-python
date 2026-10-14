@@ -92,7 +92,7 @@ if command -v ldd >/dev/null 2>&1; then
   if ldd "$HERE/CentralInteligenteDeMidia" 2>/dev/null |
      grep -q "not found"; then
     echo
-echo "[ERRO] Há bibliotecas do sistema não encontradas."
+    echo "[ERRO] Há bibliotecas do sistema não encontradas."
     fail=1
   fi
 else
@@ -101,7 +101,6 @@ fi
 
 echo
 echo "Versões dos binários:"
-
 "$HERE/bin/ffmpeg" -version 2>/dev/null | head -n 1 || true
 "$HERE/bin/ffprobe" -version 2>/dev/null | head -n 1 || true
 "$HERE/bin/yt-dlp" --version 2>/dev/null || true
@@ -109,6 +108,8 @@ echo "Versões dos binários:"
 
 echo
 echo "FFmpeg / codificação do Gravador:"
+echo "[INFO] V101: FFmpeg recebe os frames pelo rawvideo pipe; a tela é capturada pelo Qt."
+echo "[INFO] FFmpeg não precisa mais abrir o DISPLAY via x11grab."
 if [ -x "$HERE/bin/ffmpeg" ]; then
   FFMPEG_ENCODERS="$("$HERE/bin/ffmpeg" -hide_banner -encoders 2>&1 || true)"
 
