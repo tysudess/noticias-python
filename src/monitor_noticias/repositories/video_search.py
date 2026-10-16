@@ -20,9 +20,9 @@ MAX_GLOBOPLAY_DEEP_FALLBACK_GENERAL = 14
 MAX_GLOBOPLAY_DEEP_FALLBACK_NATIONAL = 72
 MAX_YOUTUBE_ITEMS_PER_SCAN = 40
 MAX_PORTAL_PROGRAM_ITEMS_PER_SCAN = 40
-# A busca interna é usada apenas como fallback para fontes nacionais que não
-# encontraram termos/demandas no HTML inicial. As regionais ficam para a etapa
-# seguinte de otimização específica, evitando ampliar agora a carga de rede.
+# A busca interna com termos adicionais segue restrita às fontes nacionais;
+# ampliar esse fallback às regionais multiplicaria as requisições por UF.
+# A redução de chamadas regionais ocorre separadamente em video_collect.py.
 MAX_NATIONAL_PORTAL_FALLBACK_TERMS = 6
 NATIONAL_PORTAL_FALLBACK_IDS = {
     "video-globoplay-jornalismo",
@@ -193,14 +193,27 @@ def perform_video_search(repo, sources, from_ms, to_ms, on_update, cancel):
 
         def source_error(stage): failures.append(stage)
 
-        scan_candidates = collect_recent_by_source(repo, source, captured, effective_from, effective_to, source_error) if scan else []
+        # Emite o início antes dos coletores regionais fazerem qualquer GET.
+        # Isso permite medir o tempo real por fonte e mostrar o avanço durante
+        # a etapa de rede, não apenas depois que a coleta terminou.
+        if scan:
+            label = ("Edições + Trechos + Jarvis • cruzamento local"
+                     if source.id in CORE_NATIONAL_GLOBOPLAY_IDS
+                     else "Vídeos recentes • cruzamento local")
+            emit(source.name, label)
+            scan_candidates = collect_recent_by_source(
+                repo, source, captured, effective_from, effective_to, source_error
+            )
+        else:
+            scan_candidates = []
         if source.id in CORE_NATIONAL_GLOBOPLAY_IDS and jarvis is not None:
             scan_candidates = list({canonical_key(item.link):item for item in [*(jarvis.candidatesBySourceId.get(source.id,[]) or []),*scan_candidates]}.values())
 
         # Evita perder resultados quando a página inicial tem vídeos, mas não
-        # retorna nenhum que corresponda aos termos monitorados. Por ora, esse
-        # fallback automático é restrito aos portais nacionais; a varredura
-        # regional será otimizada em uma etapa própria.
+        # retorna nenhum que corresponda aos termos monitorados. A busca com
+        # termos adicionais permanece restrita aos portais nacionais, para não
+        # multiplicar chamadas por UF; fontes estaduais recebem otimização de
+        # descoberta e cache temporário em video_collect.py / HttpClient.
         if scan:
             scan_candidates = _collect_national_portal_fallback(
                 repo, source, scan_candidates, terms, demands, captured, cancel, source_error
@@ -212,9 +225,12 @@ def perform_video_search(repo, sources, from_ms, to_ms, on_update, cancel):
             if not scan and len(failures) >= MAX_REQUEST_FAILURES_PER_SOURCE:
                 unstable[source.id] = VideoSourceIssue(source.id, source.name, len(failures), max(set(failures), key=failures.count) if failures else "HTTP/rede")
                 completed += 1; emit(source.name,"Fonte instável • consultas restantes ignoradas"); continue
-            label = query if not scan else ("Edições + Trechos + Jarvis • cruzamento local" if source.id in CORE_NATIONAL_GLOBOPLAY_IDS else "Vídeos recentes • cruzamento local")
-            emit(source.name,label)
-            raw = scan_candidates if scan else collect_for_query(repo, source, query, captured, source_error)
+            if not scan:
+                label = query
+                emit(source.name, label)
+                raw = collect_for_query(repo, source, query, captured, source_error)
+            else:
+                raw = scan_candidates
             if not scan:
                 filtered = [item for item in raw if phrase_matches(f"{item.title} {item.summary}", query)]
                 if not filtered:
