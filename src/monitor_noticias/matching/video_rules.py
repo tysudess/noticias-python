@@ -176,6 +176,10 @@ def same_page(first: str, second: str) -> bool:
 
 
 def in_period(item: VideoItem, from_: int | None, to: int | None) -> bool:
+    # publishedAt=0 significa data desconhecida; não deve ser convertido em
+    # "agora" nem contar como vídeo dentro de um período selecionado.
+    if item.publishedAt <= 0:
+        return False
     if from_ is not None and item.publishedAt < from_:
         return False
     if to is not None and item.publishedAt > to:
@@ -286,8 +290,17 @@ def is_specific_video_url(source: VideoSource, url: str) -> bool:
         return has_specific_suffix(path, "/videos/")
     if source.id == "video-cnn-brasil":
         return has_specific_suffix(path, "/videos/") or has_specific_suffix(path, "/video/")
-    if source.id.startswith("video-band"):
+    if source.id == "video-band":
         return has_specific_suffix(path, "/videos/")
+    if source.id.startswith("video-band-"):
+        # Para fontes específicas da Band, não aceitar o caminho genérico
+        # /videos/: ele pode apontar para outro programa/afiliada. Exigir uma
+        # rota específica declarada no catálogo para reduzir atribuições falsas.
+        hints = [
+            hint for hint in source.linkHints
+            if normalize(hint.strip("/")) not in {"video", "videos"}
+        ]
+        return any(has_specific_suffix(path, hint) for hint in hints)
     return any(has_specific_suffix(path, hint) for hint in source.linkHints)
 
 
