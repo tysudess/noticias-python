@@ -7,6 +7,7 @@ from monitor_noticias.app.preferences import SharedPreferences
 from monitor_noticias.app.runtime_runners import RuntimeNewsRunner, RuntimeVideoRunner
 from monitor_noticias.automation import AutomationService, AutomationSettings
 from monitor_noticias.collectors.news import GoogleNewsCollector, NewsLatestCollector
+from monitor_noticias.collectors.news.veja_source import extend_news_catalog
 from monitor_noticias.collectors.video import DirectVideoPageResolver, GloboplayEditionCollector, GloboplayJarvisCollector, GloboplayTrechosCollector, WebsiteVideoCollector, YouTubeCollector
 from monitor_noticias.collectors.video.catalog import DEFAULT_IDS, VIDEO_SOURCES
 from monitor_noticias.database import NewsDb, VideoDb
@@ -16,6 +17,11 @@ from monitor_noticias.repositories import NewsRepository, VideoRepository, Video
 from monitor_noticias.ui.catalog import NATIONAL as NEWS_NATIONAL, NEWS_SOURCES, SPECIALIZED
 from monitor_noticias.ui.runtime_controller import RuntimeUiController
 from monitor_noticias.windows.startup import StartupManager
+
+# V107: acrescenta VEJA à lista nacional, à lista geral da interface e à rota
+# usada pelo coletor de últimas notícias, sem alterar os catálogos regionais.
+NEWS_NATIONAL, NEWS_SOURCES = extend_news_catalog(NEWS_NATIONAL, NEWS_SOURCES)
+
 
 @dataclass(slots=True)
 class AppContainer:
