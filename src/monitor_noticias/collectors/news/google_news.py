@@ -7,6 +7,7 @@ import xml.etree.ElementTree as ET
 
 from monitor_noticias.models import News
 from monitor_noticias.networking import HttpClient
+from monitor_noticias.networking.source_sites import register_source_site
 
 USER_AGENT = "Mozilla/5.0 MonitorNoticiasAndroid/3.0"
 CONNECT_TIMEOUT = 8.0
@@ -25,7 +26,17 @@ def parse_google_news_xml(xml_text: str, *, now_ms: int | None = None) -> list[N
     for item in root.findall(".//item"):
         title = (item.findtext("title") or "").strip()
         link = (item.findtext("link") or "").strip()
-        source = (item.findtext("source") or "Google Notícias").strip()
+        source_element = item.find("source")
+        source = (
+            (source_element.text or "Google Notícias").strip()
+            if source_element is not None
+            else "Google Notícias"
+        )
+        # O RSS do Google Notícias informa o endereço do veículo no atributo
+        # source@url. Registramos a origem oficial em memória para mostrar seu
+        # favicon sem fazer uma requisição adicional por cada notícia.
+        if source_element is not None:
+            register_source_site(source, source_element.get("url", ""))
         desc = re.sub(r"<[^>]*>", "", item.findtext("description") or "").strip()
         date = _parse_date(item.findtext("pubDate") or "", now_ms)
         if title and link:

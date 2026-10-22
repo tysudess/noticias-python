@@ -15,12 +15,17 @@ from monitor_noticias.networking import HttpClient
 from monitor_noticias.networking.proxy import ProxySettings
 from monitor_noticias.repositories import NewsRepository, VideoRepository, VideoTermStore
 from monitor_noticias.ui.catalog import NATIONAL as NEWS_NATIONAL, NEWS_SOURCES, SPECIALIZED
+from monitor_noticias.ui.news_site_icons_patch import install_news_site_icons_patch
 from monitor_noticias.ui.runtime_controller import RuntimeUiController
 from monitor_noticias.windows.startup import StartupManager
 
 # V107: acrescenta VEJA à lista nacional, à lista geral da interface e à rota
 # usada pelo coletor de últimas notícias, sem alterar os catálogos regionais.
 NEWS_NATIONAL, NEWS_SOURCES = extend_news_catalog(NEWS_NATIONAL, NEWS_SOURCES)
+
+# Ativa os logos antes da criação das páginas. A busca dos ícones é assíncrona e
+# usa o Proxy Geral; não inicia downloads até as notícias ficarem visíveis.
+install_news_site_icons_patch()
 
 
 @dataclass(slots=True)
