@@ -18,6 +18,7 @@ from monitor_noticias.repositories import NewsRepository, VideoRepository, Video
 from monitor_noticias.ui.catalog import NATIONAL as NEWS_NATIONAL, NEWS_SOURCES, SPECIALIZED
 from monitor_noticias.ui.news_site_icons_patch import install_news_site_icons_patch
 from monitor_noticias.ui.source_list_logos_patch import install_source_list_logos_patch
+from monitor_noticias.ui.video_preview_layout_patch import install_video_preview_layout_patch
 from monitor_noticias.ui.runtime_controller import RuntimeUiController
 from monitor_noticias.windows.startup import StartupManager
 
@@ -25,6 +26,7 @@ NEWS_NATIONAL, NEWS_SOURCES = extend_news_catalog(NEWS_NATIONAL, NEWS_SOURCES)
 install_news_site_icons_patch()
 install_source_list_logos_patch()
 install_video_defense_term_patch()
+install_video_preview_layout_patch()
 
 
 @dataclass(slots=True)
