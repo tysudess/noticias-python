@@ -27,6 +27,7 @@
     "asar": true,
     "files": [
       "monitor-bootstrap.js",
+      "article-quality.js",
       "monitor-main.js",
       "main.js",
       "preload.js",

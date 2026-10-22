@@ -35,12 +35,14 @@ def test_v104_keeps_existing_proxy_and_headless_one_shot_worker():
 
 
 def test_v104_quality_guard_deduplicates_noise_and_flags_short_uol_previews():
-    text = read("tools/news_extractor/monitor-bootstrap.js")
-    assert "function cleanArticleBody(text)" in text
-    assert "seen.has(key)" in text
-    assert "isStandaloneNoise(paragraph)" in text
-    assert "materia.avisoCompletude" in text
-    assert "não vai apresentar esse trecho como matéria completa" in text
+    bootstrap = read("tools/news_extractor/monitor-bootstrap.js")
+    quality = read("tools/news_extractor/article-quality.js")
+    assert "function cleanArticleBody(text)" in quality
+    assert "seen.has(key)" in quality
+    assert "isStandaloneNoise(paragraph)" in quality
+    assert "cleanArticleBody" in bootstrap
+    assert "materia.avisoCompletude" in bootstrap
+    assert "não vai apresentar esse trecho como matéria completa" in bootstrap
 
 
 def test_v104_diagnostic_contains_required_v101_regression_markers():

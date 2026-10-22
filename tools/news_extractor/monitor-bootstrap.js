@@ -1,6 +1,6 @@
 'use strict';
 
-// V104: bootstrap do worker de extração.
+// V108: bootstrap do worker de extração rápida e com limpeza de legendas.
 // A interface Electron normal continua no monitor-main.js/main.js. Este arquivo
 // só aplica as otimizações quando a Central inicia o extrator em modo headless.
 const { app } = require('electron');
@@ -11,9 +11,13 @@ const FAST_MODE = String(process.env.CENTRAL_NEWS_FAST_MODE || '').trim() === '1
 if (!HEADLESS) {
   require('./monitor-main.js');
 } else {
+  const { cleanArticleBody, installCaptionSanitizer } = require('./article-quality.js');
+
   const FAST_TIMEOUT_MS = 8500;
   const HTML_CACHE_LIMIT_BYTES = 5 * 1024 * 1024;
+  const FAST_NETWORK_MAX_ATTEMPTS = 2;
   const htmlCache = new Map();
+  const fastRequestAttempts = new Map();
 
   function timeoutFor(ms) {
     const requested = Number(ms);
@@ -43,12 +47,17 @@ if (!HEADLESS) {
     const rawUrl = typeof input === 'string'
       ? input
       : String(input && input.url ? input.url : input);
-    let parsed;
+    let parsedUrl;
     try {
-      parsed = new URL(rawUrl).toString();
+      parsedUrl = new URL(rawUrl);
     } catch (_) {
       return null;
     }
+
+    // Só o G1 tem uma segunda leitura conhecida da mesma URL para completar
+    // parágrafos. Em outros portais, cachear toda página custa mais do que ajuda.
+    if (parsedUrl.hostname.toLowerCase() !== 'g1.globo.com') return null;
+    const parsed = parsedUrl.toString();
 
     const method = String(
       init.method || (input && input.method) || 'GET'
@@ -71,6 +80,25 @@ if (!HEADLESS) {
     });
   }
 
+  function fastRequestKey(input) {
+    const rawUrl = typeof input === 'string'
+      ? input
+      : String(input && input.url ? input.url : input);
+    try {
+      return new URL(rawUrl).toString();
+    } catch (_) {
+      return null;
+    }
+  }
+
+  function fastRetryLimitError() {
+    // Não replica a mensagem de erro transitório original: isso faz o motor
+    // encerrar o ciclo de retry de forma deliberada no modo rápido.
+    return new Error(
+      'Modo rápido: limite de duas tentativas atingido para este endereço. Tente novamente se a rede estiver instável.'
+    );
+  }
+
   function installNetworkOptimizations() {
     const undici = require('undici');
     const originalFetch = undici.fetch;
@@ -83,40 +111,107 @@ if (!HEADLESS) {
 
     const optimizedFetch = async function centralNewsOptimizedFetch(input, init = {}) {
       const key = htmlCacheKey(input, init);
+      const requestKey = fastRequestKey(input);
       if (key && htmlCache.has(key)) {
         console.log('NEWS PERF: reutilizando HTML da mesma URL na extração atual.');
         return responseFromCache(ResponseCtor, htmlCache.get(key));
       }
 
-      const response = await originalFetch(input, init);
-      if (!key || !response.ok) return response;
+      let response;
+      try {
+        response = await originalFetch(input, init);
+      } catch (error) {
+        if (!FAST_MODE || !requestKey) throw error;
+        const attempts = (fastRequestAttempts.get(requestKey) || 0) + 1;
+        if (attempts >= FAST_NETWORK_MAX_ATTEMPTS) {
+          fastRequestAttempts.delete(requestKey);
+          console.warn('NEWS PERF: retry encerrado pelo limite rápido de tentativas.');
+          throw fastRetryLimitError();
+        }
+        fastRequestAttempts.set(requestKey, attempts);
+        throw error;
+      }
+
+      if (FAST_MODE && requestKey) {
+        if ([502, 503, 504].includes(response.status)) {
+          const attempts = (fastRequestAttempts.get(requestKey) || 0) + 1;
+          if (attempts >= FAST_NETWORK_MAX_ATTEMPTS) {
+            fastRequestAttempts.delete(requestKey);
+            try { await response.body?.cancel(); } catch (_) {}
+            console.warn(`NEWS PERF: retry encerrado após HTTP ${response.status} repetido.`);
+            throw new Error(
+              `Modo rápido: o portal respondeu HTTP ${response.status} em duas tentativas.`
+            );
+          }
+          fastRequestAttempts.set(requestKey, attempts);
+        } else if (!response.ok) {
+          fastRequestAttempts.delete(requestKey);
+        }
+      }
+
+      if (!key || !response.ok) {
+        const retryableHttp = [502, 503, 504].includes(response.status);
+        if (FAST_MODE && requestKey && !retryableHttp) {
+          fastRequestAttempts.delete(requestKey);
+        }
+        return response;
+      }
 
       const contentType = String(response.headers.get('content-type') || '');
-      if (!/text\/html|application\/xhtml\+xml/i.test(contentType)) return response;
+      if (!/text\/html|application\/xhtml\+xml/i.test(contentType)) {
+        if (FAST_MODE && requestKey) fastRequestAttempts.delete(requestKey);
+        return response;
+      }
 
-      const declaredLength = Number(response.headers.get('content-length') || 0);
-      if (declaredLength > HTML_CACHE_LIMIT_BYTES) return response;
+      const declaredLengthHeader = response.headers.get('content-length');
+      const declaredLength = Number(declaredLengthHeader || 0);
+      // Não duplicamos corpos grandes ou sem tamanho declarado: a cópia
+      // especulativa de HTML sem chance clara de cache só encarece a extração.
+      if (!declaredLengthHeader || !Number.isFinite(declaredLength)
+        || declaredLength <= 0 || declaredLength > HTML_CACHE_LIMIT_BYTES) {
+        if (FAST_MODE && requestKey) fastRequestAttempts.delete(requestKey);
+        return response;
+      }
+      if (response.headers.has('set-cookie')) {
+        if (FAST_MODE && requestKey) fastRequestAttempts.delete(requestKey);
+        return response;
+      }
 
       try {
-        // O motor já precisa ler todo o HTML para analisá-lo. A cópia é lida
-        // na mesma passagem e fica disponível para as conferências do portal.
-        const body = await response.clone().text();
-        if (Buffer.byteLength(body, 'utf8') > HTML_CACHE_LIMIT_BYTES) return response;
-
+        // Lê o fluxo uma única vez e reconstrói uma resposta em memória. Isso
+        // evita o tee de response.clone(), que mantinha duas cópias do corpo
+        // aguardando consumo. O cache é usado somente se o HTML for pequeno.
+        const body = await response.text();
+        const size = Buffer.byteLength(body, 'utf8');
         const headers = [...response.headers].filter(([name]) => {
           return !['content-encoding', 'content-length', 'transfer-encoding']
             .includes(String(name).toLowerCase());
         });
-        htmlCache.set(key, {
+        const buffered = {
           body,
           status: response.status,
           statusText: response.statusText,
           headers
-        });
+        };
+        if (size <= HTML_CACHE_LIMIT_BYTES) htmlCache.set(key, buffered);
+        if (FAST_MODE && requestKey) fastRequestAttempts.delete(requestKey);
+        const replay = responseFromCache(ResponseCtor, buffered);
+        try {
+          Object.defineProperty(replay, 'url', { value: response.url });
+          Object.defineProperty(replay, 'redirected', { value: response.redirected });
+        } catch (_) {}
+        return replay;
       } catch (error) {
-        console.warn('NEWS PERF: não foi possível armazenar HTML em memória:', error.message);
+        console.warn('NEWS PERF: leitura do HTML falhou durante o buffer curto:', error.message);
+        if (!FAST_MODE || !requestKey) throw error;
+        const attempts = (fastRequestAttempts.get(requestKey) || 0) + 1;
+        if (attempts >= FAST_NETWORK_MAX_ATTEMPTS) {
+          fastRequestAttempts.delete(requestKey);
+          throw fastRetryLimitError();
+        }
+        fastRequestAttempts.set(requestKey, attempts);
+        throw error;
       }
-      return response;
     };
 
     try {
@@ -138,9 +233,9 @@ if (!HEADLESS) {
       };
     }
 
-    // Reduz apenas as leituras complementares (metadados/conferências). A
-    // leitura principal mantém a lógica nativa de retry do motor e o fallback
-    // por AMP/portal continua disponível.
+    // Mantém o limite na função exportada para chamadas diretas. A extração
+    // principal também recebe o limite no fetch real acima, pois a função
+    // extrairMateria mantém uma referência lexical à rotina original.
     if (FAST_MODE) {
       try {
         const core = require('./engine/extrator-materia-v1.25.1.js');
@@ -169,48 +264,6 @@ if (!HEADLESS) {
         console.warn('NEWS PERF: não foi possível limitar leituras complementares:', error.message);
       }
     }
-  }
-
-  function normalizeParagraph(value) {
-    return String(value || '')
-      .replace(/[\u200B-\u200D\u2060\uFEFF]/g, '')
-      .replace(/\u00a0/g, ' ')
-      .replace(/[ \t]+/g, ' ')
-      .replace(/\s+/g, ' ')
-      .trim();
-  }
-
-  function isStandaloneNoise(paragraph) {
-    const value = normalizeParagraph(paragraph);
-    if (!value || value.length > 240) return false;
-    return (
-      /^(?:publicidade|anúncio|anuncio|compartilhe|continue lendo)$/i.test(value)
-      || /^(?:leia|veja|confira)\s+(?:também|tambem|mais)\b/i.test(value)
-      || /^(?:conteúdos?|matérias?|notícias?)\s+relacionad[oa]s?\b/i.test(value)
-      || /^(?:assine|inscreva-se|receba)\s+(?:o|a|os|as|nossa|nosso|nossas|nossos|as notícias|as noticias|a newsletter|nossa newsletter)\b/i.test(value)
-      || /^(?:foto|fotos|imagem|imagens|crédito|créditos|credito|creditos)\s*:/i.test(value)
-    );
-  }
-
-  function cleanArticleBody(text) {
-    const original = String(text || '').trim();
-    const paragraphs = original
-      .split(/\n\s*\n+/)
-      .map(normalizeParagraph)
-      .filter(Boolean);
-    const seen = new Set();
-    const clean = [];
-
-    for (const paragraph of paragraphs) {
-      if (isStandaloneNoise(paragraph)) continue;
-      const key = paragraph.toLocaleLowerCase('pt-BR');
-      // Deduplica parágrafos longos repetidos pelo DOM, sem remover nomes,
-      // subtítulos curtos ou referências breves que podem aparecer de novo.
-      if (paragraph.length >= 70 && seen.has(key)) continue;
-      if (paragraph.length >= 70) seen.add(key);
-      clean.push(paragraph);
-    }
-    return clean.join('\n\n').trim();
   }
 
   function reformatArticle(materia) {
@@ -281,6 +334,9 @@ if (!HEADLESS) {
     motor.extrairMateria = guardedExtract;
   }
 
+  // A limpeza deve ser instalada antes de qualquer módulo do motor importar
+  // JSDOM e executar o Readability sobre a página original.
+  installCaptionSanitizer();
   installNetworkOptimizations();
 
   // Carrega o motor depois de instalar o wrapper de rede, para que Undici seja
@@ -290,7 +346,7 @@ if (!HEADLESS) {
   installQualityGuards(motor);
 
   console.log(
-    `NEWS PERF V104: fastMode=${FAST_MODE}; timeout por requisição=${FAST_MODE ? FAST_TIMEOUT_MS : 'padrão'}ms; cache HTML de curta duração ativo.`
+    `NEWS PERF V108: fastMode=${FAST_MODE}; timeout por requisição=${FAST_MODE ? FAST_TIMEOUT_MS : 'padrão'}ms; no máximo ${FAST_NETWORK_MAX_ATTEMPTS} tentativas por URL no modo rápido; cache HTML temporário restrito ao G1.`
   );
 
   // Reutiliza o caminho existente para proxy, saída JSON, histórico e timeout.
