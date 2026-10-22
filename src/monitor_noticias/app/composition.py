@@ -19,6 +19,7 @@ from monitor_noticias.ui.catalog import NATIONAL as NEWS_NATIONAL, NEWS_SOURCES,
 from monitor_noticias.ui.news_site_icons_patch import install_news_site_icons_patch
 from monitor_noticias.ui.source_list_logos_patch import install_source_list_logos_patch
 from monitor_noticias.ui.video_preview_layout_patch import install_video_preview_layout_patch
+from monitor_noticias.ui.video_timeline_side_controls_patch import install_video_timeline_side_controls_patch
 from monitor_noticias.ui.runtime_controller import RuntimeUiController
 from monitor_noticias.windows.startup import StartupManager
 
@@ -27,6 +28,7 @@ install_news_site_icons_patch()
 install_source_list_logos_patch()
 install_video_defense_term_patch()
 install_video_preview_layout_patch()
+install_video_timeline_side_controls_patch()
 
 
 @dataclass(slots=True)
