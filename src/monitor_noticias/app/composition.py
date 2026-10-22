@@ -13,6 +13,7 @@ from monitor_noticias.collectors.video.catalog import DEFAULT_IDS, VIDEO_SOURCES
 from monitor_noticias.database import NewsDb, VideoDb
 from monitor_noticias.networking import HttpClient
 from monitor_noticias.networking.proxy import ProxySettings
+from monitor_noticias.matching.video_defense_term_patch import install_video_defense_term_patch
 from monitor_noticias.repositories import NewsRepository, VideoRepository, VideoTermStore
 from monitor_noticias.ui.catalog import NATIONAL as NEWS_NATIONAL, NEWS_SOURCES, SPECIALIZED
 from monitor_noticias.ui.news_site_icons_patch import install_news_site_icons_patch
@@ -26,6 +27,7 @@ NEWS_NATIONAL, NEWS_SOURCES = extend_news_catalog(NEWS_NATIONAL, NEWS_SOURCES)
 # Ativa os logos antes da criação das páginas. A busca dos ícones é assíncrona e
 # usa o Proxy Geral; não inicia downloads até as notícias ficarem visíveis.
 install_news_site_icons_patch()
+install_video_defense_term_patch()
 
 
 @dataclass(slots=True)
