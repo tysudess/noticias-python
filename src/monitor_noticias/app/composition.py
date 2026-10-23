@@ -20,6 +20,7 @@ from monitor_noticias.ui.news_site_icons_patch import install_news_site_icons_pa
 from monitor_noticias.ui.source_list_logos_patch import install_source_list_logos_patch
 from monitor_noticias.ui.video_preview_layout_patch import install_video_preview_layout_patch
 from monitor_noticias.ui.video_timeline_side_controls_patch import install_video_timeline_side_controls_patch
+from monitor_noticias.ui.admin_user_management_patch import install_admin_user_management_patch
 from monitor_noticias.ui.runtime_controller import RuntimeUiController
 from monitor_noticias.windows.startup import StartupManager
 
@@ -29,6 +30,7 @@ install_source_list_logos_patch()
 install_video_defense_term_patch()
 install_video_preview_layout_patch()
 install_video_timeline_side_controls_patch()
+install_admin_user_management_patch()
 
 
 @dataclass(slots=True)

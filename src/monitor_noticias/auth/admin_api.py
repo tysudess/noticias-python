@@ -44,9 +44,10 @@ def _post_admin(
         if exc.code == "UNKNOWN_ACTION":
             raise AuthApiError(
                 (
-                    "O Apps Script publicado ainda não possui a Administração "
-                    "de Usuários V94. Atualize tools/auth_server/Code.gs e "
-                    "publique uma NOVA versão do Web App."
+                    "O Apps Script publicado ainda não possui as operações de "
+                    "edição/exclusão da Administração V114. Aplique o patch "
+                    "tools/auth_server/apply_admin_users_v114_patch.py ao "
+                    "Code.gs e publique uma nova versão do Web App."
                 ),
                 code="SERVER_UPDATE_REQUIRED",
             ) from exc
@@ -56,11 +57,7 @@ def _post_admin(
 def list_users(
     runtime: AuthRuntime,
 ) -> list[dict[str, Any]]:
-    data = _post_admin(
-        runtime,
-        "admin_list_users",
-    )
-
+    data = _post_admin(runtime, "admin_list_users")
     raw = data.get("users") or []
 
     if not isinstance(raw, list):
@@ -69,11 +66,7 @@ def list_users(
             code="INVALID_RESPONSE",
         )
 
-    return [
-        item
-        for item in raw
-        if isinstance(item, dict)
-    ]
+    return [item for item in raw if isinstance(item, dict)]
 
 
 def create_user(
@@ -100,13 +93,11 @@ def create_user(
     )
 
     user = data.get("user")
-
     if not isinstance(user, dict):
         raise AuthApiError(
             "O servidor não retornou o usuário criado.",
             code="INVALID_RESPONSE",
         )
-
     return user
 
 
@@ -121,4 +112,50 @@ def reset_password(
         "admin_reset_password",
         username=str(username or "").strip(),
         temporary_password=str(temporary_password or ""),
+    )
+
+
+def update_user(
+    runtime: AuthRuntime,
+    *,
+    username: str,
+    name: str,
+    profile: str,
+    status: str,
+    validity: str = "",
+    max_devices: int = 1,
+    permissions: str = "",
+) -> dict[str, Any]:
+    """Atualiza metadados/perfil de um usuário sem alterar seu identificador."""
+    data = _post_admin(
+        runtime,
+        "admin_update_user",
+        username=str(username or "").strip(),
+        name=str(name or "").strip(),
+        profile=str(profile or "").strip().upper(),
+        status=str(status or "").strip().upper(),
+        validity=str(validity or "").strip(),
+        max_devices=max(1, min(20, int(max_devices))),
+        permissions=str(permissions or "").strip(),
+    )
+
+    user = data.get("user")
+    if not isinstance(user, dict):
+        raise AuthApiError(
+            "O servidor não retornou o usuário atualizado.",
+            code="INVALID_RESPONSE",
+        )
+    return user
+
+
+def delete_user(
+    runtime: AuthRuntime,
+    *,
+    username: str,
+) -> None:
+    """Remove a conta no servidor; o Apps Script revoga sessões e desativa dispositivos."""
+    _post_admin(
+        runtime,
+        "admin_delete_user",
+        username=str(username or "").strip(),
     )
