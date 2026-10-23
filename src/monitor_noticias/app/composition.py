@@ -23,6 +23,7 @@ from monitor_noticias.ui.video_timeline_side_controls_patch import install_video
 from monitor_noticias.ui.admin_user_management_patch import install_admin_user_management_patch
 from monitor_noticias.ui.first_tabs_functional_patch import install_first_tabs_functional_patch
 from monitor_noticias.ui.first_tabs_performance_patch import install_first_tabs_performance_patch
+from monitor_noticias.ui.first_tabs_visual_patch import install_first_tabs_visual_patch
 from monitor_noticias.ui.runtime_controller import RuntimeUiController
 from monitor_noticias.windows.startup import StartupManager
 
@@ -35,6 +36,7 @@ install_video_timeline_side_controls_patch()
 install_admin_user_management_patch()
 install_first_tabs_functional_patch()
 install_first_tabs_performance_patch()
+install_first_tabs_visual_patch()
 
 
 @dataclass(slots=True)
