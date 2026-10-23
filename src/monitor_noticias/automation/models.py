@@ -1,4 +1,5 @@
 from __future__ import annotations
+
 from dataclasses import dataclass, field
 
 
@@ -37,6 +38,8 @@ class DemandSweepResult:
     foundCount: int
     newCount: int
     errors: int = 0
+    items: tuple[object, ...] = field(default_factory=tuple)
+    newLinks: tuple[str, ...] = field(default_factory=tuple)
 
 
 @dataclass(frozen=True, slots=True)
