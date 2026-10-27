@@ -24,6 +24,7 @@ from monitor_noticias.ui.admin_user_management_patch import install_admin_user_m
 from monitor_noticias.ui.first_tabs_functional_patch import install_first_tabs_functional_patch
 from monitor_noticias.ui.first_tabs_performance_patch import install_first_tabs_performance_patch
 from monitor_noticias.ui.first_tabs_visual_patch import install_first_tabs_visual_patch
+from monitor_noticias.ui.remaining_program_patch import install_remaining_program_patch
 from monitor_noticias.ui.runtime_controller import RuntimeUiController
 from monitor_noticias.windows.startup import StartupManager
 
@@ -37,6 +38,7 @@ install_admin_user_management_patch()
 install_first_tabs_functional_patch()
 install_first_tabs_performance_patch()
 install_first_tabs_visual_patch()
+install_remaining_program_patch()
 
 
 @dataclass(slots=True)
