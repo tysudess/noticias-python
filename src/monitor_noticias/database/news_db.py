@@ -1,10 +1,9 @@
 from __future__ import annotations
 
 from pathlib import Path
-import threading
 import time
 
-from monitor_noticias.database.connection import SQLiteConnection
+from monitor_noticias.database.connection import SQLiteConnection, synchronized
 from monitor_noticias.database.default_terms import DEFAULT_MONITOR_TERMS
 from monitor_noticias.models import Demand, News
 
@@ -12,7 +11,9 @@ from monitor_noticias.models import Demand, News
 class NewsDb:
     def __init__(self, path: Path) -> None:
         self._db = SQLiteConnection(path)
-        self._lock = threading.RLock()
+        # Reuse the connection's lock so every operation and transaction shares
+        # exactly the same synchronization primitive.
+        self._lock = self._db.lock
         self._create_schema()
         self._ensure_columns()
         self._seed_terms()
@@ -21,6 +22,7 @@ class NewsDb:
     def path(self) -> Path:
         return self._db.path
 
+    @synchronized
     def _create_schema(self) -> None:
         connection = self._db.raw
         connection.execute(
@@ -43,6 +45,7 @@ class NewsDb:
             "last_error TEXT DEFAULT '')"
         )
 
+    @synchronized
     def _ensure_columns(self) -> None:
         connection = self._db.raw
         cols = {row["name"] for row in connection.execute("PRAGMA table_info(news)")}
@@ -74,15 +77,17 @@ class NewsDb:
         if "last_error" not in demand_cols:
             connection.execute("ALTER TABLE demands ADD COLUMN last_error TEXT DEFAULT ''")
 
+    @synchronized
     def _seed_terms(self) -> None:
         self._db.raw.executemany(
             "INSERT OR IGNORE INTO terms(term) VALUES(?)",
             ((value,) for value in DEFAULT_MONITOR_TERMS),
         )
 
+    @synchronized
     def insertNews(self, items: list[News]) -> list[News]:
         inserted: list[News] = []
-        with self._lock, self._db.transaction() as connection:
+        with self._db.transaction() as connection:
             for item in items:
                 cursor = connection.execute(
                     "INSERT OR IGNORE INTO news("
@@ -142,13 +147,16 @@ class NewsDb:
                     )
         return inserted
 
+    @synchronized
     def listRecent(self, hours: int = 24, limit: int = 500) -> list[News]:
         cutoff = int(time.time() * 1000) - hours * 60 * 60 * 1000
         return self._queryNews("date>=?", (cutoff,), limit)
 
+    @synchronized
     def listNews(self, limit: int = 500) -> list[News]:
         return self._queryNews(None, (), limit)
 
+    @synchronized
     def _queryNews(
         self, where: str | None, args: tuple[int, ...], limit: int
     ) -> list[News]:
@@ -177,6 +185,7 @@ class NewsDb:
             for row in rows
         ]
 
+    @synchronized
     def listTerms(self) -> list[str]:
         return [
             row[0]
@@ -185,15 +194,18 @@ class NewsDb:
             )
         ]
 
+    @synchronized
     def addTerm(self, term: str) -> None:
         clean = term.strip()
         if not clean:
             return
         self._db.raw.execute("INSERT OR IGNORE INTO terms(term) VALUES(?)", (clean,))
 
+    @synchronized
     def removeTerm(self, term: str) -> None:
         self._db.raw.execute("DELETE FROM terms WHERE term=?", (term,))
 
+    @synchronized
     def listDemands(self) -> list[Demand]:
         rows = self._db.raw.execute(
             "SELECT id,vehicle,subject,active,last_checked_at,last_found_count,"
@@ -213,6 +225,7 @@ class NewsDb:
             for row in rows
         ]
 
+    @synchronized
     def addDemand(self, vehicle: str, subject: str) -> None:
         if not vehicle.strip() or not subject.strip():
             return
@@ -221,6 +234,7 @@ class NewsDb:
             (vehicle.strip(), subject.strip()),
         )
 
+    @synchronized
     def updateDemandStatus(
         self,
         id: int,
@@ -235,12 +249,15 @@ class NewsDb:
             (checked_at, found_count, new_count, error, id),
         )
 
+    @synchronized
     def removeDemand(self, id: int) -> None:
         self._db.raw.execute("DELETE FROM demands WHERE id=?", (id,))
 
+    @synchronized
     def clearHistory(self) -> None:
         self._db.raw.execute("DELETE FROM news")
 
+    @synchronized
     def close(self) -> None:
         try:
             self._db.close()

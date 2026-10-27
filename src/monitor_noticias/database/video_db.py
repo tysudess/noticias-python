@@ -2,12 +2,11 @@ from __future__ import annotations
 
 from pathlib import Path
 import re
-import threading
 import time
 import unicodedata
 from urllib.parse import urlsplit
 
-from monitor_noticias.database.connection import SQLiteConnection
+from monitor_noticias.database.connection import SQLiteConnection, synchronized
 from monitor_noticias.matching import phrase_matches
 from monitor_noticias.models import VideoItem
 
@@ -50,7 +49,7 @@ def _is_generic_stored_result(title: str, link: str) -> bool:
 class VideoDb:
     def __init__(self, path: Path) -> None:
         self._db = SQLiteConnection(path)
-        self._lock = threading.RLock()
+        self._lock = self._db.lock
         self._db.raw.execute(
             """CREATE TABLE IF NOT EXISTS videos(
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -64,9 +63,10 @@ class VideoDb:
     def path(self) -> Path:
         return self._db.path
 
+    @synchronized
     def insert(self, items: list[VideoItem]) -> list[VideoItem]:
         inserted: list[VideoItem] = []
-        with self._lock, self._db.transaction() as connection:
+        with self._db.transaction() as connection:
             for item in items:
                 cursor = connection.execute(
                     "INSERT OR IGNORE INTO videos("
@@ -120,6 +120,7 @@ class VideoDb:
                     )
         return inserted
 
+    @synchronized
     def removeInvalidListingEntries(self) -> int:
         ids = [
             row[0]
@@ -130,6 +131,7 @@ class VideoDb:
             self._db.raw.execute("DELETE FROM videos WHERE id=?", (id,))
         return len(ids)
 
+    @synchronized
     def repairStoredMatches(self) -> int:
         repairs: list[tuple[int, str, str, bool]] = []
         rows = self._db.raw.execute(
@@ -142,10 +144,7 @@ class VideoDb:
             demand = row[4] or ""
             term_valid = not term.strip() or phrase_matches(body, term)
             subject = demand.partition(" • ")[2].strip() if " • " in demand else demand.strip()
-            demand_valid = (
-                not demand.strip()
-                or (bool(subject) and phrase_matches(body, subject))
-            )
+            demand_valid = not demand.strip() or (bool(subject) and phrase_matches(body, subject))
             if term_valid and demand_valid:
                 continue
             keep_term = term if term_valid else ""
@@ -162,19 +161,24 @@ class VideoDb:
                 )
         return len(repairs)
 
+    @synchronized
     def listRecent(self, days: int = 7, limit: int = 500) -> list[VideoItem]:
         cutoff = int(time.time() * 1000) - days * 24 * 60 * 60 * 1000
         return self._query("published_at>=?", (cutoff,), limit)
 
+    @synchronized
     def listPeriod(self, from_: int, to: int, limit: int = 1000) -> list[VideoItem]:
         return self._query("published_at>=? AND published_at<=?", (from_, to), limit)
 
+    @synchronized
     def listAll(self, limit: int = 1000) -> list[VideoItem]:
         return self._query(None, (), limit)
 
+    @synchronized
     def clear(self) -> None:
         self._db.raw.execute("DELETE FROM videos")
 
+    @synchronized
     def _query(
         self, where: str | None, args: tuple[int, ...], limit: int
     ) -> list[VideoItem]:
@@ -202,6 +206,7 @@ class VideoDb:
             for row in rows
         ]
 
+    @synchronized
     def close(self) -> None:
         try:
             self._db.close()
