@@ -296,9 +296,7 @@ class SystemDiagnostics:
                         key="proxy",
                         label="Proxy Geral",
                         status="ok" if ok else "error",
-                        detail=(
-                            f"{cfg.host}:{cfg.port} • {message}"
-                        ),
+                        detail=f"{cfg.host}:{cfg.port} • {message}",
                         duration_ms=elapsed,
                     )
                 )
@@ -394,9 +392,7 @@ class SystemDiagnostics:
                             key="auth_validate",
                             label="Validação real da sessão",
                             status="ok",
-                            detail=(
-                                "Token, dispositivo, status, validade e permissões confirmados."
-                            ),
+                            detail="Token, dispositivo, status, validade e permissões confirmados.",
                             duration_ms=elapsed,
                         )
                     )
@@ -442,18 +438,59 @@ class SystemDiagnostics:
         )
 
 
-_SECRET_PATTERNS = (
-    re.compile(r"(?i)(senha|password|token|secret)\s*[:=]\s*[^\s,;]+"),
-    re.compile(r"(?i)(https?://)([^/@:\s]+):([^/@\s]+)@"),
-    re.compile(r"(?i)(authorization\s*:\s*bearer\s+)[A-Za-z0-9._~-]+"),
+# Redação aplicada aos logs e ao relatório JSON, que também pode conter mensagens
+# de exceção vindas de bibliotecas de rede ou serviços de autenticação.
+_SECRET_ASSIGNMENT = re.compile(
+    r"(?ix)"
+    r"(?P<key>[\"']?[A-Za-z0-9_.-]*"
+    r"(?:password|passwd|pwd|senha|token|secret|api[_-]?key|apikey|"
+    r"credential|authorization|cookie|session(?:[_-]?id)?|private[_-]?key|"
+    r"signature|passphrase|username|user_name|email)[A-Za-z0-9_.-]*[\"']?)"
+    r"(?P<sep>\s*[:=]\s*)"
+    r"(?P<value>\"(?:\\.|[^\"\\])*\"|'(?:\\.|[^'\\])*'|[^\s,;&]+)"
+)
+_AUTH_HEADER = re.compile(
+    r"(?im)(\b(?:proxy-authorization|authorization)\s*:\s*)"
+    r"(?:bearer|basic)\s+[^\s,;]+"
+)
+_COOKIE_HEADER = re.compile(
+    r"(?im)(^\s*(?:cookie|set-cookie)\s*:\s*)[^\r\n]+"
+)
+_URL_CREDENTIALS = re.compile(
+    r"(?i)(https?://)[^/\s:@]+(?::[^/\s@]*)?@"
+)
+_BEARER_VALUE = re.compile(r"(?i)\b(bearer|basic)\s+[A-Za-z0-9._~+/=-]{8,}")
+_JWT_VALUE = re.compile(
+    r"\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{8,}\b"
 )
 
 
+def _replacement_with_quote(value: str) -> str:
+    if len(value) >= 2 and value[0] == value[-1] and value[0] in {"'", '"'}:
+        return value[0] + "***" + value[-1]
+    return "***"
+
+
 def sanitize_log_text(text: str) -> str:
+    """Remove senhas, tokens, cookies e credenciais antes de exportar suporte.
+
+    O texto original continua somente no log local. A sanitização é aplicada
+    tanto aos logs anexados quanto aos detalhes do relatório JSON exportado.
+    """
     value = str(text or "")
-    value = _SECRET_PATTERNS[0].sub(r"\1=***", value)
-    value = _SECRET_PATTERNS[1].sub(r"\1***:***@", value)
-    value = _SECRET_PATTERNS[2].sub(r"\1***", value)
+    value = _URL_CREDENTIALS.sub(r"\1***@", value)
+    value = _AUTH_HEADER.sub(r"\1***", value)
+    value = _COOKIE_HEADER.sub(r"\1***", value)
+    value = _SECRET_ASSIGNMENT.sub(
+        lambda match: (
+            match.group("key")
+            + match.group("sep")
+            + _replacement_with_quote(match.group("value"))
+        ),
+        value,
+    )
+    value = _BEARER_VALUE.sub(r"\1 ***", value)
+    value = _JWT_VALUE.sub("***", value)
     return value
 
 
@@ -463,6 +500,9 @@ def build_diagnostic_package(paths, report: DiagnosticReport) -> Path:
 
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
     target = downloads / f"Central-Diagnostico-{stamp}.zip"
+    report_data = report.to_dict()
+    for item in report_data.get("items", []):
+        item["detail"] = sanitize_log_text(item.get("detail", ""))
 
     with zipfile.ZipFile(
         target,
@@ -472,7 +512,7 @@ def build_diagnostic_package(paths, report: DiagnosticReport) -> Path:
         archive.writestr(
             "diagnostico.json",
             json.dumps(
-                report.to_dict(),
+                report_data,
                 ensure_ascii=False,
                 indent=2,
             ),
@@ -480,13 +520,15 @@ def build_diagnostic_package(paths, report: DiagnosticReport) -> Path:
 
         logs_dir = Path(paths.logs)
         if logs_dir.is_dir():
-            for log_file in sorted(logs_dir.glob("*.log")):
+            # Limita número e tamanho dos anexos para evitar um ZIP enorme.
+            log_files = sorted(logs_dir.glob("*.log"))[-10:]
+            for log_file in log_files:
                 try:
                     data = log_file.read_bytes()[-512_000:]
-                    text = data.decode("utf-8", "replace")
+                    log_text = data.decode("utf-8", "replace")
                     archive.writestr(
                         f"logs/{log_file.name}",
-                        sanitize_log_text(text),
+                        sanitize_log_text(log_text),
                     )
                 except Exception:
                     continue
