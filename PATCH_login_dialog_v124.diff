@@ -1,20 +1,28 @@
 --- a/src/monitor_noticias/ui/login_dialog.py
 +++ b/src/monitor_noticias/ui/login_dialog.py
-@@ -20,1 +20,4 @@
+@@ -22,3 +22,6 @@
+ from monitor_noticias.auth.models import AuthSession
  from monitor_noticias.auth.runtime import AuthRuntime
 +from monitor_noticias.auth.saved_session_v124 import (
 +    handle_saved_session_failure,
 +)
-@@ -259,1 +262,2 @@
+ from monitor_noticias.networking.proxy import corporate_tls_compatibility
+@@ -260,2 +263,3 @@
+         self._thread: QThread | None = None
          self._worker: _AuthWorker | None = None
 +        self._validating_saved_session = False
-@@ -391,1 +395,2 @@
+@@ -390,5 +394,6 @@
+         token = runtime.saved_token()
          if token:
 +            self._validating_saved_session = True
-@@ -489,1 +494,2 @@
+             self.message.setText("Validando sessão salva...")
+             self._run_async(
+                 lambda: runtime.client.validate(token),
+@@ -488,2 +493,3 @@
      def _saved_session_ok(self, session: AuthSession) -> None:
 +        self._validating_saved_session = False
-@@ -515,1 +521,27 @@
+         self._complete_session(session)
+@@ -514,1 +520,25 @@
      def _auth_failed(self, code: str, message: str) -> None:
 +        if self._validating_saved_session:
 +            self._validating_saved_session = False
@@ -41,3 +49,5 @@
 +            self.password.clear()
 +            self.password.setFocus()
 +            return
++
+         if code in {
