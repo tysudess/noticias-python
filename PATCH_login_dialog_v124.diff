@@ -1,0 +1,43 @@
+--- a/src/monitor_noticias/ui/login_dialog.py
++++ b/src/monitor_noticias/ui/login_dialog.py
+@@ -20,1 +20,4 @@
+ from monitor_noticias.auth.runtime import AuthRuntime
++from monitor_noticias.auth.saved_session_v124 import (
++    handle_saved_session_failure,
++)
+@@ -259,1 +262,2 @@
+         self._worker: _AuthWorker | None = None
++        self._validating_saved_session = False
+@@ -391,1 +395,2 @@
+         if token:
++            self._validating_saved_session = True
+@@ -489,1 +494,2 @@
+     def _saved_session_ok(self, session: AuthSession) -> None:
++        self._validating_saved_session = False
+@@ -515,1 +521,27 @@
+     def _auth_failed(self, code: str, message: str) -> None:
++        if self._validating_saved_session:
++            self._validating_saved_session = False
++            definitive = handle_saved_session_failure(
++                self.runtime,
++                code,
++            )
++            if definitive:
++                self.message.setText(
++                    "A sessão salva não é mais válida. "
++                    "Entre novamente com usuário e senha."
++                )
++                self.password.clear()
++                self.password.setFocus()
++                return
++
++            # Erros de rede/proxy/TLS ou códigos desconhecidos não invalidam
++            # a sessão salva. Permite login manual sem apagar o token.
++            self.message.setText(
++                "Não foi possível validar a sessão salva. "
++                "Confira a conexão/Proxy Geral e entre com usuário e senha.\n\n"
++                + message
++            )
++            self.password.clear()
++            self.password.setFocus()
++            return
