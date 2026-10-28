@@ -88,7 +88,13 @@ class AuthTokenStore:
                 or ""
             ).strip()
 
-        except Exception:
+        except Exception as exc:
+            # Registra apenas a classe da exceção; a mensagem pode conter
+            # caminhos, dados internos ou detalhes do backend de credenciais.
+            log.warning(
+                "Autenticação: falha ao ler token do cofre seguro (%s).",
+                type(exc).__name__,
+            )
             return ""
 
         finally:
