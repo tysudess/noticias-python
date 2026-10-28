@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import logging
+import time
 from pathlib import Path
 
 from monitor_noticias.app.paths import AppPaths
@@ -8,6 +10,8 @@ from monitor_noticias.platform.current import (
     is_windows,
 )
 
+
+log = logging.getLogger(__name__)
 
 AUTH_KEYRING_SERVICE = (
     "CentralInteligenteDeMidia"
@@ -73,10 +77,12 @@ class AuthTokenStore:
         if self._store is None:
             return ""
 
-        try:
-            if not self._store.exists():
-                return ""
+        started = time.monotonic()
 
+        try:
+            # Os stores atuais retornam texto vazio quando não há segredo.
+            # No Linux, exists() já chama load() no Secret Service; chamar
+            # exists() aqui e depois load() duplicava a viagem D-Bus.
             return (
                 self._store.load()
                 or ""
@@ -84,6 +90,27 @@ class AuthTokenStore:
 
         except Exception:
             return ""
+
+        finally:
+            elapsed_ms = int(
+                (time.monotonic() - started) * 1000
+            )
+
+            if elapsed_ms >= 250:
+                if is_windows():
+                    backend = "DPAPI CurrentUser"
+                elif is_linux():
+                    backend = "Secret Service / Keyring"
+                else:
+                    backend = "Indisponível"
+
+                # Registra apenas a duração e o backend: nunca o token.
+                log.warning(
+                    "Autenticação: leitura do token no cofre seguro demorou "
+                    "%s ms (%s).",
+                    elapsed_ms,
+                    backend,
+                )
 
     def save(
         self,
