@@ -19,6 +19,9 @@ from PySide6.QtWidgets import (
 from monitor_noticias.auth.client import AuthApiError
 from monitor_noticias.auth.models import AuthSession
 from monitor_noticias.auth.runtime import AuthRuntime
+from monitor_noticias.auth.saved_session_v124 import (
+    handle_saved_session_failure,
+)
 from monitor_noticias.networking.proxy import corporate_tls_compatibility
 from monitor_noticias.ui.password_change_dialog import PasswordChangeDialog
 
@@ -257,6 +260,7 @@ class LoginDialog(QDialog):
         self.session: AuthSession | None = None
         self._thread: QThread | None = None
         self._worker: _AuthWorker | None = None
+        self._validating_saved_session = False
 
         self.setWindowTitle("Central Inteligente de Mídia — Acesso")
         self.setModal(True)
@@ -389,6 +393,7 @@ class LoginDialog(QDialog):
 
         token = runtime.saved_token()
         if token:
+            self._validating_saved_session = True
             self.message.setText("Validando sessão salva...")
             self._run_async(
                 lambda: runtime.client.validate(token),
@@ -482,6 +487,7 @@ class LoginDialog(QDialog):
         self.accept()
 
     def _saved_session_ok(self, session: AuthSession) -> None:
+        self._validating_saved_session = False
         self._complete_session(session)
 
     def _login(self) -> None:
@@ -508,6 +514,32 @@ class LoginDialog(QDialog):
         self._complete_session(session)
 
     def _auth_failed(self, code: str, message: str) -> None:
+        if self._validating_saved_session:
+            self._validating_saved_session = False
+            definitive = handle_saved_session_failure(
+                self.runtime,
+                code,
+            )
+            if definitive:
+                self.message.setText(
+                    "A sessão salva não é mais válida. "
+                    "Entre novamente com usuário e senha."
+                )
+                self.password.clear()
+                self.password.setFocus()
+                return
+
+            # Erros de rede/proxy/TLS ou códigos desconhecidos não invalidam
+            # a sessão salva. Permite login manual sem apagar o token.
+            self.message.setText(
+                "Não foi possível validar a sessão salva. "
+                "Confira a conexão/Proxy Geral e entre com usuário e senha.\n\n"
+                + message
+            )
+            self.password.clear()
+            self.password.setFocus()
+            return
+
         if code in {
             "NETWORK_ERROR",
             "NETWORK_TIMEOUT",
