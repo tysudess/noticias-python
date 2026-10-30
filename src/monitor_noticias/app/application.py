@@ -186,6 +186,9 @@ class Application:
         from monitor_noticias.ui.visual_refinement_patch import (
             install_visual_refinement_patch,
         )
+        from monitor_noticias.ui.gold_borders_patch import (
+            install_gold_borders_patch,
+        )
         from monitor_noticias.ui.app_icon_loader import load_app_icon
         from monitor_noticias.ui.linux_boot_patch import (
             install_linux_boot_patch,
@@ -344,6 +347,14 @@ class Application:
             )
 
         install_header_refinement(window)
+
+        # V127: aplica o contorno dourado depois que as páginas, módulos e
+        # abas opcionais foram instalados. O event filter cobre também os
+        # cards adicionados dinamicamente durante a execução.
+        install_gold_borders_patch(
+            qt_app,
+            window,
+        )
 
         window.show()
 
