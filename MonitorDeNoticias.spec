@@ -104,19 +104,28 @@ coll = COLLECT(
     name="MonitorDeNoticias",
 )
 
+# V130: valida o runtime Shiboken no local real do onedir do PyInstaller 6.x.
 # V129: falha o build em vez de publicar o portable se o runtime exigido
 # pelo PySide6 6.9.1 não tiver sido incluído na estrutura final.
 if sys.platform == "win32":
-    _shiboken_runtime_dir = (
-        Path(DISTPATH)
-        / "MonitorDeNoticias"
-        / "shiboken6"
-        / "libshiboken6"
+    _portable_root = Path(DISTPATH) / "MonitorDeNoticias"
+    # PyInstaller 6.x coloca os conteúdos do modo onedir em _internal por padrão.
+    # Mantemos também a busca na raiz para compatibilidade com builds configurados
+    # com contents_directory=".".
+    _shiboken_runtime_candidates = [
+        _portable_root / "_internal" / "shiboken6" / "libshiboken6",
+        _portable_root / "shiboken6" / "libshiboken6",
+    ]
+    _shiboken_runtime_dir = next(
+        (path for path in _shiboken_runtime_candidates if path.is_dir()),
+        None,
     )
-    if not _shiboken_runtime_dir.is_dir():
+    if _shiboken_runtime_dir is None:
+        checked = "; ".join(str(path) for path in _shiboken_runtime_candidates)
         raise RuntimeError(
             "Runtime Shiboken incompleto: a pasta obrigatória "
-            f"'{_shiboken_runtime_dir}' não foi incluída no portable."
+            "'shiboken6/libshiboken6' não foi encontrada. Caminhos verificados: "
+            f"{checked}"
         )
 
     _shiboken_runtime_files = [
@@ -141,7 +150,7 @@ if sys.platform == "win32":
 #   Could not load PyInstaller's embedded PKG archive from the executable
 #
 # O ícone continua sendo aplicado pelo mecanismo nativo do PyInstaller no
-# parâmetro icon= acima. A validação abaixo é SOMENTE LEITURA: se o EXE perder
+# parâmetro icon= acima. A validaação abaixo é SOMENTE LEITURA: se o EXE perder
 # o PKG por qualquer motivo, o build falha antes de gerar/publicar o portable.
 if sys.platform == "win32":
     from PyInstaller.archive.readers import CArchiveReader
