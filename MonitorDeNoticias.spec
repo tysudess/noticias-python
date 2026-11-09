@@ -8,6 +8,9 @@ from PyInstaller.utils.hooks import collect_all
 pdfium_datas, pdfium_bins, pdfium_hidden = collect_all("pypdfium2")
 pawp_datas, pawp_bins, pawp_hidden = collect_all("pyaudiowpatch")
 trust_datas, trust_bins, trust_hidden = collect_all("truststore")
+# V129: inclui explicitamente a estrutura de runtime do Shiboken exigida
+# durante a inicialização do PySide6 no Windows.
+shiboken_datas, shiboken_bins, shiboken_hidden = collect_all("shiboken6")
 
 ROOT = Path(SPECPATH)
 CAPAS_ASSETS = ROOT / "src" / "monitor_noticias" / "capas_tool" / "assets"
@@ -40,6 +43,7 @@ hidden = list(
         pdfium_hidden
         + audio_hidden
         + trust_hidden
+        + shiboken_hidden
     )
 )
 
@@ -48,11 +52,12 @@ block_cipher = None
 a = Analysis(
     ["run.py"],
     pathex=["src"],
-    binaries=pdfium_bins + pawp_bins + trust_bins,
+    binaries=pdfium_bins + pawp_bins + trust_bins + shiboken_bins,
     datas=(
         pdfium_datas
         + pawp_datas
         + trust_datas
+        + shiboken_datas
         + capas_datas
         + app_datas
     ),
@@ -98,6 +103,35 @@ coll = COLLECT(
     upx_exclude=[],
     name="MonitorDeNoticias",
 )
+
+# V129: falha o build em vez de publicar o portable se o runtime exigido
+# pelo PySide6 6.9.1 não tiver sido incluído na estrutura final.
+if sys.platform == "win32":
+    _shiboken_runtime_dir = (
+        Path(DISTPATH)
+        / "MonitorDeNoticias"
+        / "shiboken6"
+        / "libshiboken6"
+    )
+    if not _shiboken_runtime_dir.is_dir():
+        raise RuntimeError(
+            "Runtime Shiboken incompleto: a pasta obrigatória "
+            f"'{_shiboken_runtime_dir}' não foi incluída no portable."
+        )
+
+    _shiboken_runtime_files = [
+        path for path in _shiboken_runtime_dir.rglob("*") if path.is_file()
+    ]
+    if not _shiboken_runtime_files:
+        raise RuntimeError(
+            "Runtime Shiboken incompleto: "
+            f"'{_shiboken_runtime_dir}' existe, mas não contém arquivos."
+        )
+
+    print(
+        "Runtime Shiboken incluído: "
+        f"{len(_shiboken_runtime_files)} arquivo(s) em {_shiboken_runtime_dir}"
+    )
 
 # V82 — NÃO editar o executável depois que o PyInstaller anexar o PKG.
 #
