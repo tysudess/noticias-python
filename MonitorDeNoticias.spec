@@ -106,7 +106,7 @@ coll = COLLECT(
     name="MonitorDeNoticias",
 )
 
-# V131: valida a estrutura real esperada pelo PySide6 6.9.1.
+# V132: valida a estrutura e importa Shiboken de forma isolada.
 # Em um build onedir do PyInstaller 6.x, os pacotes ficam em _internal.
 # O PySide6 procura _internal/shiboken6 ao lado de _internal/PySide6;
 # não exige uma subpasta shiboken6/libshiboken6.
@@ -155,19 +155,37 @@ if sys.platform == "win32":
             f"'{_shiboken_package_dir}'."
         )
 
-    # Smoke test real de importação usando os arquivos coletados, não os
-    # pacotes instalados no site-packages do runner do GitHub Actions.
+    # O pacote Python PySide6 é congelado no PYZ do PyInstaller e, por isso,
+    # não deve ser validado importando PySide6 por um Python externo: isso
+    # poderia carregar o pacote do site-packages do runner. Validamos os
+    # módulos nativos físicos e importamos exclusivamente o Shiboken do portable.
+    _pyside_native_extensions = [
+        path for path in (_contents_root / "PySide6").rglob("*")
+        if path.is_file()
+        and path.suffix.lower() == ".pyd"
+        and path.name.lower().startswith("qtcore")
+    ]
+    if not _pyside_native_extensions:
+        raise RuntimeError(
+            "Runtime PySide6 incompleto: módulo nativo QtCore (.pyd) "
+            f"não foi encontrado em '{_contents_root / 'PySide6'}'."
+        )
+
     _shiboken_smoke_test = r"""
+import os
 import pathlib
 import sys
 
 root = pathlib.Path(sys.argv[1]).resolve()
+_dll_handles = []
+for dll_dir in (root, root / "shiboken6", root / "PySide6"):
+    if dll_dir.is_dir():
+        _dll_handles.append(os.add_dll_directory(str(dll_dir)))
+        os.environ["PATH"] = str(dll_dir) + os.pathsep + os.environ.get("PATH", "")
 sys.path.insert(0, str(root))
 
 import shiboken6
 from shiboken6 import Shiboken
-import PySide6
-from PySide6 import QtCore, QtGui, QtWidgets
 
 expected_shiboken = (root / "shiboken6").resolve()
 actual_shiboken = pathlib.Path(shiboken6.__file__).resolve().parent
@@ -176,17 +194,10 @@ if actual_shiboken != expected_shiboken:
         f"Shiboken importado de local inesperado: {actual_shiboken}; "
         f"esperado: {expected_shiboken}"
     )
-expected_pyside = (root / "PySide6").resolve()
-actual_pyside = pathlib.Path(PySide6.__file__).resolve().parent
-if actual_pyside != expected_pyside:
-    raise RuntimeError(
-        f"PySide6 importado de local inesperado: {actual_pyside}; "
-        f"esperado: {expected_pyside}"
-    )
-print("PySide6/Shiboken importados do portable com sucesso")
+print(f"Shiboken do portable carregado: {actual_shiboken}")
 """
     _smoke = subprocess.run(
-        [sys.executable, "-c", _shiboken_smoke_test, str(_contents_root)],
+        [sys.executable, "-S", "-c", _shiboken_smoke_test, str(_contents_root)],
         cwd=str(_portable_root),
         env={**os.environ, "PYTHONNOUSERSITE": "1"},
         capture_output=True,
@@ -195,14 +206,15 @@ print("PySide6/Shiboken importados do portable com sucesso")
     )
     if _smoke.returncode != 0:
         raise RuntimeError(
-            "Teste de importação do PySide6/Shiboken no portable falhou.\n"
+            "Teste isolado de importação do Shiboken no portable falhou.\n"
             f"Saída:\n{_smoke.stdout}\nErro:\n{_smoke.stderr}"
         )
     print(_smoke.stdout.strip())
     print(
-        "Runtime Shiboken validado: "
-        f"{len(_shiboken_extensions)} módulo(s) .pyd e "
-        f"{len(_shiboken_dlls)} DLL(s) em {_shiboken_package_dir}"
+        "Runtime Shiboken/PySide6 validado: "
+        f"{len(_shiboken_extensions)} módulo(s) Shiboken .pyd, "
+        f"{len(_shiboken_dlls)} DLL(s) Shiboken e "
+        f"{len(_pyside_native_extensions)} módulo(s) QtCore .pyd."
     )
 
 # V82 — NÃO editar o executável depois que o PyInstaller anexar o PKG.
