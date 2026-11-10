@@ -1,5 +1,7 @@
 # -*- mode: python ; coding: utf-8 -*-
 from pathlib import Path
+import os
+import subprocess
 import sys
 
 from PyInstaller.utils.hooks import collect_all
@@ -104,42 +106,103 @@ coll = COLLECT(
     name="MonitorDeNoticias",
 )
 
-# V130: valida o runtime Shiboken no local real do onedir do PyInstaller 6.x.
-# V129: falha o build em vez de publicar o portable se o runtime exigido
-# pelo PySide6 6.9.1 não tiver sido incluído na estrutura final.
+# V131: valida a estrutura real esperada pelo PySide6 6.9.1.
+# Em um build onedir do PyInstaller 6.x, os pacotes ficam em _internal.
+# O PySide6 procura _internal/shiboken6 ao lado de _internal/PySide6;
+# não exige uma subpasta shiboken6/libshiboken6.
 if sys.platform == "win32":
     _portable_root = Path(DISTPATH) / "MonitorDeNoticias"
-    # PyInstaller 6.x coloca os conteúdos do modo onedir em _internal por padrão.
-    # Mantemos também a busca na raiz para compatibilidade com builds configurados
-    # com contents_directory=".".
-    _shiboken_runtime_candidates = [
-        _portable_root / "_internal" / "shiboken6" / "libshiboken6",
-        _portable_root / "shiboken6" / "libshiboken6",
+    _contents_root_candidates = [
+        _portable_root / "_internal",
+        _portable_root,
     ]
-    _shiboken_runtime_dir = next(
-        (path for path in _shiboken_runtime_candidates if path.is_dir()),
+    _contents_root = next(
+        (
+            path for path in _contents_root_candidates
+            if (path / "PySide6").is_dir()
+        ),
         None,
     )
-    if _shiboken_runtime_dir is None:
-        checked = "; ".join(str(path) for path in _shiboken_runtime_candidates)
+    if _contents_root is None:
         raise RuntimeError(
-            "Runtime Shiboken incompleto: a pasta obrigatória "
-            "'shiboken6/libshiboken6' não foi encontrada. Caminhos verificados: "
-            f"{checked}"
+            "Estrutura PySide6 não encontrada no portable. Caminhos verificados: "
+            + "; ".join(str(path / "PySide6") for path in _contents_root_candidates)
         )
 
-    _shiboken_runtime_files = [
-        path for path in _shiboken_runtime_dir.rglob("*") if path.is_file()
+    _shiboken_package_dir = _contents_root / "shiboken6"
+    if not _shiboken_package_dir.is_dir():
+        raise RuntimeError(
+            "Runtime Shiboken incompleto: a pasta do pacote "
+            f"'{_shiboken_package_dir}' não foi incluída ao lado de PySide6."
+        )
+
+    _shiboken_extensions = [
+        path for path in _shiboken_package_dir.rglob("*")
+        if path.is_file() and path.suffix.lower() == ".pyd"
     ]
-    if not _shiboken_runtime_files:
+    _shiboken_dlls = [
+        path for path in _shiboken_package_dir.rglob("*")
+        if path.is_file() and path.suffix.lower() == ".dll"
+    ]
+    if not _shiboken_extensions:
         raise RuntimeError(
-            "Runtime Shiboken incompleto: "
-            f"'{_shiboken_runtime_dir}' existe, mas não contém arquivos."
+            "Runtime Shiboken incompleto: nenhum módulo .pyd foi encontrado em "
+            f"'{_shiboken_package_dir}'."
+        )
+    if not _shiboken_dlls:
+        raise RuntimeError(
+            "Runtime Shiboken incompleto: nenhuma DLL foi encontrada em "
+            f"'{_shiboken_package_dir}'."
         )
 
+    # Smoke test real de importação usando os arquivos coletados, não os
+    # pacotes instalados no site-packages do runner do GitHub Actions.
+    _shiboken_smoke_test = r"""
+import pathlib
+import sys
+
+root = pathlib.Path(sys.argv[1]).resolve()
+sys.path.insert(0, str(root))
+
+import shiboken6
+from shiboken6 import Shiboken
+import PySide6
+from PySide6 import QtCore, QtGui, QtWidgets
+
+expected_shiboken = (root / "shiboken6").resolve()
+actual_shiboken = pathlib.Path(shiboken6.__file__).resolve().parent
+if actual_shiboken != expected_shiboken:
+    raise RuntimeError(
+        f"Shiboken importado de local inesperado: {actual_shiboken}; "
+        f"esperado: {expected_shiboken}"
+    )
+expected_pyside = (root / "PySide6").resolve()
+actual_pyside = pathlib.Path(PySide6.__file__).resolve().parent
+if actual_pyside != expected_pyside:
+    raise RuntimeError(
+        f"PySide6 importado de local inesperado: {actual_pyside}; "
+        f"esperado: {expected_pyside}"
+    )
+print("PySide6/Shiboken importados do portable com sucesso")
+"""
+    _smoke = subprocess.run(
+        [sys.executable, "-c", _shiboken_smoke_test, str(_contents_root)],
+        cwd=str(_portable_root),
+        env={**os.environ, "PYTHONNOUSERSITE": "1"},
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if _smoke.returncode != 0:
+        raise RuntimeError(
+            "Teste de importação do PySide6/Shiboken no portable falhou.\n"
+            f"Saída:\n{_smoke.stdout}\nErro:\n{_smoke.stderr}"
+        )
+    print(_smoke.stdout.strip())
     print(
-        "Runtime Shiboken incluído: "
-        f"{len(_shiboken_runtime_files)} arquivo(s) em {_shiboken_runtime_dir}"
+        "Runtime Shiboken validado: "
+        f"{len(_shiboken_extensions)} módulo(s) .pyd e "
+        f"{len(_shiboken_dlls)} DLL(s) em {_shiboken_package_dir}"
     )
 
 # V82 — NÃO editar o executável depois que o PyInstaller anexar o PKG.
@@ -150,7 +213,7 @@ if sys.platform == "win32":
 #   Could not load PyInstaller's embedded PKG archive from the executable
 #
 # O ícone continua sendo aplicado pelo mecanismo nativo do PyInstaller no
-# parâmetro icon= acima. A validaação abaixo é SOMENTE LEITURA: se o EXE perder
+# parâmetro icon= acima. A validação abaixo é SOMENTE LEITURA: se o EXE perder
 # o PKG por qualquer motivo, o build falha antes de gerar/publicar o portable.
 if sys.platform == "win32":
     from PyInstaller.archive.readers import CArchiveReader
