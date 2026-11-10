@@ -201,17 +201,46 @@ _GROUPS = (
     ),
     (
         "FERRAMENTAS",
-        ("NEWS_EXTRACTOR", "COVERS", "PDF_EDITOR", "EXTRACTOR", "VIDEO_EDITOR"),
+        (
+            "NEWS_EXTRACTOR",
+            "COVERS",
+            "PDF_EDITOR",
+            "EXTRACTOR",
+            "VIDEO_EDITOR",
+            "SCREEN_RECORDER",
+        ),
     ),
-    ("SISTEMA", ("SETTINGS",)),
+    ("SISTEMA", ("ADMINISTRATION", "SETTINGS")),
+)
+
+_EXTRA_NAV_ITEMS = (
+    (
+        "SCREEN_RECORDER",
+        "screen_recorder_nav",
+        "Gravador de Tela",
+        "Grave a tela inteira ou uma área personalizada em MP4.",
+    ),
+    (
+        "ADMINISTRATION",
+        "_admin_users_button",
+        "Administração",
+        "Cadastro de usuários e redefinição segura de senhas.",
+    ),
 )
 
 
 def rebuild_sidebar_layout(
     sidebar: QFrame,
     nav_buttons: Mapping[object, "SidebarNavItem"],
+    extra_items: Mapping[str, "SidebarNavItem"] | None = None,
 ) -> bool:
-    """Reorganiza a barra criada pela MainWindow sem alterar suas ações."""
+    """Reorganiza a barra sem descartar itens adicionados por integrações.
+
+    Além das seções principais, a janela pode adicionar o Gravador de Tela e
+    Administração dinamicamente. Esses itens precisam entrar no novo layout;
+    deixá-los como filhos soltos da sidebar faz o Qt manter suas geometrias
+    antigas, causando sobreposição com os botões reorganizados.
+    """
     if sidebar.property("sidebarLayoutV133"):
         return True
     if not nav_buttons:
@@ -237,6 +266,39 @@ def rebuild_sidebar_layout(
         status_icon = sidebar.findChild(QLabel, "sidebarStatusIcon")
         if status_icon is not None:
             status_icon.setText("●")
+
+        window = sidebar.window()
+        discovered_extras = {
+            key: getattr(window, attribute, None)
+            for key, attribute, _label, _tooltip in _EXTRA_NAV_ITEMS
+        }
+        discovered_extras = {
+            key: item
+            for key, item in discovered_extras.items()
+            if isinstance(item, SidebarNavItem)
+        }
+        if extra_items:
+            discovered_extras.update(
+                {
+                    key: item
+                    for key, item in extra_items.items()
+                    if isinstance(item, SidebarNavItem)
+                }
+            )
+
+        # Constrói um registro uniforme para seções comuns e navegação extra.
+        by_name = {
+            section.name: (
+                section.value.label,
+                section.value.subtitle,
+                button,
+            )
+            for section, button in nav_buttons.items()
+        }
+        for key, _attribute, label, tooltip in _EXTRA_NAV_ITEMS:
+            button = discovered_extras.get(key)
+            if button is not None:
+                by_name[key] = (label, tooltip, button)
 
         while outer.count():
             item = outer.takeAt(0)
@@ -264,13 +326,12 @@ def rebuild_sidebar_layout(
         content_layout.setContentsMargins(0, 1, 2, 4)
         content_layout.setSpacing(5)
 
-        by_name = {
-            getattr(section, "name", ""): (section, button)
-            for section, button in nav_buttons.items()
-        }
-
         for group_label, section_names in _GROUPS:
-            group_items = [by_name[name] for name in section_names if name in by_name]
+            group_items = [
+                (name, *by_name[name])
+                for name in section_names
+                if name in by_name
+            ]
             if not group_items:
                 continue
 
@@ -279,9 +340,9 @@ def rebuild_sidebar_layout(
             heading.setMinimumHeight(20)
             content_layout.addWidget(heading)
 
-            for section, button in group_items:
-                button.setToolTip(section.value.subtitle)
-                button.setAccessibleName(section.value.label)
+            for _name, label, tooltip, button in group_items:
+                button.setToolTip(tooltip)
+                button.setAccessibleName(label)
                 button.setSizePolicy(
                     QSizePolicy.Policy.Expanding,
                     QSizePolicy.Policy.Fixed,
