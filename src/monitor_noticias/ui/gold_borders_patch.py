@@ -190,8 +190,17 @@ class _GoldBorderFilter(QObject):
             QEvent.Type.StyleChange,
         }:
             try:
+                # Primeiro conclui as bordas; depois converte o QSS resultante.
+                # Isso mantém a folha original guardada para alternar os temas
+                # repetidamente sem acumular as cores de um tema no outro.
                 _append_page_rules(obj)
                 _force_widget_border(obj)
+                owner = obj
+                while owner is not None and getattr(owner, "_central_theme", None) is None:
+                    owner = owner.parentWidget()
+                if owner is not None:
+                    from monitor_noticias.ui.theme_preferences import apply_widget_theme_stylesheet
+                    apply_widget_theme_stylesheet(obj, owner._central_theme)
             except RuntimeError:
                 pass
         return super().eventFilter(obj, event)
@@ -202,13 +211,17 @@ _INSTALLED = False
 
 
 def install_gold_borders_patch(app: QApplication, window: QWidget) -> None:
-    """Aplica bordas douradas aos cards e abas, exceto à navegação lateral."""
+    """Instala contornos, prepara a interface e só então restaura o tema salvo."""
     global _FILTER, _INSTALLED
-    if _INSTALLED:
-        _walk(window)
-        return
+    if not _INSTALLED:
+        _FILTER = _GoldBorderFilter(app)
+        app.installEventFilter(_FILTER)
+        _INSTALLED = True
 
-    _FILTER = _GoldBorderFilter(app)
-    app.installEventFilter(_FILTER)
+    # O walk precisa ocorrer antes do tema ser aplicado para que as regras de
+    # borda façam parte da folha-base, e não sejam confundidas com cores já
+    # convertidas quando o usuário alternar Claro/Escuro.
     _walk(window)
-    _INSTALLED = True
+
+    from monitor_noticias.ui.theme_preferences import install_theme_preferences
+    install_theme_preferences(window)
