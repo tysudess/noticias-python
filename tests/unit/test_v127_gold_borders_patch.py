@@ -27,9 +27,10 @@ def test_inline_border_is_added_if_missing():
     assert "background:#FFFFFF;" in changed
 
 
-def test_qss_contains_card_tabs_and_sidebar_navigation_outlines():
+def test_gold_border_qss_styles_content_cards_and_tabs_but_not_sidebar_navigation():
     assert "QFrame#metricCard" in GOLD_BORDER_QSS
     assert "QFrame#demandCard" in GOLD_BORDER_QSS
     assert "QTabBar::tab" in GOLD_BORDER_QSS
-    assert "QFrame#sidebarNavItem" in GOLD_BORDER_QSS
+    assert "QFrame#sidebarNavItem" not in GOLD_BORDER_QSS
+    assert "QFrame#sidebarStatusCard" not in GOLD_BORDER_QSS
     assert GOLD_BORDER in GOLD_BORDER_QSS

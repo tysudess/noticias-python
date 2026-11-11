@@ -17,97 +17,74 @@ from PySide6.QtWidgets import (
 SIDEBAR_WIDTH = 236
 
 SIDEBAR_STYLE = """
+/* V136 — navegação escura, limpa e funcional; dourado somente como acento. */
 QFrame#sidebar {
-    background:qlineargradient(
-        x1:0, y1:0, x2:1, y2:1,
-        stop:0 #0A355C,
-        stop:0.48 #082A4A,
-        stop:1 #041B31
-    );
+    background:#071D31;
     border:0;
-    border-right:1px solid #B0904F;
+    border-right:1px solid #173750;
 }
 
 QFrame#sidebarBrandWrap {
-    background:qlineargradient(
-        x1:0, y1:0, x2:1, y2:1,
-        stop:0 rgba(25,76,112,0.92),
-        stop:1 rgba(8,39,67,0.96)
-    );
-    border:1px solid rgba(218,187,112,0.62);
-    border-left:3px solid #D8B765;
-    border-radius:14px;
+    background:transparent;
+    border:0;
 }
 
 QLabel#sidebarLogo {
-    background:qlineargradient(
-        x1:0, y1:0, x2:0, y2:1,
-        stop:0 #F0D891,
-        stop:1 #C49A4E
-    );
-    color:#082746;
-    border:1px solid #F7E7B8;
-    border-radius:12px;
+    background:#D6B66D;
+    color:#09243B;
+    border:0;
+    border-radius:10px;
     font-family:"Segoe UI";
-    font-size:14px;
+    font-size:13px;
     font-weight:900;
 }
 
 QLabel#sidebarBrandTitle {
-    color:#FFFFFF;
+    color:#F4F7FA;
     background:transparent;
     border:0;
     font-size:14px;
-    font-weight:900;
+    font-weight:800;
 }
 
 QLabel#sidebarBrandSub {
-    color:#E4C77F;
+    color:#8FA9BD;
     background:transparent;
     border:0;
-    font-size:9px;
+    font-size:8px;
     font-weight:700;
+    letter-spacing:1px;
 }
 
 QLabel#sidebarGroupLabel {
-    color:#D6B86E;
+    color:#7794AA;
     background:transparent;
     border:0;
-    border-left:2px solid #B9944D;
-    border-bottom:1px solid rgba(198,161,91,0.26);
-    padding:8px 5px 5px 8px;
-    font-size:9px;
-    font-weight:900;
-    letter-spacing:1.25px;
+    border-bottom:1px solid rgba(125,158,184,0.17);
+    padding:8px 4px 6px 4px;
+    font-size:8px;
+    font-weight:800;
+    letter-spacing:1.15px;
 }
 
 QFrame#sidebarNavItem {
-    background:rgba(255,255,255,0.035);
-    border:1px solid rgba(150,183,210,0.20);
-    border-radius:12px;
+    background:transparent;
+    border:1px solid transparent;
+    border-radius:9px;
 }
 
 QFrame#sidebarNavItem:hover {
-    background:qlineargradient(
-        x1:0, y1:0, x2:1, y2:0,
-        stop:0 rgba(45,112,164,0.42),
-        stop:1 rgba(24,75,119,0.40)
-    );
-    border:1px solid rgba(218,187,112,0.76);
+    background:#0E2D46;
+    border:1px solid rgba(120,160,190,0.12);
 }
 
 QFrame#sidebarNavItem:focus {
-    border:1px solid #F0D891;
+    border:1px solid #5F91B4;
 }
 
 QFrame#sidebarNavItem[active="true"] {
-    background:qlineargradient(
-        x1:0, y1:0, x2:1, y2:0,
-        stop:0 #1D5A86,
-        stop:0.58 #164A73,
-        stop:1 #103B61
-    );
-    border:1px solid #D8B765;
+    background:#123B58;
+    border:1px solid rgba(104,159,194,0.22);
 }
 
 QFrame#sidebarNavIndicator {
@@ -117,101 +94,90 @@ QFrame#sidebarNavIndicator {
 }
 
 QFrame#sidebarNavIndicator[active="true"] {
-    background:#F0D891;
+    background:#D8B96F;
 }
 
 QFrame#sidebarNavIconWrap {
-    background:rgba(105,151,186,0.15);
-    border:1px solid rgba(158,190,216,0.18);
-    border-radius:9px;
+    background:rgba(135,169,194,0.09);
+    border:0;
+    border-radius:8px;
 }
 
 QFrame#sidebarNavItem:hover QFrame#sidebarNavIconWrap {
-    background:rgba(108,162,204,0.22);
-    border:1px solid rgba(211,185,120,0.35);
+    background:rgba(123,171,205,0.15);
 }
 
 QFrame#sidebarNavItem[active="true"] QFrame#sidebarNavIconWrap {
-    background:qlineargradient(
-        x1:0, y1:0, x2:0, y2:1,
-        stop:0 #F0D891,
-        stop:1 #C9A45B
-    );
-    border:1px solid #F4E2AC;
+    background:#D6B66D;
+    border:0;
 }
 
 QLabel#sidebarNavIcon {
-    color:#D3E0EC;
+    color:#AFC3D2;
     background:transparent;
     border:0;
     font-family:"Segoe UI Symbol";
     font-size:15px;
-    font-weight:800;
+    font-weight:700;
 }
 
 QFrame#sidebarNavItem[active="true"] QLabel#sidebarNavIcon {
-    color:#082B4B;
+    color:#09243B;
 }
 
 QLabel#sidebarNavText {
-    color:#E5EDF5;
+    color:#D1DDE7;
     background:transparent;
     border:0;
-    font-size:11px;
+    font-size:10px;
     font-weight:600;
 }
 
 QFrame#sidebarNavItem[active="true"] QLabel#sidebarNavText {
     color:#FFFFFF;
-    font-weight:900;
+    font-weight:800;
 }
 
 QLabel#sidebarNavCurrentMark {
     color:transparent;
     background:transparent;
     border:0;
-    font-size:10px;
+    font-size:7px;
 }
 
 QFrame#sidebarNavItem[active="true"] QLabel#sidebarNavCurrentMark {
-    color:#F0D891;
+    color:#E2C477;
 }
 
 QFrame#sidebarStatusCard {
-    background:qlineargradient(
-        x1:0, y1:0, x2:1, y2:0,
-        stop:0 rgba(26,75,111,0.82),
-        stop:1 rgba(8,39,66,0.92)
-    );
-    border:1px solid rgba(211,180,105,0.58);
-    border-left:3px solid #C6A15B;
-    border-radius:12px;
+    background:#0A2941;
+    border:1px solid #1D4058;
+    border-radius:10px;
 }
 
 QLabel#sidebarStatusIcon {
-    color:#F0D891;
-    background:rgba(5,31,53,0.72);
-    border:1px solid rgba(218,187,112,0.72);
-    border-radius:12px;
+    color:#56D6A5;
+    background:transparent;
+    border:0;
     font-family:"Segoe UI Symbol";
-    font-size:11px;
+    font-size:13px;
     font-weight:900;
 }
 
 QLabel#sidebarStatusTitle {
-    color:#B8CADD;
+    color:#8CA6BA;
+    background:transparent;
+    border:0;
+    font-size:8px;
+    font-weight:600;
+}
+
+QLabel#sidebarStatusText {
+    color:#E6EEF4;
     background:transparent;
     border:0;
     font-size:9px;
     font-weight:700;
-}
-
-QLabel#sidebarStatusText {
-    color:#F5E5BC;
-    background:transparent;
-    border:0;
-    font-size:10px;
-    font-weight:800;
 }
 
 QScrollArea#sidebarNavigationScroll {
@@ -225,18 +191,18 @@ QScrollArea#sidebarNavigationScroll QWidget#sidebarNavigationContent {
 
 QScrollBar:vertical {
     background:transparent;
-    width:6px;
+    width:4px;
     margin:2px 0 2px 0;
 }
 
 QScrollBar::handle:vertical {
-    background:rgba(173,195,217,0.42);
-    min-height:28px;
-    border-radius:3px;
+    background:rgba(149,177,198,0.34);
+    min-height:26px;
+    border-radius:2px;
 }
 
 QScrollBar::handle:vertical:hover {
-    background:rgba(224,198,133,0.82);
+    background:rgba(214,182,109,0.75);
 }
 
 QScrollBar::add-line:vertical,
@@ -325,7 +291,7 @@ def rebuild_sidebar_layout(
             status_icon.setFixedSize(26, 26)
             status_icon.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
-        status.setMinimumHeight(62)
+        status.setMinimumHeight(58)
 
         window = sidebar.window()
         discovered_extras = {
@@ -369,7 +335,7 @@ def rebuild_sidebar_layout(
         outer.setSpacing(10)
         sidebar.setFixedWidth(SIDEBAR_WIDTH)
 
-        brand.setMinimumHeight(66)
+        brand.setMinimumHeight(62)
         outer.addWidget(brand, 0)
 
         scroll = QScrollArea(sidebar)
@@ -384,7 +350,7 @@ def rebuild_sidebar_layout(
         content.setObjectName("sidebarNavigationContent")
         content_layout = QVBoxLayout(content)
         content_layout.setContentsMargins(0, 1, 2, 4)
-        content_layout.setSpacing(5)
+        content_layout.setSpacing(4)
 
         for group_label, section_names in _GROUPS:
             group_items = [
@@ -397,7 +363,7 @@ def rebuild_sidebar_layout(
 
             heading = QLabel(group_label)
             heading.setObjectName("sidebarGroupLabel")
-            heading.setMinimumHeight(25)
+            heading.setMinimumHeight(23)
             content_layout.addWidget(heading)
 
             for _name, label, tooltip, button in group_items:
@@ -442,15 +408,15 @@ class SidebarNavItem(QFrame):
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         self.setAccessibleName(label_text)
-        self.setFixedHeight(44)
+        self.setFixedHeight(42)
         self.setSizePolicy(
             QSizePolicy.Policy.Expanding,
             QSizePolicy.Policy.Fixed,
         )
 
         row = QHBoxLayout(self)
-        row.setContentsMargins(9, 0, 10, 0)
-        row.setSpacing(9)
+        row.setContentsMargins(8, 0, 10, 0)
+        row.setSpacing(8)
 
         self.indicator = QFrame()
         self.indicator.setObjectName("sidebarNavIndicator")
@@ -460,7 +426,7 @@ class SidebarNavItem(QFrame):
 
         self.icon_wrap = QFrame()
         self.icon_wrap.setObjectName("sidebarNavIconWrap")
-        self.icon_wrap.setFixedSize(31, 31)
+        self.icon_wrap.setFixedSize(28, 28)
         icon_layout = QHBoxLayout(self.icon_wrap)
         icon_layout.setContentsMargins(0, 0, 0, 0)
         icon_layout.setSpacing(0)

@@ -10,10 +10,7 @@ pytest.importorskip("PySide6")
 
 from PySide6.QtWidgets import QApplication, QFrame, QLabel
 
-from monitor_noticias.ui.sidebar_widgets import (
-    SIDEBAR_STYLE,
-    SidebarNavItem,
-)
+from monitor_noticias.ui.sidebar_widgets import SIDEBAR_STYLE, SidebarNavItem
 
 _APP = None
 
@@ -24,14 +21,14 @@ def _app():
     return _APP
 
 
-def test_navigation_item_uses_icon_tile_and_active_marker():
+def test_navigation_item_uses_compact_icon_tile_and_active_marker():
     _app()
     item = SidebarNavItem("▤", "Notícias", "#FFFFFF")
 
-    assert item.height() == 44
+    assert item.height() == 42
     assert item.icon_wrap.objectName() == "sidebarNavIconWrap"
-    assert item.icon_wrap.size().width() == 31
-    assert item.icon_wrap.size().height() == 31
+    assert item.icon_wrap.width() == 28
+    assert item.icon_wrap.height() == 28
     assert item.current_mark.objectName() == "sidebarNavCurrentMark"
     assert item.text.text() == "Notícias"
 
@@ -42,7 +39,7 @@ def test_navigation_item_uses_icon_tile_and_active_marker():
     assert item.property("active") is False
 
 
-def test_sidebar_stylesheet_has_distinct_brand_groups_hover_and_active_states():
+def test_sidebar_stylesheet_keeps_brand_groups_hover_and_active_states():
     required_rules = (
         "QFrame#sidebarBrandWrap",
         "QLabel#sidebarLogo",
@@ -57,7 +54,7 @@ def test_sidebar_stylesheet_has_distinct_brand_groups_hover_and_active_states():
         assert rule in SIDEBAR_STYLE
 
 
-def test_icon_tile_is_a_child_of_the_navigation_item():
+def test_icon_tile_and_marker_are_children_of_the_navigation_item():
     _app()
     item = SidebarNavItem("▶", "Vídeos", "#FFFFFF")
     assert item.icon_wrap.parentWidget() is item

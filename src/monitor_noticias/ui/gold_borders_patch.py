@@ -1,6 +1,11 @@
 from __future__ import annotations
 
-"""V127 — contorno dourado uniforme dos cards e das abas da Central Windows."""
+"""V127 — contorno dourado uniforme dos cards e das abas da Central Windows.
+
+V136: a barra lateral possui um sistema visual próprio e fica fora da regra
+universal de bordas douradas. Isso permite uma navegação moderna sem cartões
+contornados individualmente, mantendo o dourado nos cards e abas do conteúdo.
+"""
 
 import re
 
@@ -11,7 +16,6 @@ from PySide6.QtWidgets import (
     QMainWindow,
     QPushButton,
     QTabBar,
-    QTabWidget,
     QWidget,
 )
 
@@ -19,9 +23,8 @@ GOLD_BORDER = "#C6A15B"
 _RULES_MARKER = "CENTRAL GOLD OUTLINES V127"
 _WIDGET_MARKER_PROPERTY = "_central_gold_outline_v127"
 
-# Os nomes representam painéis/cartões existentes nas páginas reais da Central.
-# As cores de preenchimento, os textos, os espaçamentos e os raios continuam
-# definidos pelos estilos que cada página já possui.
+# Cards reais das páginas. A navegação lateral não pertence a esta lista:
+# seu acabamento é definido exclusivamente por SIDEBAR_STYLE.
 _CARD_OBJECT_NAMES = frozenset({
     "card", "topCard", "statusCard", "metricCard", "successCard", "dangerCard",
     "heroCard", "homeCard", "quickCard", "tipCard", "readyCard", "scheduleBox",
@@ -33,11 +36,9 @@ _CARD_OBJECT_NAMES = frozenset({
     "header", "settingsHero", "settingsCard", "settingsService", "extractCard",
     "statusCardNative", "termCard", "termList", "sourcesTop", "sourcesControl",
     "sourceStateCard", "sourceListView", "historyTop", "historyListView",
-    "sidebarStatusCard", "sidebarNavItem", "monitorPanel", "statusPanel",
+    "monitorPanel", "statusPanel",
 })
 
-# Regras appendadas ao stylesheet de cada página. Isso é importante porque
-# diversas telas possuem QSS próprio e prevalecem sobre o stylesheet da janela.
 GOLD_BORDER_QSS = f"""
 /* {_RULES_MARKER}: somente contornos; não altera layout nem preenchimentos. */
 QFrame#card, QFrame#topCard, QFrame#statusCard,
@@ -58,13 +59,7 @@ QFrame#settingsService, QFrame#extractCard, QFrame#statusCardNative,
 QFrame#termCard, QListWidget#termList,
 QFrame#sourcesTop, QFrame#sourcesControl, QFrame#sourceStateCard,
 QListView#sourceListView, QFrame#historyTop, QListView#historyListView,
-QFrame#sidebarStatusCard, QFrame#sidebarNavItem,
 QFrame#monitorPanel, QFrame#statusPanel {{
-    border: 1px solid {GOLD_BORDER};
-}}
-
-QFrame#sidebarNavItem:hover,
-QFrame#sidebarNavItem[active="true"] {{
     border: 1px solid {GOLD_BORDER};
 }}
 
@@ -88,7 +83,7 @@ QPushButton#sourceTabButton, QPushButton#historyTab {{
 
 _CARD_NAME_TOKENS = (
     "card", "panel", "hero", "banner", "service", "rankrow", "demanditem",
-    "videoitem", "sidebarstatus", "sidebarnavitem", "sourcestop", "historytop",
+    "videoitem", "sourcestop", "historytop",
 )
 _TAB_BUTTON_NAMES = frozenset({"sourceTabButton", "historyTab"})
 
@@ -117,6 +112,9 @@ def _is_card_frame(widget: QWidget) -> bool:
     if not isinstance(widget, QFrame):
         return False
     name = widget.objectName().strip()
+    # A barra lateral usa bordas e estados próprios, sem o contorno dourado global.
+    if name in {"sidebarNavItem", "sidebarStatusCard"}:
+        return False
     if name in _CARD_OBJECT_NAMES:
         return True
     if name:
@@ -141,9 +139,6 @@ def _append_page_rules(widget: QWidget) -> None:
     if _RULES_MARKER in current:
         return
 
-    # O stylesheet raiz da janela e os stylesheets locais de cada página
-    # contêm seletores nomeados; anexamos a regra ao nível certo para vencer
-    # as bordas anteriores em azul/cinza/verde/vermelho.
     is_window = isinstance(widget, QMainWindow)
     has_card_or_tab_rules = any(token in current for token in (
         "QFrame#", "QTabBar", "QTabWidget::pane", "QGroupBox",
@@ -166,9 +161,6 @@ def _force_widget_border(widget: QWidget) -> None:
         return
 
     current = widget.styleSheet() or ""
-    # Widgets com QSS inline (por exemplo, os painéis do editor de vídeo)
-    # precisam ter apenas a declaração da borda atualizada. Nos restantes,
-    # adicionamos uma regra específica para o widget, preservando seu estilo.
     if current.strip() and "{" not in current and "}" not in current:
         updated = rewrite_inline_border_stylesheet(current)
     elif is_tab_bar:
@@ -178,8 +170,6 @@ def _force_widget_border(widget: QWidget) -> None:
         selector = f"{widget_class}#{name}" if name else widget_class
         updated = current.rstrip() + f"\n{selector} {{ border: 1px solid {GOLD_BORDER}; }}"
 
-    # Marque antes de setStyleSheet: o Qt pode emitir StyleChange de forma
-    # síncrona e o event filter não deve tentar estilizar o mesmo widget de novo.
     widget.setProperty(_WIDGET_MARKER_PROPERTY, True)
     widget.setStyleSheet(updated)
 
@@ -203,7 +193,6 @@ class _GoldBorderFilter(QObject):
                 _append_page_rules(obj)
                 _force_widget_border(obj)
             except RuntimeError:
-                # O Qt pode destruir um widget durante uma atualização de tela.
                 pass
         return super().eventFilter(obj, event)
 
@@ -213,7 +202,7 @@ _INSTALLED = False
 
 
 def install_gold_borders_patch(app: QApplication, window: QWidget) -> None:
-    """Aplica bordas douradas aos cards e abas atuais e aos criados depois."""
+    """Aplica bordas douradas aos cards e abas, exceto à navegação lateral."""
     global _FILTER, _INSTALLED
     if _INSTALLED:
         _walk(window)
