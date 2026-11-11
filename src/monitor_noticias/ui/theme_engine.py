@@ -242,6 +242,49 @@ def _transform_body(body: str, selector: str, theme: str) -> str:
     return "".join(parts)
 
 
+def transform_painter_color(value: str, usage: str, theme_id: str) -> str:
+    """Adapta cores usadas por delegates que desenham itens com QPainter.
+
+    Esses desenhos não passam pelo QSS; por isso precisam da mesma paleta
+    escura aplicada às folhas de estilo das páginas.
+    """
+    selected = normalize_theme(theme_id)
+    parsed = _rgb(str(value))
+    if parsed is None or selected != THEME_ESCURO:
+        return str(value)
+
+    red, green, blue, _format_hint = parsed
+    rgb = (red, green, blue)
+    hue, saturation, brightness = _hsv(rgb)
+    luminance = _luminance(rgb)
+
+    if usage == "fill":
+        # Superfícies brancas ou pastéis tornam-se azul-marinho profundo.
+        if luminance >= 0.46:
+            if saturation >= 0.12:
+                dark_rgb = colorsys.hsv_to_rgb(
+                    hue, min(0.58, max(0.28, saturation)), 0.25
+                )
+                return _hex(tuple(channel * 255 for channel in dark_rgb))
+            return "#192D40"
+        if saturation < 0.20 and luminance <= 0.05:
+            return "#192D40"
+        return str(value)
+
+    if usage == "text":
+        # Texto azul-marinho/cinza escuro precisa clarear para manter contraste.
+        if luminance < 0.48:
+            if saturation < 0.18:
+                return "#E5EDF4"
+            light_rgb = colorsys.hsv_to_rgb(
+                hue, min(0.72, max(0.42, saturation)), max(0.86, brightness)
+            )
+            return _hex(tuple(channel * 255 for channel in light_rgb))
+        return str(value)
+
+    return str(value)
+
+
 def transform_stylesheet(stylesheet: str, theme_id: str, object_name: str = "") -> str:
     """Converte cores de uma folha QSS sem mexer em geometria, textos ou ações."""
     source = str(stylesheet or "")

@@ -3,19 +3,22 @@ from __future__ import annotations
 from pathlib import Path
 
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QColor, QPalette
+from PySide6.QtGui import QBrush, QColor, QPalette, QPen
 from PySide6.QtWidgets import (
+    QAbstractItemView,
     QFrame,
     QHBoxLayout,
     QLabel,
     QPushButton,
+    QScrollArea,
     QSizePolicy,
+    QStyledItemDelegate,
     QVBoxLayout,
     QWidget,
 )
 
 from monitor_noticias.ui.sections import Section
-from monitor_noticias.ui.theme_engine import transform_stylesheet
+from monitor_noticias.ui.theme_engine import transform_painter_color, transform_stylesheet
 from monitor_noticias.ui.theme_store import (
     THEME_CLARO,
     THEME_ESCURO,
@@ -26,6 +29,128 @@ from monitor_noticias.ui.theme_store import (
 
 _BASE_QSS_PROPERTY = "_central_theme_base_qss_v138"
 _APPLIED_QSS_PROPERTY = "_central_theme_applied_qss_v138"
+_COVERS_THEME_READY = "_central_covers_theme_ready_v139"
+
+
+class _ThemeAwarePainter:
+    """Proxy fino para trocar apenas as cores dos desenhos QPainter."""
+
+    def __init__(self, painter, theme_id: str) -> None:
+        self._painter = painter
+        self._theme_id = theme_id
+
+    def __getattr__(self, name):
+        return getattr(self._painter, name)
+
+    def _color(self, color: QColor, usage: str) -> QColor:
+        if not color.isValid():
+            return color
+        mapped = transform_painter_color(color.name(), usage, self._theme_id)
+        result = QColor(mapped)
+        result.setAlpha(color.alpha())
+        return result
+
+    def _brush(self, value):
+        if isinstance(value, QColor):
+            return self._color(value, "fill")
+        if isinstance(value, QBrush) and value.style() == Qt.BrushStyle.SolidPattern:
+            brush = QBrush(value)
+            brush.setColor(self._color(brush.color(), "fill"))
+            return brush
+        return value
+
+    def setBrush(self, value) -> None:
+        self._painter.setBrush(self._brush(value))
+
+    def setPen(self, value) -> None:
+        if isinstance(value, QColor):
+            self._painter.setPen(self._color(value, "text"))
+            return
+        if isinstance(value, QPen):
+            pen = QPen(value)
+            pen.setColor(self._color(pen.color(), "text"))
+            self._painter.setPen(pen)
+            return
+        self._painter.setPen(value)
+
+    def fillRect(self, *args) -> None:
+        if len(args) >= 2:
+            values = list(args)
+            values[-1] = self._brush(values[-1])
+            self._painter.fillRect(*values)
+            return
+        self._painter.fillRect(*args)
+
+
+class _ThemeAwareDelegate(QStyledItemDelegate):
+    """Mantém o delegate original e adapta só a pintura no tema escuro."""
+
+    def __init__(self, original, view: QAbstractItemView) -> None:
+        super().__init__(view)
+        self._original_delegate = original
+        self._view = view
+
+    def paint(self, painter, option, index) -> None:
+        theme = _theme_for_widget(self._view)
+        if theme == THEME_ESCURO:
+            painter = _ThemeAwarePainter(painter, theme)
+        self._original_delegate.paint(painter, option, index)
+
+    def sizeHint(self, option, index):
+        return self._original_delegate.sizeHint(option, index)
+
+    def editorEvent(self, event, model, option, index) -> bool:
+        return self._original_delegate.editorEvent(event, model, option, index)
+
+
+def _theme_for_widget(widget: QWidget) -> str:
+    current = widget
+    while current is not None:
+        selected = getattr(current, "_central_theme", None)
+        if selected:
+            return normalize_theme(selected)
+        current = current.parentWidget()
+    return THEME_CLARO
+
+
+def _ensure_theme_aware_delegate(widget: QWidget) -> None:
+    if not isinstance(widget, QAbstractItemView):
+        return
+    delegate = widget.itemDelegate()
+    if isinstance(delegate, _ThemeAwareDelegate):
+        return
+    if type(delegate).__name__ not in {"NewsDelegate", "HistoryDelegate"}:
+        return
+    widget.setItemDelegate(_ThemeAwareDelegate(delegate, widget))
+
+
+def _apply_embedded_covers_theme(scroll: QScrollArea, theme_id: str) -> None:
+    """Reaplica o QSS original da aba Capas após a extração da janela embutida."""
+    if scroll.objectName() != "referenceCoversScroll":
+        return
+    content = scroll.widget()
+    if content is None:
+        return
+
+    try:
+        from monitor_noticias.ui.covers_reference_page import LIGHT_STYLE
+    except Exception:
+        return
+
+    if not content.property(_COVERS_THEME_READY):
+        # Guarda o QSS claro como origem, para permitir alternar Claro/Escuro
+        # sem acumular transformações nem perder a aparência original.
+        content.setProperty(_BASE_QSS_PROPERTY, LIGHT_STYLE)
+        content.setProperty(_APPLIED_QSS_PROPERTY, LIGHT_STYLE)
+        content.setProperty(_COVERS_THEME_READY, True)
+        content.setStyleSheet(LIGHT_STYLE)
+
+    _apply_widget_stylesheet(content, theme_id)
+    _apply_palette(content, theme_id)
+    for child in content.findChildren(QWidget):
+        _apply_widget_stylesheet(child, theme_id)
+        _ensure_theme_aware_delegate(child)
+    _apply_widget_stylesheet(scroll, theme_id)
 
 
 def _apply_widget_stylesheet(widget: QWidget, theme_id: str) -> None:
@@ -52,7 +177,11 @@ def _apply_widget_stylesheet(widget: QWidget, theme_id: str) -> None:
 
 def apply_widget_theme_stylesheet(widget: QWidget, theme_id: str) -> None:
     """Aplica a conversão a um widget novo ou cujo QSS mudou durante o uso."""
-    _apply_widget_stylesheet(widget, normalize_theme(theme_id))
+    selected = normalize_theme(theme_id)
+    _apply_widget_stylesheet(widget, selected)
+    _ensure_theme_aware_delegate(widget)
+    if isinstance(widget, QScrollArea) and widget.objectName() == "referenceCoversScroll":
+        _apply_embedded_covers_theme(widget, selected)
 
 
 def _apply_palette(window: QWidget, theme_id: str) -> None:
@@ -248,6 +377,12 @@ def apply_theme(window, theme_id: str) -> None:
         widgets = [window, *window.findChildren(QWidget)]
         for widget in widgets:
             _apply_widget_stylesheet(widget, selected)
+            _ensure_theme_aware_delegate(widget)
+        # A aba Capas é extraída de uma janela auxiliar para dentro de um
+        # QScrollArea; o QSS da janela original não acompanha esse reparenting.
+        for scroll in window.findChildren(QScrollArea):
+            if scroll.objectName() == "referenceCoversScroll":
+                _apply_embedded_covers_theme(scroll, selected)
     finally:
         window._central_theme_applying = False
     window.update()
