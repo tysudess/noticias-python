@@ -18,7 +18,11 @@ from PySide6.QtWidgets import (
 )
 
 from monitor_noticias.ui.sections import Section
-from monitor_noticias.ui.theme_engine import transform_painter_color, transform_stylesheet
+from monitor_noticias.ui.theme_engine import (
+    THEME_AWARE_DELEGATE_NAMES,
+    transform_painter_color,
+    transform_stylesheet,
+)
 from monitor_noticias.ui.theme_store import (
     THEME_CLARO,
     THEME_ESCURO,
@@ -30,6 +34,7 @@ from monitor_noticias.ui.theme_store import (
 _BASE_QSS_PROPERTY = "_central_theme_base_qss_v138"
 _APPLIED_QSS_PROPERTY = "_central_theme_applied_qss_v138"
 _COVERS_THEME_READY = "_central_covers_theme_ready_v139"
+_PALETTE_THEME_PROPERTY = "_central_theme_palette_v140"
 
 
 class _ThemeAwarePainter:
@@ -119,7 +124,7 @@ def _ensure_theme_aware_delegate(widget: QWidget) -> None:
     delegate = widget.itemDelegate()
     if isinstance(delegate, _ThemeAwareDelegate):
         return
-    if type(delegate).__name__ not in {"NewsDelegate", "HistoryDelegate"}:
+    if type(delegate).__name__ not in THEME_AWARE_DELEGATE_NAMES:
         return
     widget.setItemDelegate(_ThemeAwareDelegate(delegate, widget))
 
@@ -175,17 +180,8 @@ def _apply_widget_stylesheet(widget: QWidget, theme_id: str) -> None:
         widget.setStyleSheet(transformed)
 
 
-def apply_widget_theme_stylesheet(widget: QWidget, theme_id: str) -> None:
-    """Aplica a conversão a um widget novo ou cujo QSS mudou durante o uso."""
-    selected = normalize_theme(theme_id)
-    _apply_widget_stylesheet(widget, selected)
-    _ensure_theme_aware_delegate(widget)
-    if isinstance(widget, QScrollArea) and widget.objectName() == "referenceCoversScroll":
-        _apply_embedded_covers_theme(widget, selected)
-
-
-def _apply_palette(window: QWidget, theme_id: str) -> None:
-    palette = QPalette(window.palette())
+def _theme_palette(base: QPalette, theme_id: str) -> QPalette:
+    palette = QPalette(base)
     if theme_id == THEME_ESCURO:
         values = {
             QPalette.ColorRole.Window: "#0D1926",
@@ -220,7 +216,43 @@ def _apply_palette(window: QWidget, theme_id: str) -> None:
         }
     for role, value in values.items():
         palette.setColor(role, QColor(value))
-    window.setPalette(palette)
+    return palette
+
+
+def _apply_single_widget_palette(widget: QWidget, theme_id: str) -> None:
+    selected = normalize_theme(theme_id)
+    if widget.property(_PALETTE_THEME_PROPERTY) != selected:
+        widget.setPalette(_theme_palette(widget.palette(), selected))
+        widget.setProperty(_PALETTE_THEME_PROPERTY, selected)
+
+    # QScrollArea tem uma viewport própria; ela também precisa receber a cor.
+    if isinstance(widget, QScrollArea) and widget.objectName() == "homeScroll":
+        viewport = widget.viewport()
+        if viewport.property(_PALETTE_THEME_PROPERTY) != selected:
+            viewport.setPalette(_theme_palette(viewport.palette(), selected))
+            viewport.setProperty(_PALETTE_THEME_PROPERTY, selected)
+        viewport.setAutoFillBackground(True)
+
+    if widget.objectName() == "homeScrollContent":
+        widget.setAutoFillBackground(True)
+        widget.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+
+
+def apply_widget_theme_stylesheet(widget: QWidget, theme_id: str) -> None:
+    """Aplica QSS e paleta a widgets novos ou atualizados durante o uso."""
+    selected = normalize_theme(theme_id)
+    _apply_widget_stylesheet(widget, selected)
+    _apply_single_widget_palette(widget, selected)
+    _ensure_theme_aware_delegate(widget)
+    if isinstance(widget, QScrollArea) and widget.objectName() == "referenceCoversScroll":
+        _apply_embedded_covers_theme(widget, selected)
+
+
+def _apply_palette(window: QWidget, theme_id: str) -> None:
+    selected = normalize_theme(theme_id)
+    _apply_single_widget_palette(window, selected)
+    for child in window.findChildren(QWidget):
+        _apply_single_widget_palette(child, selected)
 
 
 class ThemePreferencesCard(QFrame):

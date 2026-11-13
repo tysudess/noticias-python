@@ -19,6 +19,14 @@ _COLOR_RE = re.compile(
 _BLOCK_RE = re.compile(r"(?P<selector>[^{}]+)\{(?P<body>[^{}]*)\}")
 _DECL_RE = re.compile(r"(?P<prop>[\w-]+\s*:\s*)(?P<value>[^;{}]*)(?P<end>;?)")
 
+# Delegates que desenham os próprios cartões com QPainter e, portanto, não
+# recebem as cores do QSS global.
+THEME_AWARE_DELEGATE_NAMES = frozenset({
+    "NewsDelegate",
+    "HistoryDelegate",
+    "SourceDelegate",
+})
+
 # Os seletores abaixo representam conteúdo, não a moldura da aplicação.
 # A aparência de uma página, imagem ou vídeo aberto deve permanecer fiel.
 _PRESERVE_OBJECT_NAMES = frozenset({
