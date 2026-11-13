@@ -1,3 +1,4 @@
+import re
 from pathlib import Path
 
 
@@ -8,11 +9,25 @@ def _read(relative: str) -> str:
     return (ROOT / relative).read_text(encoding="utf-8")
 
 
-def test_runtime_alias_points_to_v12520():
+def test_runtime_alias_points_to_existing_versioned_runtime():
     alias = _read(
         "tools/news_extractor/engine/extrator-materia-v1.25.10-runtime.js"
     )
-    assert "extrator-materia-v1.25.20-runtime.js" in alias
+    match = re.search(
+        r"module\.exports\s*=\s*require\(\s*['\"]\./([^'\"]+-runtime\.js)['\"]\s*\)",
+        alias,
+    )
+
+    assert match, "O alias não contém um require válido para o runtime ativo."
+    target_name = match.group(1)
+    target = (
+        ROOT
+        / "tools/news_extractor/engine"
+        / target_name
+    )
+    assert target.is_file(), (
+        f"O alias aponta para {target_name}, mas esse runtime não existe."
+    )
 
 
 def test_uol_runtime_checks_split_article_blocks():
