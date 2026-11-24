@@ -48,3 +48,41 @@ def test_art_studio_uses_no_new_third_party_runtime_packages():
     assert "from PIL import Image as PILImage" in source
     assert "import fabric" not in source.lower()
     assert "adobe" not in source.lower()
+
+
+def test_art_studio_has_quick_templates_and_zoom_controls():
+    source = _read("src/monitor_noticias/ui/art_studio_page.py")
+    for token in (
+        "def apply_quick_template(",
+        "Destaque de notícia",
+        "Comunicado",
+        "Convite",
+        "Card informativo",
+        "zoomChanged = Signal(int)",
+        "def zoom_by(",
+        "def actual_size(",
+        "Ctrl+0",
+    ):
+        assert token in source
+
+
+def test_art_studio_supports_object_transform_and_font_properties():
+    source = _read("src/monitor_noticias/ui/art_studio_page.py")
+    for token in (
+        "def apply_selected_transform(",
+        "def center_selected(",
+        "def change_selected_font(",
+        "QDoubleSpinBox",
+        "QFontDialog.getFont",
+        '"opacity": float(item.opacity())',
+        '"font_serialized": font.toString()',
+        'item.setOpacity(max(0.1, min(1.0, float(data.get("opacity", 1.0)))))',
+    ):
+        assert token in source
+
+
+def test_art_studio_canvas_dimensions_use_readable_vertical_fields():
+    source = _read("src/monitor_noticias/ui/art_studio_page.py")
+    assert "left.setFixedWidth(184)" in source
+    assert 'dimensions.addRow("Largura (px)", self.width_spin)' in source
+    assert 'dimensions.addRow("Altura (px)", self.height_spin)' in source

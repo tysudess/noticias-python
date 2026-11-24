@@ -26,8 +26,11 @@ from PySide6.QtWidgets import (
     QAbstractItemView,
     QColorDialog,
     QComboBox,
+    QDoubleSpinBox,
     QFileDialog,
     QFrame,
+    QFormLayout,
+    QFontDialog,
     QGraphicsEllipseItem,
     QGraphicsItem,
     QGraphicsPixmapItem,
@@ -42,6 +45,7 @@ from PySide6.QtWidgets import (
     QListWidgetItem,
     QMessageBox,
     QPushButton,
+    QSlider,
     QSpinBox,
     QVBoxLayout,
     QWidget,
@@ -66,7 +70,9 @@ PRESETS: tuple[tuple[str, int, int], ...] = (
 
 
 class ArtCanvasView(QGraphicsView):
-    """Canvas com ajuste automático da arte à área de trabalho."""
+    """Canvas com zoom por roda do mouse e ajuste automático à área de trabalho."""
+
+    zoomChanged = Signal(int)
 
     def __init__(self, scene: QGraphicsScene, parent: QWidget | None = None) -> None:
         super().__init__(scene, parent)
@@ -84,11 +90,35 @@ class ArtCanvasView(QGraphicsView):
         self.setBackgroundBrush(QColor("#DCE3EA"))
         self.setMinimumSize(420, 360)
 
+    def _publish_zoom(self) -> None:
+        self.zoomChanged.emit(max(1, int(round(self.transform().m11() * 100))))
+
     def fit_canvas(self) -> None:
         rect = self.scene().sceneRect()
         if rect.width() > 0 and rect.height() > 0:
             self.resetTransform()
             self.fitInView(rect, Qt.AspectRatioMode.KeepAspectRatio)
+            self._publish_zoom()
+
+    def zoom_by(self, factor: float) -> None:
+        current = max(0.001, self.transform().m11())
+        target = max(0.05, min(8.0, current * float(factor)))
+        self.scale(target / current, target / current)
+        self._publish_zoom()
+
+    def actual_size(self) -> None:
+        self.resetTransform()
+        self.centerOn(self.scene().sceneRect().center())
+        self._publish_zoom()
+
+    def wheelEvent(self, event) -> None:  # noqa: N802 - Qt API
+        if event.modifiers() & Qt.KeyboardModifier.ControlModifier:
+            steps = event.angleDelta().y() / 120.0
+            if steps:
+                self.zoom_by(1.15 ** steps)
+            event.accept()
+            return
+        super().wheelEvent(event)
 
     def resizeEvent(self, event) -> None:  # noqa: N802 - Qt API
         super().resizeEvent(event)
@@ -143,6 +173,19 @@ class ArtStudioPage(QWidget):
         open_action.triggered.connect(self.open_project)
         self.addAction(open_action)
 
+        zoom_in_action = QAction("Aumentar zoom", self)
+        zoom_in_action.setShortcut(QKeySequence("Ctrl++"))
+        zoom_in_action.triggered.connect(lambda: self.view.zoom_by(1.15))
+        self.addAction(zoom_in_action)
+        zoom_out_action = QAction("Diminuir zoom", self)
+        zoom_out_action.setShortcut(QKeySequence("Ctrl+-"))
+        zoom_out_action.triggered.connect(lambda: self.view.zoom_by(1 / 1.15))
+        self.addAction(zoom_out_action)
+        fit_action = QAction("Ajustar canvas", self)
+        fit_action.setShortcut(QKeySequence("Ctrl+0"))
+        fit_action.triggered.connect(self.view_fit)
+        self.addAction(fit_action)
+
     # ------------------------------------------------------------------
     # Interface
     # ------------------------------------------------------------------
@@ -178,24 +221,27 @@ class ArtStudioPage(QWidget):
         root.addLayout(workspace, 1)
 
         left = self._panel("ELEMENTOS")
-        left.setFixedWidth(154)
+        left.setFixedWidth(184)
         left_layout = left.layout()
         self.add_image_button = self._button("＋  Imagem", secondary=True)
         self.add_text_button = self._button("T  Texto", secondary=True)
         self.add_rect_button = self._button("▭  Retângulo", secondary=True)
         self.add_ellipse_button = self._button("◯  Círculo", secondary=True)
         self.background_button = self._button("Fundo da arte", secondary=True)
+        self.templates_button = self._button("Modelos rápidos", secondary=True)
         self.add_image_button.clicked.connect(self.add_image)
         self.add_text_button.clicked.connect(self.add_text)
         self.add_rect_button.clicked.connect(lambda: self.add_shape("rect"))
         self.add_ellipse_button.clicked.connect(lambda: self.add_shape("ellipse"))
         self.background_button.clicked.connect(self.choose_canvas_color)
+        self.templates_button.clicked.connect(self.apply_quick_template)
         for button in (
             self.add_image_button,
             self.add_text_button,
             self.add_rect_button,
             self.add_ellipse_button,
             self.background_button,
+            self.templates_button,
         ):
             button.setMinimumHeight(38)
             left_layout.addWidget(button)
@@ -208,17 +254,22 @@ class ArtStudioPage(QWidget):
         self.preset_combo.currentIndexChanged.connect(self._preset_changed)
         left_layout.addWidget(self.preset_combo)
 
-        dimensions = QHBoxLayout()
+        dimensions = QFormLayout()
+        dimensions.setContentsMargins(0, 2, 0, 2)
+        dimensions.setHorizontalSpacing(6)
+        dimensions.setVerticalSpacing(5)
         self.width_spin = QSpinBox()
         self.width_spin.setRange(64, 5000)
         self.width_spin.setValue(self._width)
         self.width_spin.setToolTip("Largura em pixels")
+        self.width_spin.setMinimumWidth(0)
         self.height_spin = QSpinBox()
         self.height_spin.setRange(64, 5000)
         self.height_spin.setValue(self._height)
         self.height_spin.setToolTip("Altura em pixels")
-        dimensions.addWidget(self.width_spin)
-        dimensions.addWidget(self.height_spin)
+        self.height_spin.setMinimumWidth(0)
+        dimensions.addRow("Largura (px)", self.width_spin)
+        dimensions.addRow("Altura (px)", self.height_spin)
         left_layout.addLayout(dimensions)
         self.apply_size_button = self._button("Aplicar tamanho", secondary=True)
         self.apply_size_button.clicked.connect(self.apply_canvas_size)
@@ -236,16 +287,32 @@ class ArtStudioPage(QWidget):
         self.canvas_size_label.setObjectName("muted")
         canvas_header.addWidget(self.canvas_size_label)
         canvas_header.addStretch(1)
+        self.zoom_out_button = self._button("−", secondary=True)
+        self.zoom_out_button.setFixedWidth(36)
+        self.zoom_label = QLabel("100%")
+        self.zoom_label.setMinimumWidth(48)
+        self.zoom_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.zoom_in_button = self._button("+", secondary=True)
+        self.zoom_in_button.setFixedWidth(36)
+        self.actual_size_button = self._button("100%", secondary=True)
         self.fit_button = self._button("Ajustar à tela", secondary=True)
+        self.zoom_out_button.clicked.connect(lambda: self.view.zoom_by(1 / 1.15))
+        self.zoom_in_button.clicked.connect(lambda: self.view.zoom_by(1.15))
+        self.actual_size_button.clicked.connect(self.view.actual_size)
         self.fit_button.clicked.connect(self.view_fit)
+        canvas_header.addWidget(self.zoom_out_button)
+        canvas_header.addWidget(self.zoom_label)
+        canvas_header.addWidget(self.zoom_in_button)
+        canvas_header.addWidget(self.actual_size_button)
         canvas_header.addWidget(self.fit_button)
         center_layout.addLayout(canvas_header)
         self.view = ArtCanvasView(self.scene)
+        self.view.zoomChanged.connect(lambda value: self.zoom_label.setText(f"{value}%"))
         center_layout.addWidget(self.view, 1)
         workspace.addWidget(center, 1)
 
         right = self._panel("CAMADAS E OBJETOS")
-        right.setFixedWidth(236)
+        right.setFixedWidth(260)
         right_layout = right.layout()
         self.selection_label = QLabel("Nenhum objeto selecionado")
         self.selection_label.setObjectName("muted")
@@ -257,22 +324,53 @@ class ArtStudioPage(QWidget):
         self.layers.currentItemChanged.connect(self._layer_selected)
         right_layout.addWidget(self.layers, 1)
 
+        transform_title = self._small_label("PROPRIEDADES DO OBJETO")
+        right_layout.addWidget(transform_title)
+        transform_form = QFormLayout()
+        transform_form.setContentsMargins(0, 0, 0, 0)
+        transform_form.setVerticalSpacing(4)
+        self.rotation_spin = QDoubleSpinBox()
+        self.rotation_spin.setRange(-360.0, 360.0)
+        self.rotation_spin.setDecimals(1)
+        self.rotation_spin.setSingleStep(5.0)
+        self.rotation_spin.setSuffix("°")
+        self.scale_spin = QDoubleSpinBox()
+        self.scale_spin.setRange(0.05, 8.0)
+        self.scale_spin.setDecimals(2)
+        self.scale_spin.setSingleStep(0.10)
+        self.opacity_slider = QSlider(Qt.Orientation.Horizontal)
+        self.opacity_slider.setRange(10, 100)
+        self.opacity_slider.setValue(100)
+        transform_form.addRow("Rotação", self.rotation_spin)
+        transform_form.addRow("Escala", self.scale_spin)
+        transform_form.addRow("Opacidade", self.opacity_slider)
+        right_layout.addLayout(transform_form)
+        self.apply_transform_button = self._button("Aplicar transformações", secondary=True)
+        self.apply_transform_button.clicked.connect(self.apply_selected_transform)
+        right_layout.addWidget(self.apply_transform_button)
+
         self.edit_text_button = self._button("Editar texto", secondary=True)
+        self.font_button = self._button("Fonte e estilo", secondary=True)
         self.color_button = self._button("Cor do objeto", secondary=True)
+        self.center_button = self._button("Centralizar no canvas", secondary=True)
         self.duplicate_button = self._button("Duplicar", secondary=True)
         self.forward_button = self._button("Trazer para frente", secondary=True)
         self.backward_button = self._button("Enviar para trás", secondary=True)
         self.delete_button = self._button("Excluir objeto", secondary=True)
         self.delete_button.setProperty("danger", True)
         self.edit_text_button.clicked.connect(self.edit_selected_text)
+        self.font_button.clicked.connect(self.change_selected_font)
         self.color_button.clicked.connect(self.change_selected_color)
+        self.center_button.clicked.connect(self.center_selected)
         self.duplicate_button.clicked.connect(self.duplicate_selected)
         self.forward_button.clicked.connect(self.bring_to_front)
         self.backward_button.clicked.connect(self.send_to_back)
         self.delete_button.clicked.connect(self.delete_selected)
         for button in (
             self.edit_text_button,
+            self.font_button,
             self.color_button,
+            self.center_button,
             self.duplicate_button,
             self.forward_button,
             self.backward_button,
@@ -359,6 +457,7 @@ class ArtStudioPage(QWidget):
         item.setFlag(QGraphicsItem.GraphicsItemFlag.ItemSendsGeometryChanges, True)
         item.setData(ITEM_KIND_KEY, kind)
         item.setData(ITEM_NAME_KEY, name)
+        item.setTransformOriginPoint(item.boundingRect().center())
         max_z = max(
             (float(candidate.zValue()) for candidate in self._content_items()),
             default=0.0,
@@ -441,6 +540,115 @@ class ArtStudioPage(QWidget):
         self._make_movable(item, "shape", name)
         self.status_label.setText(f"{name} adicionado à arte.")
 
+    def apply_quick_template(self) -> None:
+        choices = ["Destaque de notícia", "Comunicado", "Convite", "Card informativo"]
+        choice, accepted = QInputDialog.getItem(
+            self, "Modelos rápidos", "Escolha um modelo para começar:", choices, 0, False
+        )
+        if not accepted or not choice:
+            return
+        if self._content_items():
+            answer = QMessageBox.question(
+                self,
+                "Aplicar modelo",
+                "O modelo substituirá os objetos da arte atual. Deseja continuar?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No,
+            )
+            if answer != QMessageBox.StandardButton.Yes:
+                return
+        self._reset_for_template()
+        if choice == "Destaque de notícia":
+            self._width, self._height = 1920, 1080
+            self._canvas_color = QColor("#091F33")
+            self._set_template_canvas()
+            self._template_rect(0, 0, 22, 1080, "#D6B66D", "Detalhe dourado")
+            self._template_text("DESTAQUE DO DIA", 40, "#E4C77B", 130, 125, 1500)
+            self._template_text("TÍTULO DA NOTÍCIA", 112, "#FFFFFF", 130, 320, 1640)
+            self._template_text("Inclua aqui o resumo ou a chamada principal da matéria.", 52, "#C5D3DE", 134, 640, 1510, bold=False)
+            self._template_text("CENTRAL INTELIGENTE DE MÍDIA", 26, "#91A8BA", 134, 960, 1200)
+        elif choice == "Comunicado":
+            self._width, self._height = 1080, 1080
+            self._canvas_color = QColor("#F2F5F8")
+            self._set_template_canvas()
+            self._template_rect(0, 0, 1080, 280, "#0B263D", "Cabeçalho")
+            self._template_rect(0, 280, 1080, 16, "#D6B66D", "Faixa dourada")
+            self._template_text("COMUNICADO", 76, "#FFFFFF", 82, 92, 900)
+            self._template_text("Título principal", 70, "#102A43", 82, 390, 900)
+            self._template_text("Escreva aqui a informação que precisa ser divulgada.", 42, "#43596B", 84, 535, 900, bold=False)
+            self._template_text("CENTRAL INTELIGENTE DE MÍDIA", 25, "#667C8E", 84, 980, 900)
+        elif choice == "Convite":
+            self._width, self._height = 1080, 1920
+            self._canvas_color = QColor("#F8F1E4")
+            self._set_template_canvas()
+            self._template_rect(0, 0, 1080, 460, "#102A43", "Faixa superior")
+            self._template_rect(0, 1460, 1080, 460, "#102A43", "Faixa inferior")
+            self._template_text("VOCÊ ESTÁ CONVIDADO", 58, "#E4C77B", 85, 180, 910)
+            self._template_text("NOME DO EVENTO", 90, "#FFFFFF", 80, 330, 930)
+            self._template_text("Data • Horário • Local", 54, "#102A43", 90, 760, 900)
+            self._template_text("Confirme sua presença", 44, "#43596B", 90, 920, 900, bold=False)
+            self._template_text("INFORMAÇÕES E CONTATO", 34, "#E4C77B", 90, 1650, 900)
+        else:
+            self._width, self._height = 1080, 1080
+            self._canvas_color = QColor("#102A43")
+            self._set_template_canvas()
+            self._template_rect(0, 0, 1080, 20, "#D6B66D", "Faixa superior")
+            self._template_rect(80, 170, 180, 10, "#D6B66D", "Detalhe")
+            self._template_text("INFORMAÇÃO EM DESTAQUE", 76, "#FFFFFF", 80, 270, 900)
+            self._template_text("Inclua aqui os principais dados ou a mensagem que deseja destacar.", 42, "#C5D3DE", 84, 515, 900, bold=False)
+            self._template_text("CENTRAL INTELIGENTE DE MÍDIA", 25, "#D6B66D", 84, 950, 900)
+        self.width_spin.setValue(self._width)
+        self.height_spin.setValue(self._height)
+        self.canvas_size_label.setText(f"{self._width} × {self._height} px")
+        self.scene.clearSelection()
+        self._refresh_layers()
+        self.view_fit()
+        self.status_label.setText(f"Modelo '{choice}' aplicado. Edite os textos e mova os elementos para personalizar.")
+
+    def _reset_for_template(self) -> None:
+        self.scene.clear()
+        self.current_file = None
+        self.project_label.setText("Projeto sem título")
+        self.scene.setSceneRect(QRectF(0, 0, self._width, self._height))
+
+    def _set_template_canvas(self) -> None:
+        self.scene.setSceneRect(QRectF(0, 0, self._width, self._height))
+        self._canvas_item = QGraphicsRectItem(0, 0, self._width, self._height)
+        self._canvas_item.setBrush(QBrush(self._canvas_color))
+        self._canvas_item.setPen(QPen(QColor("#B8C3CE"), 1))
+        self._canvas_item.setZValue(-100000)
+        self._canvas_item.setData(ITEM_KIND_KEY, CANVAS_BG_KEY)
+        self._canvas_item.setData(ITEM_NAME_KEY, "Fundo da arte")
+        self.scene.addItem(self._canvas_item)
+
+    def _template_rect(self, x: float, y: float, width: float, height: float, color: str, name: str) -> None:
+        item = QGraphicsRectItem(QRectF(0, 0, width, height))
+        item.setBrush(QBrush(QColor(color)))
+        item.setPen(QPen(Qt.PenStyle.NoPen))
+        item.setPos(x, y)
+        self._make_movable(item, "shape", name)
+
+    def _template_text(
+        self,
+        text: str,
+        size: int,
+        color: str,
+        x: float,
+        y: float,
+        width: float,
+        *,
+        bold: bool = True,
+    ) -> None:
+        item = QGraphicsTextItem(text)
+        font = QFont("Segoe UI")
+        font.setPixelSize(size)
+        font.setBold(bold)
+        item.setFont(font)
+        item.setDefaultTextColor(QColor(color))
+        item.setTextWidth(width)
+        item.setPos(x, y)
+        self._make_movable(item, "text", text.splitlines()[0][:40])
+
     def _content_items(self) -> list[QGraphicsItem]:
         return [
             item
@@ -463,10 +671,29 @@ class ArtStudioPage(QWidget):
                  f"Posição: {item.pos().x():.0f}, {item.pos().y():.0f}"
         )
         is_text = enabled and item.data(ITEM_KIND_KEY) == "text"
-        self.edit_text_button.setEnabled(bool(is_text))
-        self.color_button.setEnabled(bool(is_text or (enabled and item.data(ITEM_KIND_KEY) == "shape")))
-        for button in (self.duplicate_button, self.forward_button, self.backward_button, self.delete_button):
+        is_shape = enabled and item.data(ITEM_KIND_KEY) == "shape"
+        for button in (self.edit_text_button, self.font_button):
+            button.setEnabled(bool(is_text))
+        self.color_button.setEnabled(bool(is_text or is_shape))
+        for button in (
+            self.center_button,
+            self.apply_transform_button,
+            self.duplicate_button,
+            self.forward_button,
+            self.backward_button,
+            self.delete_button,
+        ):
             button.setEnabled(enabled)
+        if item is not None:
+            self.rotation_spin.blockSignals(True)
+            self.scale_spin.blockSignals(True)
+            self.opacity_slider.blockSignals(True)
+            self.rotation_spin.setValue(float(item.rotation()))
+            self.scale_spin.setValue(float(item.scale()))
+            self.opacity_slider.setValue(max(10, min(100, round(item.opacity() * 100))))
+            self.rotation_spin.blockSignals(False)
+            self.scale_spin.blockSignals(False)
+            self.opacity_slider.blockSignals(False)
 
     def _refresh_layers(self, select_item: QGraphicsItem | None = None) -> None:
         if not hasattr(self, "layers"):
@@ -519,6 +746,40 @@ class ArtStudioPage(QWidget):
             self._refresh_layers(select_item=item)
             self._update_selection_controls(item)
 
+    def change_selected_font(self) -> None:
+        item = self._selected_item()
+        if not isinstance(item, QGraphicsTextItem):
+            return
+        selected_font, accepted = QFontDialog.getFont(item.font(), self, "Fonte e estilo")
+        if not accepted:
+            return
+        item.setFont(selected_font)
+        self._update_selection_controls(item)
+        self.status_label.setText("Fonte e estilo do texto atualizados.")
+
+    def apply_selected_transform(self) -> None:
+        item = self._selected_item()
+        if item is None:
+            return
+        item.setTransformOriginPoint(item.boundingRect().center())
+        item.setRotation(float(self.rotation_spin.value()))
+        item.setScale(float(self.scale_spin.value()))
+        item.setOpacity(float(self.opacity_slider.value()) / 100.0)
+        self._update_selection_controls(item)
+        self._refresh_layers(select_item=item)
+        self.status_label.setText("Rotação, escala e opacidade aplicadas ao objeto.")
+
+    def center_selected(self) -> None:
+        item = self._selected_item()
+        if item is None:
+            return
+        bounds = item.sceneBoundingRect()
+        target = self.scene.sceneRect().center()
+        delta = target - bounds.center()
+        item.moveBy(delta.x(), delta.y())
+        self._update_selection_controls(item)
+        self.status_label.setText("Objeto centralizado no canvas.")
+
     def change_selected_color(self) -> None:
         item = self._selected_item()
         if item is None:
@@ -542,6 +803,7 @@ class ArtStudioPage(QWidget):
         clone.setPos(item.pos() + self._offset_for_item(item))
         clone.setRotation(item.rotation())
         clone.setScale(item.scale())
+        clone.setOpacity(item.opacity())
         self._make_movable(
             clone,
             str(item.data(ITEM_KIND_KEY)),
@@ -630,6 +892,7 @@ class ArtStudioPage(QWidget):
             "y": float(pos.y()),
             "rotation": float(item.rotation()),
             "scale": float(item.scale()),
+            "opacity": float(item.opacity()),
             "z": float(item.zValue()),
         }
         if isinstance(item, QGraphicsPixmapItem):
@@ -642,6 +905,8 @@ class ArtStudioPage(QWidget):
                 {
                     "text": item.toPlainText(),
                     "font_family": font.family(),
+                    "font_serialized": font.toString(),
+                    "font_pixel_size": font.pixelSize(),
                     "font_size_px": font.pixelSize() if font.pixelSize() > 0 else 16,
                     "font_bold": font.bold(),
                     "font_italic": font.italic(),
@@ -671,9 +936,14 @@ class ArtStudioPage(QWidget):
         elif kind == "text":
             item = QGraphicsTextItem(str(data.get("text", "")))
             font = QFont(str(data.get("font_family", "Segoe UI")))
-            font.setPixelSize(max(1, int(data.get("font_size_px", 16))))
-            font.setBold(bool(data.get("font_bold", False)))
-            font.setItalic(bool(data.get("font_italic", False)))
+            serialized_font = str(data.get("font_serialized", ""))
+            restored_font = bool(serialized_font and font.fromString(serialized_font))
+            if restored_font and int(data.get("font_pixel_size", -1)) > 0:
+                font.setPixelSize(int(data["font_pixel_size"]))
+            if not restored_font:
+                font.setPixelSize(max(1, int(data.get("font_size_px", 16))))
+                font.setBold(bool(data.get("font_bold", False)))
+                font.setItalic(bool(data.get("font_italic", False)))
             item.setFont(font)
             item.setDefaultTextColor(QColor(str(data.get("text_color", "#FF102A43"))))
             item.setTextWidth(float(data.get("text_width", -1)))
@@ -695,8 +965,10 @@ class ArtStudioPage(QWidget):
         item.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsSelectable, True)
         item.setFlag(QGraphicsItem.GraphicsItemFlag.ItemSendsGeometryChanges, True)
         item.setPos(float(data.get("x", 0)), float(data.get("y", 0)))
+        item.setTransformOriginPoint(item.boundingRect().center())
         item.setRotation(float(data.get("rotation", 0)))
         item.setScale(float(data.get("scale", 1)))
+        item.setOpacity(max(0.1, min(1.0, float(data.get("opacity", 1.0)))))
         item.setZValue(float(data.get("z", 1)))
         return item
 
