@@ -86,3 +86,62 @@ def test_art_studio_canvas_dimensions_use_readable_vertical_fields():
     assert "left.setFixedWidth(184)" in source
     assert 'dimensions.addRow("Largura (px)", self.width_spin)' in source
     assert 'dimensions.addRow("Altura (px)", self.height_spin)' in source
+
+
+def test_art_studio_v145_adds_crop_visibility_lock_and_alignment_tools():
+    source = _read("src/monitor_noticias/ui/art_studio_v145.py")
+    for token in (
+        "def _crop_selected_image(",
+        "class _ImageCropDialog",
+        "def _toggle_visibility(",
+        "def _toggle_lock(",
+        "def _align_objects(",
+        'data["visible"]',
+        'data["locked"]',
+        'data["history_id"]',
+    ):
+        assert token in source
+
+
+def test_art_studio_v145_adds_undo_redo_with_debounced_scene_history():
+    source = _read("src/monitor_noticias/ui/art_studio_v145.py")
+    for token in (
+        "QUndoStack",
+        "QUndoCommand",
+        "def _undo(",
+        "def _redo(",
+        "def _commit_history(",
+        "page.scene.changed.connect",
+        "QKeySequence.StandardKey.Undo",
+        "QKeySequence.StandardKey.Redo",
+    ):
+        assert token in source
+
+
+def test_art_studio_v145_is_installed_after_page_creation():
+    source = _read("src/monitor_noticias/ui/art_studio_integration.py")
+    assert "from monitor_noticias.ui.art_studio_v145 import enhance_art_studio_page" in source
+    assert "enhance_art_studio_page(self.art_studio_page)" in source
+
+
+def test_art_studio_v145_persists_layer_visibility_and_lock_state():
+    source = _read("src/monitor_noticias/ui/art_studio_v145.py")
+    assert 'data["visible"] = bool(item.isVisible())' in source
+    assert 'data["locked"] = bool(item.data(LOCKED_KEY))' in source
+    assert 'item.setVisible(bool(data.get("visible", True)))' in source
+    assert 'item.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsMovable, not locked)' in source
+
+
+def test_art_studio_v145_crop_uses_pixel_bounds_and_keeps_transformed_position():
+    source = _read("src/monitor_noticias/ui/art_studio_v145.py")
+    assert "math.floor(rect.left())" in source
+    assert "math.ceil(rect.right())" in source
+    assert "item.mapToScene(QPointF(rect.left(), rect.top()))" in source
+    assert "item.setPixmap(cropped)" in source
+
+
+def test_art_studio_v145_blocks_mutations_of_locked_layers():
+    source = _read("src/monitor_noticias/ui/art_studio_v145.py")
+    assert "def _install_locked_item_guards(" in source
+    assert "Desbloqueie a camada antes de excluí-la." in source
+    assert "Desbloqueie ao menos uma camada para alinhá-la." in source

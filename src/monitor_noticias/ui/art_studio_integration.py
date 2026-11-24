@@ -11,6 +11,7 @@ import logging
 from pathlib import Path
 
 from monitor_noticias.ui.art_studio_page import ArtStudioPage
+from monitor_noticias.ui.art_studio_v145 import enhance_art_studio_page
 from monitor_noticias.ui.main_window import MainWindow
 from monitor_noticias.ui.sidebar_widgets import SidebarNavItem
 import monitor_noticias.ui.sidebar_widgets as sidebar_widgets
@@ -68,6 +69,7 @@ def install_art_studio() -> None:
         state_root = Path(getattr(self.paths, "state_root", self.paths.root))
         projects_dir = state_root / "ArtStudioProjects"
         self.art_studio_page = ArtStudioPage(projects_dir, self)
+        enhance_art_studio_page(self.art_studio_page)
         self.pages["ART_STUDIO"] = self.art_studio_page
         self.stack.addWidget(self.art_studio_page)
 
