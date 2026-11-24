@@ -8,6 +8,7 @@ alterar a ordem e os identificadores das páginas que já existem.
 """
 
 import logging
+import weakref
 from pathlib import Path
 
 from monitor_noticias.ui.art_studio_page import ArtStudioPage
@@ -20,10 +21,60 @@ log = logging.getLogger(__name__)
 _INSTALLED = False
 
 
+class _DeferredArtStudioView:
+    """Adia o acesso ao canvas até o QGraphicsView real estar construído.
+
+    Na V145, o botão de zoom 100% conecta-se a ``self.view.actual_size``
+    antes da linha que cria ``self.view`` dentro de ``ArtStudioPage._build_ui``.
+    Esta pequena fachada mantém a conexão válida sem substituir o canvas real.
+    """
+
+    __slots__ = ("_page_ref",)
+
+    def __init__(self, page: ArtStudioPage) -> None:
+        self._page_ref = weakref.ref(page)
+
+    def actual_size(self) -> None:
+        page = self._page_ref()
+        if page is None:
+            return
+        view = page.__dict__.get("_art_studio_view_actual")
+        if view is not None:
+            view.actual_size()
+
+
+def _get_art_studio_view(page: ArtStudioPage):
+    actual = page.__dict__.get("_art_studio_view_actual")
+    if actual is not None:
+        return actual
+    proxy = page.__dict__.get("_art_studio_view_deferred")
+    if proxy is None:
+        proxy = _DeferredArtStudioView(page)
+        page.__dict__["_art_studio_view_deferred"] = proxy
+    return proxy
+
+
+def _set_art_studio_view(page: ArtStudioPage, view) -> None:
+    page.__dict__["_art_studio_view_actual"] = view
+
+
+def _install_deferred_view_compatibility() -> None:
+    """Corrige a conexão antecipada sem mudar a implementação do editor."""
+    current = getattr(ArtStudioPage, "view", None)
+    if not isinstance(current, property):
+        ArtStudioPage.view = property(
+            _get_art_studio_view,
+            _set_art_studio_view,
+        )
+
+
 def install_art_studio() -> None:
     global _INSTALLED
     if _INSTALLED:
         return
+
+    # Deve ser instalado antes da primeira instância de ArtStudioPage.
+    _install_deferred_view_compatibility()
 
     groups = []
     for label, names in sidebar_widgets._GROUPS:
