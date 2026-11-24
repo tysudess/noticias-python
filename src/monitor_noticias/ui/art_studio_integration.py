@@ -1,11 +1,6 @@
 from __future__ import annotations
 
-"""Integra o Estúdio de Artes à navegação já consolidada da Central.
-
-A Central mantém algumas extensões de navegação fora do Enum Section. Este
-adaptador utiliza o mesmo mecanismo de itens extras do menu lateral, evitando
-alterar a ordem e os identificadores das páginas que já existem.
-"""
+"""Integra o Estúdio de Artes à navegação já consolidada da Central."""
 
 import logging
 import weakref
@@ -13,21 +8,13 @@ from pathlib import Path
 
 from monitor_noticias.ui.art_studio_page import ArtStudioPage
 from monitor_noticias.ui.art_studio_v145 import enhance_art_studio_page
+from monitor_noticias.ui.art_studio_v146 import enhance_art_studio_page_v146
 from monitor_noticias.ui.main_window import MainWindow
 from monitor_noticias.ui.sidebar_widgets import SidebarNavItem
 import monitor_noticias.ui.sidebar_widgets as sidebar_widgets
 
-log = logging.getLogger(__name__)
-_INSTALLED = False
-
-
 class _DeferredArtStudioView:
-    """Adia o acesso ao canvas até o QGraphicsView real estar construído.
-
-    Na V145, o botão de zoom 100% conecta-se a ``self.view.actual_size``
-    antes da linha que cria ``self.view`` dentro de ``ArtStudioPage._build_ui``.
-    Esta pequena fachada mantém a conexão válida sem substituir o canvas real.
-    """
+    """Adia o acesso ao canvas até o QGraphicsView real estar construído."""
 
     __slots__ = ("_page_ref",)
 
@@ -59,7 +46,7 @@ def _set_art_studio_view(page: ArtStudioPage, view) -> None:
 
 
 def _install_deferred_view_compatibility() -> None:
-    """Corrige a conexão antecipada sem mudar a implementação do editor."""
+    """Corrige a conexão antecipada do zoom sem substituir o canvas real."""
     current = getattr(ArtStudioPage, "view", None)
     if not isinstance(current, property):
         ArtStudioPage.view = property(
@@ -68,12 +55,17 @@ def _install_deferred_view_compatibility() -> None:
         )
 
 
+log = logging.getLogger(__name__)
+_INSTALLED = False
+
+
 def install_art_studio() -> None:
     global _INSTALLED
     if _INSTALLED:
         return
 
-    # Deve ser instalado antes da primeira instância de ArtStudioPage.
+    # Instala a compatibilidade antes de qualquer ArtStudioPage ser criada.
+    # O proxy resolve a conexão do botão 100% sem acessar self.view cedo demais.
     _install_deferred_view_compatibility()
 
     groups = []
@@ -121,6 +113,7 @@ def install_art_studio() -> None:
         projects_dir = state_root / "ArtStudioProjects"
         self.art_studio_page = ArtStudioPage(projects_dir, self)
         enhance_art_studio_page(self.art_studio_page)
+        enhance_art_studio_page_v146(self.art_studio_page)
         self.pages["ART_STUDIO"] = self.art_studio_page
         self.stack.addWidget(self.art_studio_page)
 

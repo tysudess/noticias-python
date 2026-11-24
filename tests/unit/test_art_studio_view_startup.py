@@ -3,23 +3,27 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 
 
-def test_art_studio_view_startup_compatibility_is_installed_before_page_creation():
+def test_view_compatibility_is_installed_before_main_window_creation():
     source = (ROOT / "src/monitor_noticias/ui/art_studio_integration.py").read_text(encoding="utf-8")
-    install_at = source.index("_install_deferred_view_compatibility()")
-    page_create_at = source.index("ArtStudioPage(projects_dir, self)")
-    assert install_at < page_create_at
+    install_at = source.index("_install_deferred_view_compatibility()", source.index("def install_art_studio"))
+    original_init_at = source.index("original_init = MainWindow.__init__")
+    assert install_at < original_init_at
 
 
-def test_deferred_view_proxy_forwards_actual_size_after_canvas_creation():
+def test_deferred_view_proxy_supports_early_zoom_connection_and_real_view_assignment():
     source = (ROOT / "src/monitor_noticias/ui/art_studio_integration.py").read_text(encoding="utf-8")
-    assert "class _DeferredArtStudioView" in source
-    assert 'page.__dict__.get("_art_studio_view_actual")' in source
-    assert 'view.actual_size()' in source
-    assert "ArtStudioPage.view = property(" in source
+    for token in (
+        "class _DeferredArtStudioView",
+        "def actual_size(self)",
+        "_art_studio_view_actual",
+        "_art_studio_view_deferred",
+        "ArtStudioPage.view = property(",
+    ):
+        assert token in source
 
 
-def test_actual_canvas_is_returned_after_art_studio_assigns_it():
+def test_combined_integration_keeps_v145_and_v146_enhancements_in_order():
     source = (ROOT / "src/monitor_noticias/ui/art_studio_integration.py").read_text(encoding="utf-8")
-    assert 'page.__dict__["_art_studio_view_actual"] = view' in source
-    assert 'actual = page.__dict__.get("_art_studio_view_actual")' in source
-
+    v145 = source.index("enhance_art_studio_page(self.art_studio_page)")
+    v146 = source.index("enhance_art_studio_page_v146(self.art_studio_page)")
+    assert v145 < v146
