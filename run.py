@@ -16,6 +16,11 @@ from monitor_noticias.ui.art_studio_v148 import install_art_studio_v148
 
 install_art_studio_v148()
 
+# Compatibilidade Qt 6: normaliza KeyboardModifier.value antes dos atalhos V149.
+from monitor_noticias.ui.art_studio_v149_compat import install_art_studio_v149_shortcut_compatibility
+
+install_art_studio_v149_shortcut_compatibility()
+
 from monitor_noticias.ui.art_studio_v149 import install_art_studio_v149
 
 install_art_studio_v149()
