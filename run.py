@@ -20,6 +20,10 @@ from monitor_noticias.ui.art_studio_v149 import install_art_studio_v149
 
 install_art_studio_v149()
 
+from monitor_noticias.ui.art_studio_v150 import install_art_studio_v150
+
+install_art_studio_v150()
+
 from monitor_noticias.app.application import main
 
 if __name__ == "__main__":
