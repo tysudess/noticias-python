@@ -1,0 +1,39 @@
+
+name: Limpar Historico de Actions
+
+on:
+  schedule:
+    # Executa todos os dias às 03:00 UTC
+    - cron: "0 3 * * *"
+
+  workflow_dispatch:
+
+permissions:
+  actions: write
+  contents: read
+
+jobs:
+  cleanup:
+    name: Limpar execucoes antigas
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Excluir historico com mais de 7 dias
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          CUTOFF=$(date -u -d "7 days ago" +%Y-%m-%dT%H:%M:%SZ)
+
+          gh api --paginate \
+            "repos/$GH_REPO/actions/runs?per_page=100" \
+            --jq ".workflow_runs[] | select(.created_at < \"$CUTOFF\") | .id" |
+          while read RUN_ID; do
+            if [ -n "$RUN_ID" ]; then
+              echo "Excluindo execução: $RUN_ID"
+              gh api --method DELETE \
+                "repos/$GH_REPO/actions/runs/$RUN_ID" || true
+            fi
+          done
+
+          echo "Limpeza concluida!"
