@@ -6,12 +6,16 @@ import logging
 import weakref
 from pathlib import Path
 
+from PySide6.QtWidgets import QFrame
+
 from monitor_noticias.ui.art_studio_page import ArtStudioPage
 from monitor_noticias.ui.art_studio_v145 import enhance_art_studio_page
+import monitor_noticias.ui.art_studio_v146 as art_studio_v146_module
 from monitor_noticias.ui.art_studio_v146 import enhance_art_studio_page_v146
 from monitor_noticias.ui.main_window import MainWindow
 from monitor_noticias.ui.sidebar_widgets import SidebarNavItem
 import monitor_noticias.ui.sidebar_widgets as sidebar_widgets
+
 
 class _DeferredArtStudioView:
     """Adia o acesso ao canvas até o QGraphicsView real estar construído."""
@@ -113,6 +117,9 @@ def install_art_studio() -> None:
         projects_dir = state_root / "ArtStudioProjects"
         self.art_studio_page = ArtStudioPage(projects_dir, self)
         enhance_art_studio_page(self.art_studio_page)
+        # V146 usa QFrame no painel avançado, mas sua lista de imports não o
+        # declarava. Registra a classe no namespace do módulo antes da chamada.
+        art_studio_v146_module.QFrame = QFrame
         enhance_art_studio_page_v146(self.art_studio_page)
         self.pages["ART_STUDIO"] = self.art_studio_page
         self.stack.addWidget(self.art_studio_page)
