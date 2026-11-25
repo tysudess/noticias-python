@@ -57,6 +57,10 @@ from monitor_noticias.ui.art_studio_v157 import install_art_studio_v157
 
 install_art_studio_v157()
 
+from monitor_noticias.ui.art_studio_v158 import install_art_studio_v158
+
+install_art_studio_v158()
+
 from monitor_noticias.app.application import main
 
 if __name__ == "__main__":
