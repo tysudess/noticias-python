@@ -3,12 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from PySide6.QtCore import QTimer, Qt, Signal
-from PySide6.QtWidgets import (
-    QLabel,
-    QScrollArea,
-    QVBoxLayout,
-    QWidget,
-)
+from PySide6.QtWidgets import QLabel, QScrollArea, QVBoxLayout, QWidget
 
 
 class CoversPage(QWidget):
@@ -20,7 +15,6 @@ class CoversPage(QWidget):
         super().__init__()
 
         self.app_root = Path(app_root)
-
         self._window = None
         self._content = None
         self._status = None
@@ -32,24 +26,18 @@ class CoversPage(QWidget):
         self.root.setContentsMargins(0, 0, 0, 0)
         self.root.setSpacing(0)
 
-        self.loading = QLabel(
-            "Carregando Principais Capas..."
-        )
-        self.loading.setAlignment(
-            Qt.AlignmentFlag.AlignCenter
-        )
+        self.loading = QLabel("Carregando Principais Capas...")
+        self.loading.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.loading.setStyleSheet(
             "color:#6079A5;"
             "font-size:14px;"
             "padding:30px;"
         )
-
         self.root.addWidget(self.loading, 1)
 
     def refresh(self, _state=None) -> None:
         if self._loaded or self._loading:
             return
-
         self._loading = True
         QTimer.singleShot(0, self._load_tool)
 
@@ -63,14 +51,20 @@ class CoversPage(QWidget):
 
             web_resolver.Resolver = RobustFrontPageResolver
 
-            from monitor_noticias.capas_tool.app.ui import (
-                MainWindow as CoversWindow,
-                STYLE,
+            # A correção Gmail é instalada antes de construir a janela interna.
+            # Assim, tanto a busca direta quanto o fallback Chromium passam pelo
+            # mesmo normalizador de nomes e pelo mesmo diagnóstico.
+            from monitor_noticias.capas_tool.app import ui as covers_ui
+            from monitor_noticias.ui.covers_gmail_reliability_patch import (
+                install_covers_gmail_reliability_patch,
             )
+
+            install_covers_gmail_reliability_patch(covers_ui)
+            CoversWindow = covers_ui.MainWindow
+            STYLE = covers_ui.STYLE
 
             window = CoversWindow()
             window.hide()
-
             content = window.takeCentralWidget()
 
             if content is None:
@@ -80,22 +74,15 @@ class CoversPage(QWidget):
 
             content.setParent(self)
             content.setStyleSheet(STYLE)
-
             # Tamanho de projeto preservado. O scroll assume em telas menores.
             content.setMinimumSize(1480, 900)
 
             scroll = QScrollArea(self)
             scroll.setObjectName("coversOuterScroll")
-            scroll.setFrameShape(
-                QScrollArea.Shape.NoFrame
-            )
+            scroll.setFrameShape(QScrollArea.Shape.NoFrame)
             scroll.setWidgetResizable(True)
-            scroll.setHorizontalScrollBarPolicy(
-                Qt.ScrollBarPolicy.ScrollBarAsNeeded
-            )
-            scroll.setVerticalScrollBarPolicy(
-                Qt.ScrollBarPolicy.ScrollBarAsNeeded
-            )
+            scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+            scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
             scroll.setWidget(content)
 
             status = window.statusBar()
@@ -104,7 +91,6 @@ class CoversPage(QWidget):
 
             self.root.removeWidget(self.loading)
             self.loading.hide()
-
             self.root.addWidget(scroll, 1)
             self.root.addWidget(status, 0)
 
@@ -119,39 +105,32 @@ class CoversPage(QWidget):
                     background:#071625;
                     border:0;
                 }
-
                 QScrollBar:vertical {
                     background:#0B1F33;
                     width:12px;
                     border-radius:6px;
                 }
-
                 QScrollBar::handle:vertical {
                     background:#315675;
                     min-height:52px;
                     border-radius:6px;
                 }
-
                 QScrollBar::handle:vertical:hover {
                     background:#4380B0;
                 }
-
                 QScrollBar:horizontal {
                     background:#0B1F33;
                     height:12px;
                     border-radius:6px;
                 }
-
                 QScrollBar::handle:horizontal {
                     background:#315675;
                     min-width:52px;
                     border-radius:6px;
                 }
-
                 QScrollBar::handle:horizontal:hover {
                     background:#4380B0;
                 }
-
                 QScrollBar::add-line,
                 QScrollBar::sub-line {
                     width:0;
@@ -166,7 +145,6 @@ class CoversPage(QWidget):
         except Exception as exc:
             self._loading = False
             self._loaded = False
-
             self.loading.setText(
                 "Falha ao carregar Principais Capas:\n"
                 f"{exc}"
@@ -178,5 +156,4 @@ class CoversPage(QWidget):
                 self._window.close()
         except Exception:
             pass
-
         return True
