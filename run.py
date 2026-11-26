@@ -145,6 +145,11 @@ from monitor_noticias.ui.art_studio_v174 import install_art_studio_v174
 
 install_art_studio_v174()
 
+# V175: identidade visual premium, painéis recolhíveis, miniaturas de páginas e barra contextual.
+from monitor_noticias.ui.art_studio_v175 import install_art_studio_v175
+
+install_art_studio_v175()
+
 from monitor_noticias.app.application import main
 
 if __name__ == "__main__":
