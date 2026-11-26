@@ -10,7 +10,7 @@ os serializadores e utiliza os comandos já existentes no editor.
 import weakref
 
 from PySide6.QtCore import QEvent, QObject, QPoint, QRectF, QSize, Qt, QTimer
-from PySide6.QtGui import QIcon, QPainter, QPixmap, QColor, QPen
+from PySide6.QtGui import QIcon, QPainter, QPixmap, QColor, QPen, QPalette
 from PySide6.QtWidgets import (
     QFrame,
     QGraphicsDropShadowEffect,
@@ -22,7 +22,6 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QMenu,
-    QPalette,
     QPushButton,
     QSplitter,
     QTabBar,

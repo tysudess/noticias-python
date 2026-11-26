@@ -191,3 +191,14 @@ def test_contextual_more_menu_is_disabled_for_locked_objects():
 def test_v175_reapplies_custom_palette_after_global_theme_update():
     source = read()
     assert "_apply_theme_from_ref(ref, force=True)" in source
+
+
+
+def test_qpalette_is_imported_from_qtgui_not_qtwidgets():
+    tree = ast.parse(read())
+    imports = {}
+    for node in tree.body:
+        if isinstance(node, ast.ImportFrom):
+            imports.setdefault((node.level, node.module), set()).update(alias.name for alias in node.names)
+    assert "QPalette" in imports[(0, "PySide6.QtGui")]
+    assert "QPalette" not in imports.get((0, "PySide6.QtWidgets"), set())
