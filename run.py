@@ -130,6 +130,11 @@ from monitor_noticias.ui.art_studio_v171 import install_art_studio_v171
 
 install_art_studio_v171()
 
+# V172: transformação precisa, alinhamento, distribuição e movimento fino.
+from monitor_noticias.ui.art_studio_v172 import install_art_studio_v172
+
+install_art_studio_v172()
+
 from monitor_noticias.app.application import main
 
 if __name__ == "__main__":
