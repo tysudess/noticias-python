@@ -135,6 +135,11 @@ from monitor_noticias.ui.art_studio_v172 import install_art_studio_v172
 
 install_art_studio_v172()
 
+# V173: alças vetoriais, rotação direta no canvas e estilo editável de formas.
+from monitor_noticias.ui.art_studio_v173 import install_art_studio_v173
+
+install_art_studio_v173()
+
 from monitor_noticias.app.application import main
 
 if __name__ == "__main__":
