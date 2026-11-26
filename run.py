@@ -125,6 +125,11 @@ from monitor_noticias.ui.art_studio_v170 import install_art_studio_v170
 
 install_art_studio_v170()
 
+# V171: refinamento visual próprio, painéis roláveis e área de criação ampliada.
+from monitor_noticias.ui.art_studio_v171 import install_art_studio_v171
+
+install_art_studio_v171()
+
 from monitor_noticias.app.application import main
 
 if __name__ == "__main__":
