@@ -90,6 +90,11 @@ from monitor_noticias.ui.art_studio_v164 import install_art_studio_v164
 
 install_art_studio_v164()
 
+# V165: acabamento fotográfico avançado e enquadramento focal não destrutivo.
+from monitor_noticias.ui.art_studio_v165 import install_art_studio_v165
+
+install_art_studio_v165()
+
 from monitor_noticias.app.application import main
 
 if __name__ == "__main__":
