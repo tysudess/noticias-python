@@ -165,6 +165,11 @@ from monitor_noticias.ui.art_studio_v178 import install_art_studio_v178
 
 install_art_studio_v178()
 
+# V179: impede o ciclo de miniaturas provocado por scene.changed.
+from monitor_noticias.ui.art_studio_v179 import install_art_studio_v179
+
+install_art_studio_v179()
+
 from monitor_noticias.app.application import main
 
 if __name__ == "__main__":
