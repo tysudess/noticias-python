@@ -6,7 +6,9 @@ Organiza os controles existentes em áreas de trabalho e abas sem substituir
 os widgets funcionais, suas conexões, o canvas ou o formato .centralart.
 """
 
-from PySide6.QtCore import QEvent, QObject, QTimer, Qt, weakref
+import weakref
+
+from PySide6.QtCore import QEvent, QObject, QTimer, Qt
 from PySide6.QtGui import QPalette
 from PySide6.QtWidgets import (
     QFrame,
@@ -366,6 +368,15 @@ def _skin_stylesheet(theme: str) -> str:
 
 def _apply_skin(page) -> None:
     theme = _theme_id(page)
+    # Resolve todos os papéis de cor antes de qualquer ramo condicional.
+    # A barra de páginas pode existir mesmo quando a barra de texto não foi
+    # criada; por isso border/accent/accent_text não podem depender dela.
+    dark = theme == "escuro"
+    border = "#29475D" if dark else "#CDD9E3"
+    accent = "#D6B66D" if dark else "#B18B3E"
+    accent_text = "#12283A" if dark else "#FFFFFF"
+    panel = "#12283A" if dark else "#FFFFFF"
+
     if getattr(page, "_v161_skin_theme", None) == theme:
         return
     page.setStyleSheet(_skin_stylesheet(theme))
@@ -378,8 +389,6 @@ def _apply_skin(page) -> None:
         )
     text_toolbar = getattr(page, "v147_text_toolbar", None)
     if text_toolbar is not None:
-        border = "#29475D" if theme == "escuro" else "#CDD9E3"
-        panel = "#12283A" if theme == "escuro" else "#FFFFFF"
         text_toolbar.setStyleSheet(
             f"QFrame#artStudioInlineTextToolbar {{background:{panel};border:1px solid {border};border-radius:11px;}}"
             "QToolButton,QPushButton,QComboBox,QSpinBox,QDoubleSpinBox {min-height:32px;padding:3px 8px;border-radius:7px;}"
