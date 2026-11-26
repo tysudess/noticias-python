@@ -155,6 +155,11 @@ from monitor_noticias.ui.art_studio_v176 import install_art_studio_v176
 
 install_art_studio_v176()
 
+# V177: biblioteca visual, camadas contextuais e presets de zoom profissional.
+from monitor_noticias.ui.art_studio_v177 import install_art_studio_v177
+
+install_art_studio_v177()
+
 from monitor_noticias.app.application import main
 
 if __name__ == "__main__":
