@@ -140,6 +140,11 @@ from monitor_noticias.ui.art_studio_v173 import install_art_studio_v173
 
 install_art_studio_v173()
 
+# V174: bancada compacta, canvas ampliado e faixa de páginas recolhível.
+from monitor_noticias.ui.art_studio_v174 import install_art_studio_v174
+
+install_art_studio_v174()
+
 from monitor_noticias.app.application import main
 
 if __name__ == "__main__":
