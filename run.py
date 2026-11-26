@@ -150,6 +150,11 @@ from monitor_noticias.ui.art_studio_v175 import install_art_studio_v175
 
 install_art_studio_v175()
 
+# V176: visão geral multipágina e inspetor contextual.
+from monitor_noticias.ui.art_studio_v176 import install_art_studio_v176
+
+install_art_studio_v176()
+
 from monitor_noticias.app.application import main
 
 if __name__ == "__main__":
