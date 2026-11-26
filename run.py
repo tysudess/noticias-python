@@ -75,6 +75,11 @@ from monitor_noticias.ui.art_studio_v161 import install_art_studio_v161
 
 install_art_studio_v161()
 
+# V162: painéis redimensionáveis, modo foco e inspetor contextual.
+from monitor_noticias.ui.art_studio_v162 import install_art_studio_v162
+
+install_art_studio_v162()
+
 from monitor_noticias.app.application import main
 
 if __name__ == "__main__":
