@@ -120,6 +120,11 @@ from monitor_noticias.ui.art_studio_v169 import install_art_studio_v169
 
 install_art_studio_v169()
 
+# V170: exclusão confiável, compactação do cabeçalho e identidade visual refinada.
+from monitor_noticias.ui.art_studio_v170 import install_art_studio_v170
+
+install_art_studio_v170()
+
 from monitor_noticias.app.application import main
 
 if __name__ == "__main__":
