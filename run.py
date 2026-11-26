@@ -160,6 +160,11 @@ from monitor_noticias.ui.art_studio_v177 import install_art_studio_v177
 
 install_art_studio_v177()
 
+# V178: corrige a criação dos botões da barra contextual da V175.
+from monitor_noticias.ui.art_studio_v178 import install_art_studio_v178
+
+install_art_studio_v178()
+
 from monitor_noticias.app.application import main
 
 if __name__ == "__main__":
