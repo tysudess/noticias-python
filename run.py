@@ -70,6 +70,11 @@ from monitor_noticias.ui.art_studio_v160 import install_art_studio_v160
 
 install_art_studio_v160()
 
+# V161: reformulação profissional dos painéis e da área de trabalho do Estúdio.
+from monitor_noticias.ui.art_studio_v161 import install_art_studio_v161
+
+install_art_studio_v161()
+
 from monitor_noticias.app.application import main
 
 if __name__ == "__main__":
