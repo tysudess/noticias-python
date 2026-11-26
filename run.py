@@ -70,6 +70,11 @@ from monitor_noticias.ui.art_studio_v160 import install_art_studio_v160
 
 install_art_studio_v160()
 
+# Correção: disponibiliza weakref da biblioteca padrão antes da importação V161.
+from monitor_noticias.ui.art_studio_v161_compat import install_art_studio_v161_weakref_compatibility
+
+install_art_studio_v161_weakref_compatibility()
+
 # V161: reformulação profissional dos painéis e da área de trabalho do Estúdio.
 from monitor_noticias.ui.art_studio_v161 import install_art_studio_v161
 
