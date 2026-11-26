@@ -115,6 +115,11 @@ from monitor_noticias.ui.art_studio_v168 import install_art_studio_v168
 
 install_art_studio_v168()
 
+# V169: encaixe magnético por bordas/centros e guias inteligentes durante o arraste.
+from monitor_noticias.ui.art_studio_v169 import install_art_studio_v169
+
+install_art_studio_v169()
+
 from monitor_noticias.app.application import main
 
 if __name__ == "__main__":
