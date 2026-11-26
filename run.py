@@ -95,6 +95,11 @@ from monitor_noticias.ui.art_studio_v165 import install_art_studio_v165
 
 install_art_studio_v165()
 
+# V166: recorte não destrutivo de fundo por cor com tolerância e suavização.
+from monitor_noticias.ui.art_studio_v166 import install_art_studio_v166
+
+install_art_studio_v166()
+
 from monitor_noticias.app.application import main
 
 if __name__ == "__main__":
