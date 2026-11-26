@@ -100,6 +100,11 @@ from monitor_noticias.ui.art_studio_v166 import install_art_studio_v166
 
 install_art_studio_v166()
 
+# V167: estúdio profissional de tipografia para textos do canvas.
+from monitor_noticias.ui.art_studio_v167 import install_art_studio_v167
+
+install_art_studio_v167()
+
 from monitor_noticias.app.application import main
 
 if __name__ == "__main__":
