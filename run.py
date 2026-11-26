@@ -80,6 +80,11 @@ from monitor_noticias.ui.art_studio_v162 import install_art_studio_v162
 
 install_art_studio_v162()
 
+# V163: biblioteca pesquisável de componentes gráficos vetoriais editáveis.
+from monitor_noticias.ui.art_studio_v163 import install_art_studio_v163
+
+install_art_studio_v163()
+
 from monitor_noticias.app.application import main
 
 if __name__ == "__main__":
