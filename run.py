@@ -110,6 +110,11 @@ from monitor_noticias.ui.art_studio_v167 import install_art_studio_v167
 
 install_art_studio_v167()
 
+# V168: grade de precisão, guias de composição e margens seguras.
+from monitor_noticias.ui.art_studio_v168 import install_art_studio_v168
+
+install_art_studio_v168()
+
 from monitor_noticias.app.application import main
 
 if __name__ == "__main__":
