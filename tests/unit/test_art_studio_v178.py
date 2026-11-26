@@ -36,9 +36,24 @@ def test_v178_is_installed_after_v177_and_before_application_start():
 
 def test_v178_uses_the_layout_parent_instead_of_uninitialized_page_attribute():
     source = MODULE.read_text(encoding="utf-8")
+    tree = ast.parse(source)
+    target = next(
+        node for node in ast.walk(tree)
+        if isinstance(node, ast.FunctionDef) and node.name == "add_context_button"
+    )
     assert "parent = layout.parentWidget() or page" in source
     assert "button = QToolButton(parent)" in source
-    assert "page.v175_context_toolbar" not in source
+
+    # Inspeciona apenas a função que cria o botão. Comentários e docstrings
+    # fora dela não devem produzir falsos positivos.
+    page_accesses = [
+        node for node in ast.walk(target)
+        if isinstance(node, ast.Attribute)
+        and node.attr == "v175_context_toolbar"
+        and isinstance(node.value, ast.Name)
+        and node.value.id == "page"
+    ]
+    assert not page_accesses
     assert "art_studio_v175._add_context_button = add_context_button" in source
 
 
