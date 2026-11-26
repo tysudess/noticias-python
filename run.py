@@ -65,6 +65,11 @@ from monitor_noticias.ui.art_studio_v159 import install_art_studio_v159
 
 install_art_studio_v159()
 
+# V160: contraste dos ícones da navegação e espaçamento entre caracteres.
+from monitor_noticias.ui.art_studio_v160 import install_art_studio_v160
+
+install_art_studio_v160()
+
 from monitor_noticias.app.application import main
 
 if __name__ == "__main__":
