@@ -97,3 +97,14 @@ def test_pages_bar_uses_the_active_theme_palette():
     assert "QFrame#artStudioPagesBar" in source
     assert "colors['panel_alt']" in source
     assert "colors['border']" in source
+
+
+
+def test_qpalette_is_imported_from_qtgui_not_qtwidgets():
+    tree = ast.parse(read())
+    imports = {}
+    for node in tree.body:
+        if isinstance(node, ast.ImportFrom):
+            imports.setdefault((node.level, node.module), set()).update(alias.name for alias in node.names)
+    assert "QPalette" in imports[(0, "PySide6.QtGui")]
+    assert "QPalette" not in imports.get((0, "PySide6.QtWidgets"), set())

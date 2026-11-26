@@ -10,11 +10,11 @@ prioriza a área central. Os comandos de status internos do editor permanecem.
 """
 
 from PySide6.QtCore import QEvent, QObject, Qt, QTimer
+from PySide6.QtGui import QPalette
 from PySide6.QtWidgets import (
     QCheckBox,
     QFrame,
     QLabel,
-    QPalette,
     QLayout,
     QPushButton,
     QSizePolicy,
