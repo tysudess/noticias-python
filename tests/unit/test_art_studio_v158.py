@@ -18,7 +18,7 @@ def test_v158_adds_rich_text_highlight_and_clear_highlight():
     assert "def _choose_highlight" in source
     assert "fmt.setBackground(QBrush(color))" in source
     assert "def _clear_highlight" in source
-    assert "clearProperty(QTextFormat.Property.BackgroundBrush)" in source
+    assert "setBackground(QBrush(Qt.BrushStyle.NoBrush))" in source
 
 
 def test_v158_preserves_other_character_formatting_when_clearing_highlight():

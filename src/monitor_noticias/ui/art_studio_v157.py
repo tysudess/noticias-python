@@ -15,7 +15,7 @@ from pathlib import Path
 import tempfile
 
 from PySide6.QtCore import QTimer
-from PySide6.QtWidgets import QFrame, QMessageBox, QPushButton
+from PySide6.QtWidgets import QFrame, QLabel, QMessageBox, QPushButton
 
 from monitor_noticias.ui import art_studio_v150 as _v150
 

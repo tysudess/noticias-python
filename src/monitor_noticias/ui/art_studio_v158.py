@@ -8,7 +8,7 @@ via QTextCursor/QTextCharFormat, preservando os trechos formatados que não
 foram selecionados. Cada operação entra no histórico e no autosave V157.
 """
 
-from PySide6.QtGui import QColor, QBrush, QFont, QTextCharFormat, QTextCursor, QTextFormat
+from PySide6.QtGui import QColor, QBrush, QFont, QTextCharFormat, QTextCursor
 from PySide6.QtWidgets import QColorDialog, QComboBox, QPushButton, QToolButton, QGraphicsTextItem
 from PySide6.QtCore import Qt
 
@@ -88,7 +88,7 @@ def _choose_highlight(page) -> None:
 def _clear_highlight(page) -> None:
     fmt = QTextCharFormat()
     # Limpa somente o fundo; negrito, itálico, cor e demais propriedades continuam intactos.
-    fmt.clearProperty(QTextFormat.Property.BackgroundBrush)
+    fmt.setBackground(QBrush(Qt.BrushStyle.NoBrush))
     _commit_text_format(page, fmt, "Realce removido; as demais formatações foram preservadas.")
     button = getattr(page, "v158_highlight_button", None)
     if button is not None:

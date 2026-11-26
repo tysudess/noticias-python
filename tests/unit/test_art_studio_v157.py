@@ -107,3 +107,9 @@ def test_v157_preserves_existing_versions_and_adds_no_dependencies():
     assert "from PySide6" in source
     assert "import PIL" not in source
     assert "install_art_studio_v156" not in source
+
+
+def test_v157_imports_qlabel_used_by_the_autosave_toolbar():
+    source = _read("src/monitor_noticias/ui/art_studio_v157.py")
+    assert "from PySide6.QtWidgets import QFrame, QLabel, QMessageBox, QPushButton" in source
+    assert "page.v157_autosave_label = QLabel" in source
