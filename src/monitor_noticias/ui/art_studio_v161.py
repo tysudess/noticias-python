@@ -10,6 +10,7 @@ from PySide6.QtCore import QEvent, QObject, QTimer, Qt, weakref
 from PySide6.QtGui import QPalette
 from PySide6.QtWidgets import (
     QFrame,
+    QHBoxLayout,
     QLabel,
     QLayout,
     QScrollArea,
