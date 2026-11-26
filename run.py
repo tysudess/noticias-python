@@ -85,6 +85,11 @@ from monitor_noticias.ui.art_studio_v163 import install_art_studio_v163
 
 install_art_studio_v163()
 
+# V164: laboratório de imagem não destrutivo, com filtros, máscaras e bordas.
+from monitor_noticias.ui.art_studio_v164 import install_art_studio_v164
+
+install_art_studio_v164()
+
 from monitor_noticias.app.application import main
 
 if __name__ == "__main__":
