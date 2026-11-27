@@ -1,18 +1,25 @@
 from __future__ import annotations
 
-"""Integra o Estúdio de Artes à navegação da Central com carga sob demanda.
+"""Integra o Estúdio de Artes à navegação da Central com carga gradual.
 
-A página do editor é deliberadamente criada somente quando o usuário abre a
-ferramenta. A construção da cena Qt e a instalação das camadas V145–V177 não
-participam mais da inicialização da janela principal.
+O editor é criado somente no primeiro acesso. Suas camadas V145–V177 são
+aplicadas uma por vez em callbacks Qt, permitindo que a janela continue
+processando eventos e exibindo o andamento da abertura.
 """
 
 import logging
+import time
 import weakref
 from pathlib import Path
 
-from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QFrame, QLabel, QMessageBox, QVBoxLayout, QWidget
+from PySide6.QtCore import Qt, QTimer
+from PySide6.QtWidgets import (
+    QFrame,
+    QLabel,
+    QMessageBox,
+    QVBoxLayout,
+    QWidget,
+)
 
 import monitor_noticias.ui.art_studio_v146 as art_studio_v146_module
 from monitor_noticias.ui.main_window import MainWindow
@@ -58,18 +65,15 @@ def _install_deferred_view_compatibility() -> None:
 
     current = getattr(ArtStudioPage, "view", None)
     if not isinstance(current, property):
-        ArtStudioPage.view = property(
-            _get_art_studio_view,
-            _set_art_studio_view,
-        )
+        ArtStudioPage.view = property(_get_art_studio_view, _set_art_studio_view)
 
 
 log = logging.getLogger(__name__)
 _INSTALLED = False
 
 
-def _enhance_art_studio_page(page) -> None:
-    """Aplica, em ordem, todas as camadas do editor quando ele é solicitado."""
+def _enhance_art_studio_page(page=None):
+    """Aplica todas as camadas em ordem ou devolve a fila para carga gradual."""
     from monitor_noticias.ui.art_studio_v145 import enhance_art_studio_page
     from monitor_noticias.ui.art_studio_v146 import enhance_art_studio_page_v146
     from monitor_noticias.ui.art_studio_v147 import enhance_art_studio_page_v147
@@ -142,60 +146,222 @@ def _enhance_art_studio_page(page) -> None:
         enhance_art_studio_page_v176,
         enhance_art_studio_page_v177,
     )
-    for enhance in enhancers:
-        enhance(page)
+    if page is not None:
+        for enhance in enhancers:
+            enhance(page)
+    return enhancers
+
+
+def _art_studio_enhancers():
+    """Nome explícito para os chamadores que agendam uma camada por vez."""
+    return _enhance_art_studio_page()
+
+
+def _enhancer_label(enhance) -> str:
+    module = getattr(enhance, "__module__", "")
+    suffix = module.rsplit("_v", 1)[-1]
+    return f"V{suffix}" if suffix.isdigit() else "V145"
+
+
+def _set_loading_message(window, message: str) -> None:
+    label = getattr(window, "_art_studio_loading_label", None)
+    if label is not None:
+        try:
+            label.setText(message)
+        except RuntimeError:
+            log.debug("O rótulo de carregamento do Estúdio já foi destruído.")
 
 
 def _create_art_studio_page(window):
-    """Cria e integra o editor na primeira solicitação do usuário."""
+    """Cria a página base; as camadas avançadas são aplicadas separadamente."""
+    existing = getattr(window, "_art_studio_building_page", None)
+    if existing is not None:
+        return existing
+
     existing = getattr(window, "art_studio_page", None)
     if existing is not None:
         return existing
 
-    from monitor_noticias.ui.art_studio_page import ArtStudioPage
-
-    _install_deferred_view_compatibility()
-    placeholder = getattr(window, "_art_studio_placeholder", None)
-    projects_dir = Path(window._art_studio_projects_dir)
     page = None
-
     try:
+        from monitor_noticias.ui.art_studio_page import ArtStudioPage
+
+        _install_deferred_view_compatibility()
+        projects_dir = Path(window._art_studio_projects_dir)
         page = ArtStudioPage(projects_dir, window.stack)
         page.setObjectName("artStudioPage")
-        window.art_studio_page = page
-        _enhance_art_studio_page(page)
-
-        insert_at = window.stack.indexOf(placeholder) if placeholder is not None else -1
-        if insert_at < 0:
-            window.stack.addWidget(page)
-        else:
-            window.stack.insertWidget(insert_at, page)
-
-        window.pages["ART_STUDIO"] = page
-        window._art_studio_ready = True
-
-        if placeholder is not None:
-            window.stack.removeWidget(placeholder)
-            placeholder.deleteLater()
-            window._art_studio_placeholder = None
-
-        log.info("Estúdio de Artes carregado sob demanda (camadas V145–V177).")
+        # Inserir agora, mas deixar o placeholder visível até todas as camadas
+        # terminarem. Isso garante um pai Qt estável e uma janela válida.
+        window.stack.addWidget(page)
+        window._art_studio_building_page = page
+        log.info("[ArtStudioLoad] Página base criada; iniciando camadas V145–V177.")
         return page
-
-    except Exception as exc:
-        log.exception("Falha ao inicializar o Estúdio de Artes sob demanda.")
+    except Exception:
+        log.exception("[ArtStudioLoad] Falha na criação da página base do Estúdio.")
         if page is not None:
+            try:
+                window.stack.removeWidget(page)
+                page.deleteLater()
+            except RuntimeError:
+                pass
+        window._art_studio_building_page = None
+        raise
+
+
+def _is_art_studio_current(window) -> bool:
+    current = getattr(window, "_current", None)
+    return current == "ART_STUDIO" or getattr(current, "value", None) == "ART_STUDIO"
+
+
+def _show_art_studio(window, page) -> None:
+    window._current = "ART_STUDIO"
+    window.stack.setCurrentWidget(page)
+    for button in getattr(window, "nav_buttons", {}).values():
+        button.set_active(False)
+    nav = getattr(window, "art_studio_nav", None)
+    if nav is not None:
+        nav.set_active(True)
+    window.title.setText("Estúdio de Artes")
+    window.subtitle.setText("Crie e edite artes, cards, montagens e materiais gráficos.")
+    identity = getattr(window, "header_identity", None)
+    if identity is not None:
+        identity.setVisible(False)
+    page.refresh()
+    if hasattr(window, "_state_signature"):
+        window._last_refresh_signature = window._state_signature()
+
+
+def _finish_art_studio_loading(window, page) -> None:
+    window.art_studio_page = page
+    window._art_studio_building_page = None
+    window._art_studio_ready = True
+    window._art_studio_loading = False
+    window.pages["ART_STUDIO"] = page
+
+    placeholder = getattr(window, "_art_studio_placeholder", None)
+    if placeholder is not None:
+        window.stack.removeWidget(placeholder)
+        placeholder.deleteLater()
+        window._art_studio_placeholder = None
+
+    timer = getattr(window, "_art_studio_load_timer", None)
+    if timer is not None:
+        timer.stop()
+
+    log.info("[ArtStudioLoad] CONCLUÍDO: todas as 33 camadas V145–V177 foram aplicadas.")
+    if _is_art_studio_current(window):
+        _show_art_studio(window, page)
+
+
+def _abort_art_studio_loading(window, page, stage: str, exc: Exception) -> None:
+    log.exception("[ArtStudioLoad] FALHA durante %s; o Estúdio será descarregado.", stage)
+    timer = getattr(window, "_art_studio_load_timer", None)
+    if timer is not None:
+        timer.stop()
+
+    if page is not None:
+        try:
             window.stack.removeWidget(page)
             page.deleteLater()
-        window.art_studio_page = None
+        except RuntimeError:
+            log.exception("[ArtStudioLoad] Falha ao remover uma página incompleta.")
+
+    window.art_studio_page = None
+    window._art_studio_building_page = None
+    window._art_studio_ready = False
+    window._art_studio_loading = False
+    window._art_studio_enhancer_queue = None
+    window.pages["ART_STUDIO"] = window._art_studio_placeholder
+    _set_loading_message(
+        window,
+        "Não foi possível preparar o Estúdio de Artes.\n"
+        "A Central continua disponível. Clique novamente para tentar abrir.",
+    )
+    if not getattr(window, "_art_studio_suppress_error_dialog", False):
         QMessageBox.critical(
             window,
             "Não foi possível abrir o Estúdio de Artes",
-            "O restante da Central continua disponível. Consulte "
-            "logs/inicializacao.log para identificar a falha do editor.\n\n"
-            f"Detalhe: {exc}",
+            "A inicialização foi interrompida durante "
+            f"{stage}. O restante da Central continua disponível.\n\n"
+            "Consulte logs/inicializacao.log para ver a etapa e o erro registrados.",
         )
-        return None
+
+
+def _advance_art_studio_loading(window) -> None:
+    """Executa uma camada por evento, sem monopolizar o loop de interface."""
+    if not getattr(window, "_art_studio_loading", False):
+        return
+
+    page = getattr(window, "_art_studio_building_page", None)
+    try:
+        if page is None:
+            started = time.perf_counter()
+            page = _create_art_studio_page(window)
+            log.info(
+                "[ArtStudioLoad] Criação da página base: %.3fs.",
+                time.perf_counter() - started,
+            )
+            import_started = time.perf_counter()
+            queue = _art_studio_enhancers()
+            window._art_studio_enhancer_queue = queue
+            window._art_studio_enhancer_index = 0
+            log.info(
+                "[ArtStudioLoad] Importação das camadas: %.3fs; %s etapas.",
+                time.perf_counter() - import_started,
+                len(queue),
+            )
+            _set_loading_message(window, f"Página criada. Preparando camada 1 de {len(queue)}…")
+            window._art_studio_load_timer.start(15)
+            return
+
+        queue = window._art_studio_enhancer_queue
+        index = int(window._art_studio_enhancer_index)
+        if index >= len(queue):
+            _finish_art_studio_loading(window, page)
+            return
+
+        enhance = queue[index]
+        name = _enhancer_label(enhance)
+        stage = f"{name} ({index + 1}/{len(queue)})"
+        _set_loading_message(window, f"Preparando Estúdio de Artes…\n{stage}")
+        started = time.perf_counter()
+        log.info("[ArtStudioLoad] INÍCIO %s.", stage)
+        enhance(page)
+        elapsed = time.perf_counter() - started
+        log.info("[ArtStudioLoad] CONCLUÍDO %s em %.3fs.", stage, elapsed)
+        window._art_studio_enhancer_index = index + 1
+
+        if index + 1 >= len(queue):
+            window._art_studio_load_timer.start(15)
+        else:
+            # Um pequeno intervalo deixa o Qt pintar o progresso e tratar
+            # eventos de janela entre camadas; não usa processEvents reentrante.
+            window._art_studio_load_timer.start(15)
+    except Exception as exc:
+        index = int(getattr(window, "_art_studio_enhancer_index", 0))
+        queue = getattr(window, "_art_studio_enhancer_queue", None) or ()
+        stage = queue[index][0] if index < len(queue) else "criação/importação inicial"
+        _abort_art_studio_loading(window, page, stage, exc)
+
+
+def _start_art_studio_loading(window) -> None:
+    if getattr(window, "_art_studio_loading", False):
+        _set_loading_message(window, "O Estúdio de Artes já está sendo preparado…")
+        return
+
+    window._art_studio_loading = True
+    window._art_studio_ready = False
+    window._art_studio_enhancer_queue = None
+    window._art_studio_enhancer_index = 0
+    _set_loading_message(window, "Iniciando Estúdio de Artes…\nA Central continuará responsiva durante a preparação.")
+
+    timer = getattr(window, "_art_studio_load_timer", None)
+    if timer is None:
+        timer = QTimer(window)
+        timer.setSingleShot(True)
+        timer.timeout.connect(lambda: _advance_art_studio_loading(window))
+        window._art_studio_load_timer = timer
+    timer.start(30)
 
 
 def install_art_studio() -> None:
@@ -204,7 +370,6 @@ def install_art_studio() -> None:
         return
 
     # Nenhuma instância, cena ou painel do editor é criado durante o boot.
-
     groups = []
     for label, names in sidebar_widgets._GROUPS:
         if label == "FERRAMENTAS" and "ART_STUDIO" not in names:
@@ -249,10 +414,14 @@ def install_art_studio() -> None:
         state_root = Path(getattr(self.paths, "state_root", self.paths.root))
         self._art_studio_projects_dir = state_root / "ArtStudioProjects"
         self.art_studio_page = None
+        self._art_studio_building_page = None
         self._art_studio_ready = False
+        self._art_studio_loading = False
+        self._art_studio_load_timer = None
+        self._art_studio_enhancer_queue = None
+        self._art_studio_enhancer_index = 0
 
-        # A página leve preserva o espaço e a navegação do editor sem criar a
-        # cena gráfica, os painéis e dezenas de filtros durante a inicialização.
+        # O placeholder leve permite feedback visível durante a carga gradual.
         placeholder = QWidget(self.stack)
         placeholder.setObjectName("artStudioDeferredPlaceholder")
         placeholder_layout = QVBoxLayout(placeholder)
@@ -261,10 +430,13 @@ def install_art_studio() -> None:
             "O Estúdio de Artes será preparado quando esta ferramenta for aberta.",
             placeholder,
         )
+        message.setObjectName("artStudioLoadingMessage")
         message.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        message.setWordWrap(True)
         placeholder_layout.addWidget(message)
         placeholder_layout.addStretch(1)
         self._art_studio_placeholder = placeholder
+        self._art_studio_loading_label = message
         self.pages["ART_STUDIO"] = placeholder
         self.stack.addWidget(placeholder)
 
@@ -279,19 +451,22 @@ def install_art_studio() -> None:
     MainWindow.navigate = navigate_with_art_studio
 
     def open_art_studio(self):
-        page = _create_art_studio_page(self)
-        if page is None:
+        page = getattr(self, "art_studio_page", None)
+        if page is not None:
+            _show_art_studio(self, page)
             return
+
         self._current = "ART_STUDIO"
-        self.stack.setCurrentWidget(page)
+        placeholder = getattr(self, "_art_studio_placeholder", None)
+        if placeholder is not None:
+            self.stack.setCurrentWidget(placeholder)
         for button in self.nav_buttons.values():
             button.set_active(False)
         self.art_studio_nav.set_active(True)
         self.title.setText("Estúdio de Artes")
-        self.subtitle.setText("Crie e edite artes, cards, montagens e materiais gráficos.")
+        self.subtitle.setText("Preparando o ambiente de criação…")
         self.header_identity.setVisible(False)
-        page.refresh()
-        self._last_refresh_signature = self._state_signature()
+        _start_art_studio_loading(self)
 
     MainWindow._open_art_studio = open_art_studio
     _INSTALLED = True

@@ -45,39 +45,42 @@ def test_art_studio_page_is_not_constructed_during_main_window_startup():
         and node.func.id == "ArtStudioPage"
     ]
     assert not constructed_pages
-    assert "self.art_studio_page = None" in ast.unparse(init_function)
-    assert "self._art_studio_placeholder = placeholder" in ast.unparse(init_function)
+    body = ast.unparse(init_function)
+    assert "self.art_studio_page = None" in body
+    assert "self._art_studio_placeholder = placeholder" in body
 
 
-def test_art_studio_is_created_only_when_its_navigation_item_is_opened():
+def test_art_studio_click_starts_a_gradual_load_instead_of_blocking():
     source = _read("src/monitor_noticias/ui/art_studio_integration.py")
-    create_function = _function(source, "_create_art_studio_page")
     open_function = _function(source, "open_art_studio")
+    start_function = _function(source, "_start_art_studio_loading")
+    advance_function = _function(source, "_advance_art_studio_loading")
 
-    assert any(
-        isinstance(node, ast.Call)
-        and isinstance(node.func, ast.Name)
-        and node.func.id == "ArtStudioPage"
-        for node in ast.walk(create_function)
-    )
-    assert any(
-        isinstance(node, ast.Call)
-        and isinstance(node.func, ast.Name)
-        and node.func.id == "_create_art_studio_page"
-        for node in ast.walk(open_function)
-    )
+    assert "_start_art_studio_loading(self)" in ast.unparse(open_function)
+    assert "QTimer" in ast.unparse(start_function)
+    assert "_art_studio_load_timer.start(15)" in ast.unparse(advance_function)
+    assert "_create_art_studio_page(window)" in ast.unparse(advance_function)
 
 
 def test_all_art_studio_enhancement_layers_are_applied_in_order_on_demand():
     source = _read("src/monitor_noticias/ui/art_studio_integration.py")
+    factory = ast.unparse(_function(source, "_enhance_art_studio_page"))
     names = [
         "enhance_art_studio_page,",
         *[f"enhance_art_studio_page_v{version}," for version in range(146, 178)],
     ]
-    positions = [source.index(name, source.index("def _enhance_art_studio_page")) for name in names]
+    positions = [factory.index(name) for name in names]
     assert positions == sorted(positions)
-    assert "for enhance in enhancers:" in source
-    assert "enhance(page)" in source
+    assert "for enhance in enhancers:" in factory
+    assert "return _enhance_art_studio_page()" in source
+
+
+def test_art_studio_progress_is_logged_per_enhancement_layer():
+    source = _read("src/monitor_noticias/ui/art_studio_integration.py")
+    advance = ast.unparse(_function(source, "_advance_art_studio_loading"))
+    assert "[ArtStudioLoad] INÍCIO %s." in advance
+    assert "[ArtStudioLoad] CONCLUÍDO %s em %.3fs." in advance
+    assert "[ArtStudioLoad] FALHA durante %s" in source
 
 
 def test_art_studio_supports_core_editor_features_and_local_projects():
@@ -176,13 +179,13 @@ def test_art_studio_v145_adds_undo_redo_with_debounced_scene_history():
         assert token in source
 
 
-def test_art_studio_v145_enhancement_runs_after_deferred_page_creation():
+def test_art_studio_v145_enhancement_runs_after_page_creation():
     source = _read("src/monitor_noticias/ui/art_studio_integration.py")
-    create_function = ast.unparse(_function(source, "_create_art_studio_page"))
-    enhance_function = ast.unparse(_function(source, "_enhance_art_studio_page"))
-    assert "_enhance_art_studio_page(page)" in create_function
-    assert "enhance_art_studio_page," in enhance_function
-    assert "enhance(page)" in enhance_function
+    create = ast.unparse(_function(source, "_create_art_studio_page"))
+    advance = ast.unparse(_function(source, "_advance_art_studio_loading"))
+    assert "ArtStudioPage(projects_dir, window.stack)" in create
+    assert "enhance(page)" in advance
+    assert "_art_studio_enhancer_queue" in advance
 
 
 def test_art_studio_v145_persists_layer_visibility_and_lock_state():
