@@ -83,10 +83,19 @@ def test_v176_performance_patch_has_no_global_stylesheet_application():
         if isinstance(node, ast.FunctionDef)
         and node.name == "_install_visual_refinements_without_theme_rebuild"
     )
-    calls = [
-        node.func.id for node in ast.walk(target)
-        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
-    ]
+
+    # Qt widgets são acessados como atributos (page.findChild), não como
+    # funções globais (findChild). O teste anterior só reconhecia ast.Name e
+    # por isso falhava mesmo quando o código já continha as chamadas corretas.
+    calls = []
+    for node in ast.walk(target):
+        if not isinstance(node, ast.Call):
+            continue
+        if isinstance(node.func, ast.Name):
+            calls.append(node.func.id)
+        elif isinstance(node.func, ast.Attribute):
+            calls.append(node.func.attr)
+
     assert "_apply_theme" not in calls
     assert "findChild" in calls
     assert "findChildren" in calls
