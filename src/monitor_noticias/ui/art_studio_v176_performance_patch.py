@@ -1,20 +1,16 @@
 from __future__ import annotations
 
-"""Correção de desempenho da etapa V176 do Estúdio de Artes.
+"""Correções de desempenho e estabilidade para V175/V176 do Estúdio de Artes.
 
-A V175 já aplica a folha de estilos completa ao editor. A folha usada nesse
-momento já contém o complemento visual V176, pois os wrappers de tema são
-instalados antes da criação da janela. Reaplicar page.setStyleSheet() durante
-a V176 força o Qt a recalcular o estilo de toda a árvore de widgets pela
-segunda vez. Aqui preservamos os ajustes locais da V176, mas eliminamos essa
-reaplicação global redundante e medimos cada subetapa.
+A V175 agenda a reaplicação forçada de tema ao receber StyleChange. Como a
+própria chamada setStyleSheet gera StyleChange, isso pode manter o event loop
+ocupado indefinidamente. O guard V175 interrompe as reaplicações redundantes.
+A V176 mantém os ajustes locais, sem reconstruir novamente o stylesheet global.
 """
 
 import logging
 import time
 from functools import wraps
-
-from PySide6.QtWidgets import QFrame, QLabel, QPushButton
 
 log = logging.getLogger(__name__)
 _INSTALLED = False
@@ -22,6 +18,8 @@ _INSTALLED = False
 
 def _install_visual_refinements_without_theme_rebuild(page) -> None:
     """Executa os refinamentos locais sem reconstruir a folha de estilo global."""
+    from PySide6.QtWidgets import QFrame, QLabel, QPushButton
+
     started = time.perf_counter()
     log.info("[ArtStudioV176] INÍCIO ajustes visuais locais (tema global preservado).")
     try:
@@ -54,13 +52,9 @@ def _install_visual_refinements_without_theme_rebuild(page) -> None:
             )
     finally:
         elapsed = time.perf_counter() - started
-        log.info(
-            "[ArtStudioV176] FIM ajustes visuais locais em %.3fs.", elapsed
-        )
+        log.info("[ArtStudioV176] FIM ajustes visuais locais em %.3fs.", elapsed)
         if elapsed >= 0.5:
-            log.warning(
-                "[ArtStudioV176] Ajustes visuais locais demoraram %.3fs.", elapsed
-            )
+            log.warning("[ArtStudioV176] Ajustes visuais locais demoraram %.3fs.", elapsed)
 
 
 def _timed(original, label: str):
@@ -74,20 +68,25 @@ def _timed(original, label: str):
             elapsed = time.perf_counter() - started
             log.info("[ArtStudioV176] FIM %s em %.3fs.", label, elapsed)
             if elapsed >= 0.5:
-                log.warning(
-                    "[ArtStudioV176] %s demorou %.3fs.", label, elapsed
-                )
+                log.warning("[ArtStudioV176] %s demorou %.3fs.", label, elapsed)
 
     return measured
 
 
 def install_art_studio_v176_performance_patch() -> None:
-    """Instala a correção antes de a fila do editor executar a V176."""
+    """Instala as proteções antes de a fila de aprimoramentos do editor rodar."""
     global _INSTALLED
     if _INSTALLED:
         return
 
     from monitor_noticias.ui import art_studio_v176 as v176
+    from monitor_noticias.ui.art_studio_v175_theme_guard import (
+        install_art_studio_v175_theme_refresh_guard,
+    )
+
+    # O filtro V175 já existe como classe, mas só será instanciado quando a
+    # camada V175 for aplicada ao editor. O guard precisa estar ativo antes disso.
+    install_art_studio_v175_theme_refresh_guard()
 
     if getattr(v176, "_central_v176_performance_patch", False):
         _INSTALLED = True
@@ -103,5 +102,5 @@ def install_art_studio_v176_performance_patch() -> None:
     v176._central_v176_performance_patch = True
     _INSTALLED = True
     log.info(
-        "[ArtStudioV176] Correção de desempenho instalada: tema global não será reaplicado."
+        "[ArtStudioV176] Correção instalada: sem reconstrução duplicada de tema e sem loop StyleChange V175."
     )
