@@ -1,16 +1,14 @@
 from __future__ import annotations
 
-"""V179 — renderização isolada das miniaturas do Estúdio de Artes.
+"""V179 — renderização isolada e segura das miniaturas do Estúdio de Artes.
 
-A implementação anterior protegia a renderização da V175 com um bloqueio
- temporário, mas ainda escondia/restaurava objetos na cena ativa. Isso podia
-emitir novos sinais ``scene.changed`` enquanto o editor acabava de ser aberto.
-
-Agora as miniaturas usam a cena auxiliar da V176, construída a partir dos dados
-serializados da página. A cena de edição não é alterada durante a prévia.
+As miniaturas usam a cena auxiliar da V176 e nunca alteram a cena que está
+sendo editada. Callbacks Qt adiados também verificam se o objeto C++ ainda
+existe antes de acessar widgets, evitando falhas durante o fechamento.
 """
 
 import logging
+from typing import Callable
 
 from PySide6.QtCore import QSize
 from PySide6.QtGui import QIcon
@@ -18,6 +16,62 @@ from PySide6.QtGui import QIcon
 
 log = logging.getLogger(__name__)
 _INSTALLED = False
+
+
+def _is_valid_qobject(value) -> bool:
+    """Retorna False quando o wrapper Python aponta para um QObject destruído."""
+    if value is None:
+        return False
+    try:
+        import shiboken6
+
+        return bool(shiboken6.isValid(value))
+    except (ImportError, AttributeError, TypeError):
+        # O fallback mantém os testes sem Qt e instalações alternativas úteis.
+        try:
+            object_name = getattr(value, "objectName", None)
+            if callable(object_name):
+                object_name()
+            return True
+        except RuntimeError:
+            return False
+
+
+def _guard_theme_refresh_callback(
+    callback: Callable,
+    validity_check: Callable | None = None,
+) -> Callable:
+    """Evita que QTimer/eventFilter aplique tema em páginas já destruídas."""
+    check = validity_check or _is_valid_qobject
+
+    def guarded(page_ref, *args, **kwargs):
+        try:
+            page = page_ref()
+        except Exception:
+            return None
+        if page is None:
+            return None
+        try:
+            if not check(page):
+                return None
+        except Exception:
+            return None
+        return callback(page_ref, *args, **kwargs)
+
+    return guarded
+
+
+def _install_theme_refresh_lifetime_guards() -> None:
+    """Protege os callbacks adiados das camadas visuais V175–V177."""
+    from monitor_noticias.ui import art_studio_v175, art_studio_v176, art_studio_v177
+
+    for module in (art_studio_v175, art_studio_v176, art_studio_v177):
+        if getattr(module, "_v179_theme_refresh_lifetime_guard", False):
+            continue
+        callback = getattr(module, "_apply_theme_from_ref", None)
+        if callable(callback):
+            module._apply_theme_from_ref = _guard_theme_refresh_callback(callback)
+            module._v179_theme_refresh_lifetime_guard = True
 
 
 def _render_page_thumbnail_isolated(
@@ -32,6 +86,8 @@ def _render_page_thumbnail_isolated(
     ``preview_renderer`` e as fábricas opcionais permitem testar a lógica sem
     acionar widgets ou renderização reais. Em produção, a prévia V176 é usada.
     """
+    if not _is_valid_qobject(page):
+        return None
     if getattr(page, "_v179_thumbnail_rendering", False):
         return None
 
@@ -74,22 +130,24 @@ def _render_page_thumbnail_isolated(
         log.exception("Falha ao gerar miniatura isolada da página %s", page_index)
         return None
     finally:
-        page._v179_thumbnail_rendering = False
+        # Se o wrapper Qt tiver sido invalidado durante a prévia, não tentar
+        # gravar novamente um atributo no objeto C++ destruído.
+        if _is_valid_qobject(page):
+            page._v179_thumbnail_rendering = False
 
 
 def install_art_studio_v179() -> None:
-    """Aplica a renderização isolada antes da criação da MainWindow."""
+    """Aplica a renderização isolada e as proteções Qt antes da MainWindow."""
     global _INSTALLED
     if _INSTALLED:
         return
 
     from monitor_noticias.ui import art_studio_v175
 
-    if getattr(art_studio_v175, "_v179_thumbnail_guard_installed", False):
-        _INSTALLED = True
-        return
+    if not getattr(art_studio_v175, "_v179_thumbnail_guard_installed", False):
+        art_studio_v175._v179_thumbnail_original_renderer = art_studio_v175._render_page_thumbnail
+        art_studio_v175._render_page_thumbnail = _render_page_thumbnail_isolated
+        art_studio_v175._v179_thumbnail_guard_installed = True
 
-    art_studio_v175._v179_thumbnail_original_renderer = art_studio_v175._render_page_thumbnail
-    art_studio_v175._render_page_thumbnail = _render_page_thumbnail_isolated
-    art_studio_v175._v179_thumbnail_guard_installed = True
+    _install_theme_refresh_lifetime_guards()
     _INSTALLED = True

@@ -2,6 +2,9 @@ from __future__ import annotations
 
 import ast
 import os
+import subprocess
+import sys
+import textwrap
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -15,6 +18,7 @@ RUN = ROOT / "run.py"
 MODULE = ROOT / "src/monitor_noticias/ui/art_studio_v179.py"
 V175 = ROOT / "src/monitor_noticias/ui/art_studio_v175.py"
 V176 = ROOT / "src/monitor_noticias/ui/art_studio_v176.py"
+V177 = ROOT / "src/monitor_noticias/ui/art_studio_v177.py"
 
 
 class _FakeTabBar:
@@ -26,13 +30,12 @@ class _FakeTabBar:
 
 
 def _fake_page():
-    page = SimpleNamespace(
+    return SimpleNamespace(
         v150_tab_bar=_FakeTabBar(),
         _v150_pages=[{"id": "page-1", "data": {}}],
         _v150_active_index=0,
         _v175_thumbnail_cache={},
     )
-    return page
 
 
 def test_v179_installs_after_v178_and_before_application_start():
@@ -111,6 +114,41 @@ def test_thumbnail_preview_failure_is_logged_and_does_not_escape():
     assert page._v179_thumbnail_rendering is False
 
 
+def test_theme_refresh_callback_skips_destroyed_page_wrapper():
+    class FakePage:
+        alive = False
+
+    page = FakePage()
+    calls = []
+    guarded = v179._guard_theme_refresh_callback(
+        lambda _ref, *_args, **_kwargs: calls.append("called"),
+        validity_check=lambda target: target.alive,
+    )
+
+    import weakref
+
+    assert guarded(weakref.ref(page), force=True) is None
+    assert calls == []
+
+    page.alive = True
+    assert guarded(weakref.ref(page), force=True) is None
+    assert calls == ["called"]
+
+
+def test_v179_installs_lifetime_guards_for_visual_theme_callbacks():
+    source = MODULE.read_text(encoding="utf-8")
+    for version in (175, 176, 177):
+        module_source = {
+            175: V175,
+            176: V176,
+            177: V177,
+        }[version].read_text(encoding="utf-8")
+        assert "def _apply_theme_from_ref" in module_source
+        assert f"art_studio_v{version}" in source
+    assert "_guard_theme_refresh_callback" in source
+    assert "shiboken6.isValid(value)" in source
+
+
 def test_v179_uses_the_v176_helper_that_keeps_the_live_scene_untouched():
     source = MODULE.read_text(encoding="utf-8")
     preview_source = V176.read_text(encoding="utf-8")
@@ -135,34 +173,34 @@ def test_v179_installer_is_idempotent_and_replaces_only_the_thumbnail_renderer()
     assert "if _INSTALLED:" in source
     assert "_render_page_thumbnail = _render_page_thumbnail_isolated" in source
     assert "_v179_thumbnail_guard_installed" in source
+    assert "_install_theme_refresh_lifetime_guards()" in source
 
 
-def test_real_editor_first_open_and_initial_thumbnail_timer(tmp_path):
-    """Exercita as camadas do editor e os timers que rodam após a primeira abertura."""
-    import runpy
+def test_real_editor_first_open_and_initial_thumbnail_timer_isolated_process(tmp_path):
+    """Executa o boot do editor em subprocesso para não contaminar outros testes Qt."""
+    script = textwrap.dedent(
+        r"""
+        import runpy
+        import sys
+        from PySide6.QtTest import QTest
+        from PySide6.QtWidgets import QApplication, QMainWindow, QStackedWidget
 
-    from PySide6.QtTest import QTest
-    from PySide6.QtWidgets import QApplication, QMainWindow, QStackedWidget
+        runpy.run_path(sys.argv[1], run_name="_central_art_studio_runtime_test")
 
-    # Executa os mesmos instaladores de compatibilidade usados pelo portable,
-    # sem iniciar o restante da aplicação nem acessar rede/credenciais.
-    runpy.run_path(str(RUN), run_name="_central_art_studio_runtime_test")
+        from monitor_noticias.ui.art_studio_integration import (
+            _enhance_art_studio_page,
+            _install_deferred_view_compatibility,
+        )
+        from monitor_noticias.ui.art_studio_page import ArtStudioPage
 
-    from monitor_noticias.ui.art_studio_integration import (
-        _enhance_art_studio_page,
-        _install_deferred_view_compatibility,
-    )
-    from monitor_noticias.ui.art_studio_page import ArtStudioPage
+        app = QApplication.instance() or QApplication([])
+        window = QMainWindow()
+        stack = QStackedWidget(window)
+        window.setCentralWidget(stack)
+        window.resize(1280, 800)
 
-    app = QApplication.instance() or QApplication([])
-    window = QMainWindow()
-    stack = QStackedWidget(window)
-    window.setCentralWidget(stack)
-    window.resize(1280, 800)
-
-    try:
         _install_deferred_view_compatibility()
-        page = ArtStudioPage(tmp_path, stack)
+        page = ArtStudioPage(sys.argv[2], stack)
         _enhance_art_studio_page(page)
         stack.addWidget(page)
         stack.setCurrentWidget(page)
@@ -170,8 +208,8 @@ def test_real_editor_first_open_and_initial_thumbnail_timer(tmp_path):
         app.processEvents()
 
         # A V175 agenda a primeira miniatura para 500 ms. Esperamos mais que
-        # isso para exercitar a geração real, além dos demais callbacks Qt.
-        QTest.qWait(1400)
+        # isso para exercitar a geração real e os callbacks Qt das camadas visuais.
+        QTest.qWait(1500)
         app.processEvents()
 
         pages = page._v150_pages
@@ -181,6 +219,28 @@ def test_real_editor_first_open_and_initial_thumbnail_timer(tmp_path):
         assert page._v179_thumbnail_rendering is False
         assert page_id in page._v175_thumbnail_cache
         assert not page.v150_tab_bar.tabIcon(0).isNull()
-    finally:
+
         window.close()
-        app.processEvents()
+        QTest.qWait(50)
+        app.quit()
+        """
+    )
+    env = os.environ.copy()
+    env["QT_QPA_PLATFORM"] = "offscreen"
+    env["QTWEBENGINE_DISABLE_SANDBOX"] = "1"
+    src_path = str(ROOT / "src")
+    env["PYTHONPATH"] = src_path + os.pathsep + env.get("PYTHONPATH", "")
+
+    result = subprocess.run(
+        [sys.executable, "-c", script, str(RUN), str(tmp_path)],
+        cwd=ROOT,
+        env=env,
+        text=True,
+        capture_output=True,
+        timeout=60,
+        check=False,
+    )
+    assert result.returncode == 0, (
+        "O teste de abertura real do Estúdio falhou.\n"
+        f"STDOUT:\n{result.stdout}\nSTDERR:\n{result.stderr}"
+    )
