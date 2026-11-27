@@ -161,14 +161,20 @@ def test_v179_installer_is_idempotent_and_replaces_only_the_thumbnail_renderer()
 
 
 def test_real_sidebar_click_loads_editor_gradually_and_survives_initial_timers(tmp_path):
-    """Exercita o clique real, carga V145–V177 e timers iniciais em subprocesso."""
+    """Usa mouseClick no SidebarNavItem real e valida as camadas/timers Qt."""
     script = textwrap.dedent(
         r"""
+        import logging
         import runpy
         import sys
+        from PySide6.QtCore import Qt, QTimer
         from PySide6.QtTest import QTest
-        from PySide6.QtWidgets import QApplication, QLabel, QMainWindow, QStackedWidget, QWidget
+        from PySide6.QtWidgets import (
+            QApplication, QLabel, QMainWindow, QStackedWidget,
+            QVBoxLayout, QWidget,
+        )
 
+        logging.basicConfig(level=logging.INFO)
         app = QApplication.instance() or QApplication([])
         runpy.run_path(sys.argv[1], run_name="_central_art_studio_runtime_test")
 
@@ -176,11 +182,22 @@ def test_real_sidebar_click_loads_editor_gradually_and_survives_initial_timers(t
         from monitor_noticias.ui.sidebar_widgets import SidebarNavItem
 
         window = QMainWindow()
-        stack = QStackedWidget(window)
-        window.setCentralWidget(stack)
-        window.stack = stack
+        root = QWidget(window)
+        root_layout = QVBoxLayout(root)
+        window.setCentralWidget(root)
         window.resize(1280, 800)
 
+        nav = SidebarNavItem(
+            icon_text="✎",
+            label_text="Estúdio de Artes",
+            icon_color="#F4B719",
+            parent=root,
+        )
+        root_layout.addWidget(nav)
+
+        stack = QStackedWidget(root)
+        root_layout.addWidget(stack, 1)
+        window.stack = stack
         placeholder = QWidget(stack)
         stack.addWidget(placeholder)
         window._art_studio_placeholder = placeholder
@@ -199,28 +216,33 @@ def test_real_sidebar_click_loads_editor_gradually_and_survives_initial_timers(t
         window._current = "HOME"
         window._state_signature = lambda: "test-state"
         window._last_refresh_signature = None
-
-        nav = SidebarNavItem(
-            icon_text="✎",
-            label_text="Estúdio de Artes",
-            icon_color="#F4B719",
-            parent=window,
-        )
         window.art_studio_nav = nav
         nav.clicked.connect(MainWindow._open_art_studio.__get__(window, MainWindow))
 
+        heartbeat = QTimer(window)
+        heartbeat.setInterval(20)
+        heartbeat_count = [0]
+        heartbeat.timeout.connect(lambda: heartbeat_count.__setitem__(0, heartbeat_count[0] + 1))
+        heartbeat.start()
+
         window.show()
-        nav.click()
+        QTest.qWait(50)
+        QTest.mouseClick(nav, Qt.MouseButton.LeftButton)
         assert window._art_studio_loading is True
         assert stack.currentWidget() is placeholder
 
-        # Espera até 15 segundos pela execução das 33 camadas em eventos separados.
+        # Espera a carga completa ou a interrupção, reportando a última etapa.
         for _ in range(300):
-            if window._art_studio_ready:
+            if window._art_studio_ready or not window._art_studio_loading:
                 break
             QTest.qWait(50)
 
-        assert window._art_studio_ready is True
+        assert window._art_studio_ready is True, (
+            "O Estúdio não terminou de abrir. "
+            f"Etapa atual: {getattr(window, '_art_studio_current_stage', None)!r}; "
+            f"última falha: {getattr(window, '_art_studio_last_failed_stage', None)!r}; "
+            f"mensagem: {window._art_studio_loading_label.text()!r}"
+        )
         page = window.art_studio_page
         assert page is not None
         assert stack.currentWidget() is page
@@ -228,6 +250,10 @@ def test_real_sidebar_click_loads_editor_gradually_and_survives_initial_timers(t
         assert page._v145_installed
         assert page._v175_installed
         assert page._v177_installed
+        assert heartbeat_count[0] >= 10, (
+            "O loop Qt não respondeu durante a carga gradual do Estúdio. "
+            f"Heartbeats observados: {heartbeat_count[0]}"
+        )
 
         # Aguarda miniaturas e filtros de tema agendados pelas últimas camadas.
         QTest.qWait(1800)

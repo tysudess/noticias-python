@@ -1,3 +1,6 @@
+from __future__ import annotations
+
+import ast
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -9,12 +12,22 @@ def _integration_source() -> str:
 
 def test_qframe_is_provided_to_v146_module_before_enhancer_runs():
     source = _integration_source()
+    tree = ast.parse(source)
+    qframe_imported = any(
+        isinstance(node, ast.ImportFrom)
+        and node.module == "PySide6.QtWidgets"
+        and any(alias.name == "QFrame" for alias in node.names)
+        for node in ast.walk(tree)
+    )
+    assert qframe_imported
     provide_at = source.index("art_studio_v146_module.QFrame = QFrame")
-    enhancer_at = source.index("enhance_art_studio_page_v146,", source.index("def _enhance_art_studio_page"))
+    enhancer_at = source.index(
+        "enhance_art_studio_page_v146,",
+        source.index("def _enhance_art_studio_page"),
+    )
     loop_at = source.index("for enhance in enhancers:", enhancer_at)
     apply_at = source.index("enhance(page)", loop_at)
     assert provide_at < enhancer_at < loop_at < apply_at
-    assert "from PySide6.QtWidgets import QFrame" in source
 
 
 def test_v146_integration_keeps_v145_view_startup_compatibility():

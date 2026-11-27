@@ -163,6 +163,13 @@ def _enhancer_label(enhance) -> str:
     return f"V{suffix}" if suffix.isdigit() else "V145"
 
 
+def _enhancer_failure_stage(queue, index: int) -> str:
+    """Descreve a etapa sem indexar a função como se fosse uma tupla."""
+    if 0 <= index < len(queue):
+        return f"{_enhancer_label(queue[index])} ({index + 1}/{len(queue)})"
+    return "criação/importação inicial"
+
+
 def _set_loading_message(window, message: str) -> None:
     label = getattr(window, "_art_studio_loading_label", None)
     if label is not None:
@@ -190,8 +197,8 @@ def _create_art_studio_page(window):
         projects_dir = Path(window._art_studio_projects_dir)
         page = ArtStudioPage(projects_dir, window.stack)
         page.setObjectName("artStudioPage")
-        # Inserir agora, mas deixar o placeholder visível até todas as camadas
-        # terminarem. Isso garante um pai Qt estável e uma janela válida.
+        # A página fica registrada no stack, mas o placeholder permanece visível
+        # até que todas as camadas terminem de ser instaladas.
         window.stack.addWidget(page)
         window._art_studio_building_page = page
         log.info("[ArtStudioLoad] Página base criada; iniciando camadas V145–V177.")
@@ -203,7 +210,7 @@ def _create_art_studio_page(window):
                 window.stack.removeWidget(page)
                 page.deleteLater()
             except RuntimeError:
-                pass
+                log.exception("[ArtStudioLoad] Falha ao remover página base incompleta.")
         window._art_studio_building_page = None
         raise
 
@@ -236,6 +243,7 @@ def _finish_art_studio_loading(window, page) -> None:
     window._art_studio_building_page = None
     window._art_studio_ready = True
     window._art_studio_loading = False
+    window._art_studio_last_failed_stage = None
     window.pages["ART_STUDIO"] = page
 
     placeholder = getattr(window, "_art_studio_placeholder", None)
@@ -254,7 +262,10 @@ def _finish_art_studio_loading(window, page) -> None:
 
 
 def _abort_art_studio_loading(window, page, stage: str, exc: Exception) -> None:
+    """Descarrega a página parcial sem abrir diálogo modal que pareça travamento."""
     log.exception("[ArtStudioLoad] FALHA durante %s; o Estúdio será descarregado.", stage)
+    window._art_studio_last_failed_stage = stage
+    window._art_studio_current_stage = stage
     timer = getattr(window, "_art_studio_load_timer", None)
     if timer is not None:
         timer.stop()
@@ -275,16 +286,26 @@ def _abort_art_studio_loading(window, page, stage: str, exc: Exception) -> None:
     _set_loading_message(
         window,
         "Não foi possível preparar o Estúdio de Artes.\n"
+        f"Etapa: {stage}.\n"
         "A Central continua disponível. Clique novamente para tentar abrir.",
     )
+
     if not getattr(window, "_art_studio_suppress_error_dialog", False):
-        QMessageBox.critical(
-            window,
-            "Não foi possível abrir o Estúdio de Artes",
+        # QMessageBox.critical() é modal e pode deixar a janela principal
+        # aparentemente congelada caso o diálogo apareça atrás dela.
+        dialog = QMessageBox(window)
+        dialog.setIcon(QMessageBox.Icon.Critical)
+        dialog.setWindowTitle("Não foi possível abrir o Estúdio de Artes")
+        dialog.setText(
             "A inicialização foi interrompida durante "
             f"{stage}. O restante da Central continua disponível.\n\n"
-            "Consulte logs/inicializacao.log para ver a etapa e o erro registrados.",
+            "Consulte logs/inicializacao.log para ver o erro completo."
         )
+        dialog.setStandardButtons(QMessageBox.StandardButton.Ok)
+        dialog.setModal(False)
+        dialog.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, True)
+        window._art_studio_error_dialog = dialog
+        dialog.show()
 
 
 def _advance_art_studio_loading(window) -> None:
@@ -293,23 +314,28 @@ def _advance_art_studio_loading(window) -> None:
         return
 
     page = getattr(window, "_art_studio_building_page", None)
+    stage = "criação/importação inicial"
     try:
         if page is None:
             started = time.perf_counter()
             page = _create_art_studio_page(window)
-            log.info(
-                "[ArtStudioLoad] Criação da página base: %.3fs.",
-                time.perf_counter() - started,
-            )
+            page_elapsed = time.perf_counter() - started
+            log.info("[ArtStudioLoad] Criação da página base: %.3fs.", page_elapsed)
+            if page_elapsed >= 1.0:
+                log.warning("[ArtStudioLoad] A criação da página base demorou %.3fs.", page_elapsed)
+
             import_started = time.perf_counter()
             queue = _art_studio_enhancers()
             window._art_studio_enhancer_queue = queue
             window._art_studio_enhancer_index = 0
+            import_elapsed = time.perf_counter() - import_started
             log.info(
                 "[ArtStudioLoad] Importação das camadas: %.3fs; %s etapas.",
-                time.perf_counter() - import_started,
+                import_elapsed,
                 len(queue),
             )
+            if import_elapsed >= 1.0:
+                log.warning("[ArtStudioLoad] A importação das camadas demorou %.3fs.", import_elapsed)
             _set_loading_message(window, f"Página criada. Preparando camada 1 de {len(queue)}…")
             window._art_studio_load_timer.start(15)
             return
@@ -317,30 +343,32 @@ def _advance_art_studio_loading(window) -> None:
         queue = window._art_studio_enhancer_queue
         index = int(window._art_studio_enhancer_index)
         if index >= len(queue):
+            stage = "finalização/abertura da página"
+            window._art_studio_current_stage = stage
             _finish_art_studio_loading(window, page)
             return
 
         enhance = queue[index]
-        name = _enhancer_label(enhance)
-        stage = f"{name} ({index + 1}/{len(queue)})"
+        stage = _enhancer_failure_stage(queue, index)
+        window._art_studio_current_stage = stage
         _set_loading_message(window, f"Preparando Estúdio de Artes…\n{stage}")
         started = time.perf_counter()
         log.info("[ArtStudioLoad] INÍCIO %s.", stage)
         enhance(page)
         elapsed = time.perf_counter() - started
         log.info("[ArtStudioLoad] CONCLUÍDO %s em %.3fs.", stage, elapsed)
+        if elapsed >= 1.0:
+            log.warning("[ArtStudioLoad] A camada %s bloqueou o event loop por %.3fs.", stage, elapsed)
         window._art_studio_enhancer_index = index + 1
-
-        if index + 1 >= len(queue):
-            window._art_studio_load_timer.start(15)
-        else:
-            # Um pequeno intervalo deixa o Qt pintar o progresso e tratar
-            # eventos de janela entre camadas; não usa processEvents reentrante.
-            window._art_studio_load_timer.start(15)
+        window._art_studio_current_stage = None
+        window._art_studio_load_timer.start(15)
     except Exception as exc:
-        index = int(getattr(window, "_art_studio_enhancer_index", 0))
         queue = getattr(window, "_art_studio_enhancer_queue", None) or ()
-        stage = queue[index][0] if index < len(queue) else "criação/importação inicial"
+        index = int(getattr(window, "_art_studio_enhancer_index", 0))
+        # Corrigido: cada entrada da fila é uma função; nunca se deve usar
+        # queue[index][0], pois isso mascara a exceção original com TypeError.
+        if queue and 0 <= index < len(queue):
+            stage = _enhancer_failure_stage(queue, index)
         _abort_art_studio_loading(window, page, stage, exc)
 
 
@@ -353,7 +381,12 @@ def _start_art_studio_loading(window) -> None:
     window._art_studio_ready = False
     window._art_studio_enhancer_queue = None
     window._art_studio_enhancer_index = 0
-    _set_loading_message(window, "Iniciando Estúdio de Artes…\nA Central continuará responsiva durante a preparação.")
+    window._art_studio_current_stage = None
+    window._art_studio_last_failed_stage = None
+    _set_loading_message(
+        window,
+        "Iniciando Estúdio de Artes…\nA Central continuará responsiva durante a preparação.",
+    )
 
     timer = getattr(window, "_art_studio_load_timer", None)
     if timer is None:
@@ -420,6 +453,8 @@ def install_art_studio() -> None:
         self._art_studio_load_timer = None
         self._art_studio_enhancer_queue = None
         self._art_studio_enhancer_index = 0
+        self._art_studio_current_stage = None
+        self._art_studio_last_failed_stage = None
 
         # O placeholder leve permite feedback visível durante a carga gradual.
         placeholder = QWidget(self.stack)

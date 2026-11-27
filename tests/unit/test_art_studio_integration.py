@@ -64,15 +64,39 @@ def test_art_studio_click_starts_a_gradual_load_instead_of_blocking():
 
 def test_all_art_studio_enhancement_layers_are_applied_in_order_on_demand():
     source = _read("src/monitor_noticias/ui/art_studio_integration.py")
-    factory = ast.unparse(_function(source, "_enhance_art_studio_page"))
-    names = [
-        "enhance_art_studio_page,",
-        *[f"enhance_art_studio_page_v{version}," for version in range(146, 178)],
+    factory = _function(source, "_enhance_art_studio_page")
+    assignment = next(
+        node
+        for node in ast.walk(factory)
+        if isinstance(node, ast.Assign)
+        and any(isinstance(target, ast.Name) and target.id == "enhancers" for target in node.targets)
+    )
+    assert isinstance(assignment.value, ast.Tuple)
+    names = [ast.unparse(value) for value in assignment.value.elts]
+    expected = ["enhance_art_studio_page"] + [
+        f"enhance_art_studio_page_v{version}" for version in range(146, 178)
     ]
-    positions = [factory.index(name) for name in names]
-    assert positions == sorted(positions)
-    assert "for enhance in enhancers:" in factory
+    assert names == expected
+    assert "for enhance in enhancers:" in ast.unparse(factory)
     assert "return _enhance_art_studio_page()" in source
+
+
+def test_loading_failure_reports_the_actual_enhancer_without_masking_exception():
+    source = _read("src/monitor_noticias/ui/art_studio_integration.py")
+    failure = _function(source, "_enhancer_failure_stage")
+    advance = ast.unparse(_function(source, "_advance_art_studio_loading"))
+    assert "_enhancer_label(queue[index])" in ast.unparse(failure)
+    assert "_enhancer_failure_stage(queue, index)" in advance
+    assert "queue[index][0]" not in advance
+    assert "_art_studio_last_failed_stage" in source
+
+
+def test_loading_error_dialog_is_non_modal_and_preserves_main_central():
+    source = _read("src/monitor_noticias/ui/art_studio_integration.py")
+    abort = ast.unparse(_function(source, "_abort_art_studio_loading"))
+    assert "dialog.setModal(False)" in abort
+    assert "dialog.show()" in abort
+    assert "QMessageBox.critical" not in abort
 
 
 def test_art_studio_progress_is_logged_per_enhancement_layer():
@@ -209,3 +233,14 @@ def test_art_studio_v145_blocks_mutations_of_locked_layers():
     assert "def _install_locked_item_guards(" in source
     assert "Desbloqueie a camada antes de excluí-la." in source
     assert "Desbloqueie ao menos uma camada para alinhá-la." in source
+
+
+def test_enhancer_failure_stage_uses_callable_metadata():
+    from monitor_noticias.ui.art_studio_integration import _enhancer_failure_stage
+
+    def fake_enhancer():
+        return None
+
+    fake_enhancer.__module__ = "monitor_noticias.ui.art_studio_v166"
+    assert _enhancer_failure_stage((fake_enhancer,), 0) == "V166 (1/1)"
+    assert _enhancer_failure_stage((), 0) == "criação/importação inicial"
