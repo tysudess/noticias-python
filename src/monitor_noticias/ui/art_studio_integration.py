@@ -1,18 +1,20 @@
 from __future__ import annotations
 
-"""Integra o Estúdio de Artes à navegação já consolidada da Central."""
+"""Integra o Estúdio de Artes à navegação da Central com carga sob demanda.
+
+A página do editor é deliberadamente criada somente quando o usuário abre a
+ferramenta. A construção da cena Qt e a instalação das camadas V145–V177 não
+participam mais da inicialização da janela principal.
+"""
 
 import logging
 import weakref
 from pathlib import Path
 
-from PySide6.QtWidgets import QFrame
+from PySide6.QtCore import Qt
+from PySide6.QtWidgets import QFrame, QLabel, QMessageBox, QVBoxLayout, QWidget
 
-from monitor_noticias.ui.art_studio_page import ArtStudioPage
-from monitor_noticias.ui.art_studio_v145 import enhance_art_studio_page
 import monitor_noticias.ui.art_studio_v146 as art_studio_v146_module
-from monitor_noticias.ui.art_studio_v146 import enhance_art_studio_page_v146
-from monitor_noticias.ui.art_studio_v147 import enhance_art_studio_page_v147
 from monitor_noticias.ui.main_window import MainWindow
 from monitor_noticias.ui.sidebar_widgets import SidebarNavItem
 import monitor_noticias.ui.sidebar_widgets as sidebar_widgets
@@ -23,7 +25,7 @@ class _DeferredArtStudioView:
 
     __slots__ = ("_page_ref",)
 
-    def __init__(self, page: ArtStudioPage) -> None:
+    def __init__(self, page) -> None:
         self._page_ref = weakref.ref(page)
 
     def actual_size(self) -> None:
@@ -35,7 +37,7 @@ class _DeferredArtStudioView:
             view.actual_size()
 
 
-def _get_art_studio_view(page: ArtStudioPage):
+def _get_art_studio_view(page):
     actual = page.__dict__.get("_art_studio_view_actual")
     if actual is not None:
         return actual
@@ -46,12 +48,14 @@ def _get_art_studio_view(page: ArtStudioPage):
     return proxy
 
 
-def _set_art_studio_view(page: ArtStudioPage, view) -> None:
+def _set_art_studio_view(page, view) -> None:
     page.__dict__["_art_studio_view_actual"] = view
 
 
 def _install_deferred_view_compatibility() -> None:
     """Corrige a conexão antecipada do zoom sem substituir o canvas real."""
+    from monitor_noticias.ui.art_studio_page import ArtStudioPage
+
     current = getattr(ArtStudioPage, "view", None)
     if not isinstance(current, property):
         ArtStudioPage.view = property(
@@ -64,14 +68,142 @@ log = logging.getLogger(__name__)
 _INSTALLED = False
 
 
+def _enhance_art_studio_page(page) -> None:
+    """Aplica, em ordem, todas as camadas do editor quando ele é solicitado."""
+    from monitor_noticias.ui.art_studio_v145 import enhance_art_studio_page
+    from monitor_noticias.ui.art_studio_v146 import enhance_art_studio_page_v146
+    from monitor_noticias.ui.art_studio_v147 import enhance_art_studio_page_v147
+    from monitor_noticias.ui.art_studio_v148 import enhance_art_studio_page_v148
+    from monitor_noticias.ui.art_studio_v149 import enhance_art_studio_page_v149
+    from monitor_noticias.ui.art_studio_v150 import enhance_art_studio_page_v150
+    from monitor_noticias.ui.art_studio_v151 import enhance_art_studio_page_v151
+    from monitor_noticias.ui.art_studio_v152 import enhance_art_studio_page_v152
+    from monitor_noticias.ui.art_studio_v153 import enhance_art_studio_page_v153
+    from monitor_noticias.ui.art_studio_v154 import enhance_art_studio_page_v154
+    from monitor_noticias.ui.art_studio_v155 import enhance_art_studio_page_v155
+    from monitor_noticias.ui.art_studio_v156 import enhance_art_studio_page_v156
+    from monitor_noticias.ui.art_studio_v157 import enhance_art_studio_page_v157
+    from monitor_noticias.ui.art_studio_v158 import enhance_art_studio_page_v158
+    from monitor_noticias.ui.art_studio_v159 import enhance_art_studio_page_v159
+    from monitor_noticias.ui.art_studio_v160 import enhance_art_studio_page_v160
+    from monitor_noticias.ui.art_studio_v161 import enhance_art_studio_page_v161
+    from monitor_noticias.ui.art_studio_v162 import enhance_art_studio_page_v162
+    from monitor_noticias.ui.art_studio_v163 import enhance_art_studio_page_v163
+    from monitor_noticias.ui.art_studio_v164 import enhance_art_studio_page_v164
+    from monitor_noticias.ui.art_studio_v165 import enhance_art_studio_page_v165
+    from monitor_noticias.ui.art_studio_v166 import enhance_art_studio_page_v166
+    from monitor_noticias.ui.art_studio_v167 import enhance_art_studio_page_v167
+    from monitor_noticias.ui.art_studio_v168 import enhance_art_studio_page_v168
+    from monitor_noticias.ui.art_studio_v169 import enhance_art_studio_page_v169
+    from monitor_noticias.ui.art_studio_v170 import enhance_art_studio_page_v170
+    from monitor_noticias.ui.art_studio_v171 import enhance_art_studio_page_v171
+    from monitor_noticias.ui.art_studio_v172 import enhance_art_studio_page_v172
+    from monitor_noticias.ui.art_studio_v173 import enhance_art_studio_page_v173
+    from monitor_noticias.ui.art_studio_v174 import enhance_art_studio_page_v174
+    from monitor_noticias.ui.art_studio_v175 import enhance_art_studio_page_v175
+    from monitor_noticias.ui.art_studio_v176 import enhance_art_studio_page_v176
+    from monitor_noticias.ui.art_studio_v177 import enhance_art_studio_page_v177
+
+    # V146 referencia QFrame pelo namespace do próprio módulo.
+    art_studio_v146_module.QFrame = QFrame
+
+    enhancers = (
+        enhance_art_studio_page,
+        enhance_art_studio_page_v146,
+        enhance_art_studio_page_v147,
+        enhance_art_studio_page_v148,
+        enhance_art_studio_page_v149,
+        enhance_art_studio_page_v150,
+        enhance_art_studio_page_v151,
+        enhance_art_studio_page_v152,
+        enhance_art_studio_page_v153,
+        enhance_art_studio_page_v154,
+        enhance_art_studio_page_v155,
+        enhance_art_studio_page_v156,
+        enhance_art_studio_page_v157,
+        enhance_art_studio_page_v158,
+        enhance_art_studio_page_v159,
+        enhance_art_studio_page_v160,
+        enhance_art_studio_page_v161,
+        enhance_art_studio_page_v162,
+        enhance_art_studio_page_v163,
+        enhance_art_studio_page_v164,
+        enhance_art_studio_page_v165,
+        enhance_art_studio_page_v166,
+        enhance_art_studio_page_v167,
+        enhance_art_studio_page_v168,
+        enhance_art_studio_page_v169,
+        enhance_art_studio_page_v170,
+        enhance_art_studio_page_v171,
+        enhance_art_studio_page_v172,
+        enhance_art_studio_page_v173,
+        enhance_art_studio_page_v174,
+        enhance_art_studio_page_v175,
+        enhance_art_studio_page_v176,
+        enhance_art_studio_page_v177,
+    )
+    for enhance in enhancers:
+        enhance(page)
+
+
+def _create_art_studio_page(window):
+    """Cria e integra o editor na primeira solicitação do usuário."""
+    existing = getattr(window, "art_studio_page", None)
+    if existing is not None:
+        return existing
+
+    from monitor_noticias.ui.art_studio_page import ArtStudioPage
+
+    _install_deferred_view_compatibility()
+    placeholder = getattr(window, "_art_studio_placeholder", None)
+    projects_dir = Path(window._art_studio_projects_dir)
+    page = None
+
+    try:
+        page = ArtStudioPage(projects_dir, window.stack)
+        page.setObjectName("artStudioPage")
+        window.art_studio_page = page
+        _enhance_art_studio_page(page)
+
+        insert_at = window.stack.indexOf(placeholder) if placeholder is not None else -1
+        if insert_at < 0:
+            window.stack.addWidget(page)
+        else:
+            window.stack.insertWidget(insert_at, page)
+
+        window.pages["ART_STUDIO"] = page
+        window._art_studio_ready = True
+
+        if placeholder is not None:
+            window.stack.removeWidget(placeholder)
+            placeholder.deleteLater()
+            window._art_studio_placeholder = None
+
+        log.info("Estúdio de Artes carregado sob demanda (camadas V145–V177).")
+        return page
+
+    except Exception as exc:
+        log.exception("Falha ao inicializar o Estúdio de Artes sob demanda.")
+        if page is not None:
+            window.stack.removeWidget(page)
+            page.deleteLater()
+        window.art_studio_page = None
+        QMessageBox.critical(
+            window,
+            "Não foi possível abrir o Estúdio de Artes",
+            "O restante da Central continua disponível. Consulte "
+            "logs/inicializacao.log para identificar a falha do editor.\n\n"
+            f"Detalhe: {exc}",
+        )
+        return None
+
+
 def install_art_studio() -> None:
     global _INSTALLED
     if _INSTALLED:
         return
 
-    # Instala a compatibilidade antes de qualquer ArtStudioPage ser criada.
-    # O proxy resolve a conexão do botão 100% sem acessar self.view cedo demais.
-    _install_deferred_view_compatibility()
+    # Nenhuma instância, cena ou painel do editor é criado durante o boot.
 
     groups = []
     for label, names in sidebar_widgets._GROUPS:
@@ -115,16 +247,26 @@ def install_art_studio() -> None:
     def init_with_art_studio(self, *args, **kwargs):
         original_init(self, *args, **kwargs)
         state_root = Path(getattr(self.paths, "state_root", self.paths.root))
-        projects_dir = state_root / "ArtStudioProjects"
-        self.art_studio_page = ArtStudioPage(projects_dir, self)
-        enhance_art_studio_page(self.art_studio_page)
-        # V146 usa QFrame no painel avançado, mas sua lista de imports não o
-        # declarava. Registra a classe no namespace do módulo antes da chamada.
-        art_studio_v146_module.QFrame = QFrame
-        enhance_art_studio_page_v146(self.art_studio_page)
-        enhance_art_studio_page_v147(self.art_studio_page)
-        self.pages["ART_STUDIO"] = self.art_studio_page
-        self.stack.addWidget(self.art_studio_page)
+        self._art_studio_projects_dir = state_root / "ArtStudioProjects"
+        self.art_studio_page = None
+        self._art_studio_ready = False
+
+        # A página leve preserva o espaço e a navegação do editor sem criar a
+        # cena gráfica, os painéis e dezenas de filtros durante a inicialização.
+        placeholder = QWidget(self.stack)
+        placeholder.setObjectName("artStudioDeferredPlaceholder")
+        placeholder_layout = QVBoxLayout(placeholder)
+        placeholder_layout.addStretch(1)
+        message = QLabel(
+            "O Estúdio de Artes será preparado quando esta ferramenta for aberta.",
+            placeholder,
+        )
+        message.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        placeholder_layout.addWidget(message)
+        placeholder_layout.addStretch(1)
+        self._art_studio_placeholder = placeholder
+        self.pages["ART_STUDIO"] = placeholder
+        self.stack.addWidget(placeholder)
 
     MainWindow.__init__ = init_with_art_studio
 
@@ -137,9 +279,8 @@ def install_art_studio() -> None:
     MainWindow.navigate = navigate_with_art_studio
 
     def open_art_studio(self):
-        page = getattr(self, "art_studio_page", None)
+        page = _create_art_studio_page(self)
         if page is None:
-            log.error("A página do Estúdio de Artes ainda não foi inicializada.")
             return
         self._current = "ART_STUDIO"
         self.stack.setCurrentWidget(page)

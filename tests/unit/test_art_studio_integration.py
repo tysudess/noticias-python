@@ -1,3 +1,6 @@
+from __future__ import annotations
+
+import ast
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -5,6 +8,15 @@ ROOT = Path(__file__).resolve().parents[2]
 
 def _read(relative: str) -> str:
     return (ROOT / relative).read_text(encoding="utf-8")
+
+
+def _function(source: str, name: str) -> ast.FunctionDef:
+    tree = ast.parse(source)
+    return next(
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.FunctionDef) and node.name == name
+    )
 
 
 def test_art_studio_installs_before_main_application_import():
@@ -20,6 +32,52 @@ def test_art_studio_is_added_to_existing_tools_navigation_group():
     assert '"ART_STUDIO"' in source
     assert '"Estúdio de Artes"' in source
     assert "MainWindow._build_sidebar = build_sidebar_with_art_studio" in source
+
+
+def test_art_studio_page_is_not_constructed_during_main_window_startup():
+    source = _read("src/monitor_noticias/ui/art_studio_integration.py")
+    init_function = _function(source, "init_with_art_studio")
+    constructed_pages = [
+        node
+        for node in ast.walk(init_function)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "ArtStudioPage"
+    ]
+    assert not constructed_pages
+    assert "self.art_studio_page = None" in ast.unparse(init_function)
+    assert "self._art_studio_placeholder = placeholder" in ast.unparse(init_function)
+
+
+def test_art_studio_is_created_only_when_its_navigation_item_is_opened():
+    source = _read("src/monitor_noticias/ui/art_studio_integration.py")
+    create_function = _function(source, "_create_art_studio_page")
+    open_function = _function(source, "open_art_studio")
+
+    assert any(
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "ArtStudioPage"
+        for node in ast.walk(create_function)
+    )
+    assert any(
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "_create_art_studio_page"
+        for node in ast.walk(open_function)
+    )
+
+
+def test_all_art_studio_enhancement_layers_are_applied_in_order_on_demand():
+    source = _read("src/monitor_noticias/ui/art_studio_integration.py")
+    names = [
+        "enhance_art_studio_page,",
+        *[f"enhance_art_studio_page_v{version}," for version in range(146, 178)],
+    ]
+    positions = [source.index(name, source.index("def _enhance_art_studio_page")) for name in names]
+    assert positions == sorted(positions)
+    assert "for enhance in enhancers:" in source
+    assert "enhance(page)" in source
 
 
 def test_art_studio_supports_core_editor_features_and_local_projects():
@@ -118,10 +176,13 @@ def test_art_studio_v145_adds_undo_redo_with_debounced_scene_history():
         assert token in source
 
 
-def test_art_studio_v145_is_installed_after_page_creation():
+def test_art_studio_v145_enhancement_runs_after_deferred_page_creation():
     source = _read("src/monitor_noticias/ui/art_studio_integration.py")
-    assert "from monitor_noticias.ui.art_studio_v145 import enhance_art_studio_page" in source
-    assert "enhance_art_studio_page(self.art_studio_page)" in source
+    create_function = ast.unparse(_function(source, "_create_art_studio_page"))
+    enhance_function = ast.unparse(_function(source, "_enhance_art_studio_page"))
+    assert "_enhance_art_studio_page(page)" in create_function
+    assert "enhance_art_studio_page," in enhance_function
+    assert "enhance(page)" in enhance_function
 
 
 def test_art_studio_v145_persists_layer_visibility_and_lock_state():
