@@ -1,56 +1,84 @@
 from __future__ import annotations
 
-"""V179 — evita recursão de miniaturas e bloqueio da interface.
+"""V179 — renderização isolada das miniaturas do Estúdio de Artes.
 
-A V175 oculta/restaura guias e alças durante a renderização das miniaturas.
-Essas operações fazem QGraphicsScene.changed ser emitido de forma enfileirada,
-depois que a V175 já havia baixado seu sinalizador de renderização. O handler
-agenda outra miniatura e pode manter o event loop ocupado indefinidamente.
+A implementação anterior protegia a renderização da V175 com um bloqueio
+ temporário, mas ainda escondia/restaurava objetos na cena ativa. Isso podia
+emitir novos sinais ``scene.changed`` enquanto o editor acabava de ser aberto.
 
-A V179 mantém o sinalizador ativo por um curto intervalo após a renderização,
-tempo suficiente para consumir o sinal Qt pendente. As miniaturas continuam
-sendo atualizadas quando o usuário modifica o canvas.
+Agora as miniaturas usam a cena auxiliar da V176, construída a partir dos dados
+serializados da página. A cena de edição não é alterada durante a prévia.
 """
 
-import weakref
+import logging
 
-from PySide6.QtCore import QTimer
+from PySide6.QtCore import QSize
+from PySide6.QtGui import QIcon
 
 
+log = logging.getLogger(__name__)
 _INSTALLED = False
 
 
-def _guard_thumbnail_renderer(original_renderer, single_shot=None):
-    schedule_single_shot = single_shot or QTimer.singleShot
-    """Mantém o bloqueio ativo até os sinais scene.changed já enfileirados passarem."""
+def _render_page_thumbnail_isolated(
+    page,
+    page_index: int,
+    preview_renderer=None,
+    icon_factory=None,
+    size_factory=None,
+):
+    """Atualiza uma miniatura sem modificar a cena gráfica em edição.
 
-    def render_with_scene_change_guard(page, page_index: int):
-        if getattr(page, "_v179_thumbnail_rendering", False):
-            return None
+    ``preview_renderer`` e as fábricas opcionais permitem testar a lógica sem
+    acionar widgets ou renderização reais. Em produção, a prévia V176 é usada.
+    """
+    if getattr(page, "_v179_thumbnail_rendering", False):
+        return None
 
-        page._v179_thumbnail_rendering = True
-        try:
-            return original_renderer(page, page_index)
-        finally:
-            # A V175 zera esta flag ao sair, mas QGraphicsScene.changed pode
-            # chegar somente no próximo ciclo do event loop.
-            page._v175_rendering_thumbnail = True
-            page_ref = weakref.ref(page)
+    tab_bar = getattr(page, "v150_tab_bar", None)
+    pages = getattr(page, "_v150_pages", None)
+    if tab_bar is None or not hasattr(tab_bar, "setTabIcon") or not isinstance(pages, list):
+        return None
 
-            def release_guard():
-                live_page = page_ref()
-                if live_page is None:
-                    return
-                live_page._v175_rendering_thumbnail = False
-                live_page._v179_thumbnail_rendering = False
+    active_index = int(getattr(page, "_v150_active_index", -1))
+    if page_index != active_index or not 0 <= page_index < len(pages):
+        return None
 
-            schedule_single_shot(120, release_guard)
+    entry = pages[page_index]
+    page_id = str(entry.get("id") or page_index) if isinstance(entry, dict) else str(page_index)
+    page._v179_thumbnail_rendering = True
+    try:
+        if preview_renderer is None:
+            from monitor_noticias.ui.art_studio_v176 import _render_page_preview
 
-    return render_with_scene_change_guard
+            preview_renderer = _render_page_preview
+        make_size = size_factory or QSize
+        make_icon = icon_factory or QIcon
+
+        # A V176 cria uma QGraphicsScene independente e não oculta itens da
+        # página ativa. O tamanho preserva a proporção usada pela barra V175.
+        pixmap = preview_renderer(page, entry, make_size(58, 42))
+        cache = getattr(page, "_v175_thumbnail_cache", None)
+        if not isinstance(cache, dict):
+            cache = {}
+            page._v175_thumbnail_cache = cache
+        cache[page_id] = make_icon(pixmap)
+
+        for index, item in enumerate(pages):
+            item_id = str(item.get("id") or index) if isinstance(item, dict) else str(index)
+            icon = cache.get(item_id)
+            tab_bar.setTabIcon(index, icon if icon is not None else make_icon())
+        return cache[page_id]
+    except Exception:
+        # Uma prévia nunca pode encerrar a Central ou impedir a abertura do editor.
+        log.exception("Falha ao gerar miniatura isolada da página %s", page_index)
+        return None
+    finally:
+        page._v179_thumbnail_rendering = False
 
 
 def install_art_studio_v179() -> None:
-    """Aplica a proteção antes da criação da MainWindow."""
+    """Aplica a renderização isolada antes da criação da MainWindow."""
     global _INSTALLED
     if _INSTALLED:
         return
@@ -61,7 +89,7 @@ def install_art_studio_v179() -> None:
         _INSTALLED = True
         return
 
-    original = art_studio_v175._render_page_thumbnail
-    art_studio_v175._render_page_thumbnail = _guard_thumbnail_renderer(original)
+    art_studio_v175._v179_thumbnail_original_renderer = art_studio_v175._render_page_thumbnail
+    art_studio_v175._render_page_thumbnail = _render_page_thumbnail_isolated
     art_studio_v175._v179_thumbnail_guard_installed = True
     _INSTALLED = True
