@@ -16,7 +16,7 @@ def test_v147_uses_inline_text_items_without_modal_text_entry():
         "def add_text_inline(",
         "Digite seu texto",
         "Qt.TextInteractionFlag.TextEditorInteraction",
-        "page.edit_text_button.setText(\"Editar no canvas\")",
+        'page.edit_text_button.setText("Editar no canvas")',
     ):
         assert token in source
     assert "QInputDialog" not in source
@@ -69,17 +69,20 @@ def test_v147_compacts_right_panel_inside_scroll_area():
 
 def test_v147_is_installed_after_v145_and_v146():
     source = _read("src/monitor_noticias/ui/art_studio_integration.py")
-    v145 = source.index("enhance_art_studio_page(self.art_studio_page)")
-    v146 = source.index("enhance_art_studio_page_v146(self.art_studio_page)")
-    v147 = source.index("enhance_art_studio_page_v147(self.art_studio_page)")
-    assert v145 < v146 < v147
+    start = source.index("def _enhance_art_studio_page")
+    v145 = source.index("enhance_art_studio_page,", start)
+    v146 = source.index("enhance_art_studio_page_v146,", start)
+    v147 = source.index("enhance_art_studio_page_v147,", start)
+    loop = source.index("for enhance in enhancers:", start)
+    apply_call = source.index("enhance(page)", loop)
+    assert v145 < v146 < v147 < loop < apply_call
 
 
-def test_v147_keeps_the_v145_view_startup_and_v146_qframe_fixes():
+def test_v147_keeps_the_v145_view_and_v146_qframe_fixes():
     source = _read("src/monitor_noticias/ui/art_studio_integration.py")
+    start = source.index("def _enhance_art_studio_page")
+    qframe_at = source.index("art_studio_v146_module.QFrame = QFrame", start)
+    v146_at = source.index("enhance_art_studio_page_v146,", start)
     assert "class _DeferredArtStudioView" in source
     assert "_install_deferred_view_compatibility()" in source
-    assert "art_studio_v146_module.QFrame = QFrame" in source
-    assert source.index("art_studio_v146_module.QFrame = QFrame") < source.index(
-        "enhance_art_studio_page_v146(self.art_studio_page)"
-    )
+    assert qframe_at < v146_at

@@ -58,15 +58,18 @@ def test_v146_adds_persisted_frame_and_shadow_effects():
 def test_v146_excludes_internal_frame_overlays_from_saved_layer_list():
     source = _read("src/monitor_noticias/ui/art_studio_v146.py")
     assert "def _top_level_items(" in source
-    assert 'if child.data(FRAME_CHILD_KEY)' in source
+    assert "if child.data(FRAME_CHILD_KEY)" in source
     assert 'page._content_items = lambda: _top_level_items(page)' in source
 
 
 def test_v146_is_installed_after_existing_v145_enhancements():
     source = _read("src/monitor_noticias/ui/art_studio_integration.py")
-    v145 = source.index("enhance_art_studio_page(self.art_studio_page)")
-    v146 = source.index("enhance_art_studio_page_v146(self.art_studio_page)")
-    assert v145 < v146
+    start = source.index("def _enhance_art_studio_page")
+    v145 = source.index("enhance_art_studio_page,", start)
+    v146 = source.index("enhance_art_studio_page_v146,", start)
+    apply_loop = source.index("for enhance in enhancers:", start)
+    apply_call = source.index("enhance(page)", apply_loop)
+    assert v145 < v146 < apply_loop < apply_call
 
 
 def test_v146_keeps_existing_runtime_dependencies():
