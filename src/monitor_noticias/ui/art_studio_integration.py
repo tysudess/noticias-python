@@ -153,7 +153,12 @@ def _enhance_art_studio_page(page=None):
 
 
 def _art_studio_enhancers():
-    """Nome explícito para os chamadores que agendam uma camada por vez."""
+    """Prepara as correções de desempenho antes de montar a fila do editor."""
+    from monitor_noticias.ui.art_studio_v176_performance_patch import (
+        install_art_studio_v176_performance_patch,
+    )
+
+    install_art_studio_v176_performance_patch()
     return _enhance_art_studio_page()
 
 
@@ -336,7 +341,10 @@ def _advance_art_studio_loading(window) -> None:
             )
             if import_elapsed >= 1.0:
                 log.warning("[ArtStudioLoad] A importação das camadas demorou %.3fs.", import_elapsed)
-            _set_loading_message(window, f"Página criada. Preparando camada 1 de {len(queue)}…")
+            _set_loading_message(
+                window,
+                "Preparando os componentes do Estúdio de Artes…",
+            )
             window._art_studio_load_timer.start(15)
             return
 
@@ -351,7 +359,12 @@ def _advance_art_studio_loading(window) -> None:
         enhance = queue[index]
         stage = _enhancer_failure_stage(queue, index)
         window._art_studio_current_stage = stage
-        _set_loading_message(window, f"Preparando Estúdio de Artes…\n{stage}")
+        # Não expor o histórico das camadas V145–V177 na interface.
+        # Para o usuário existe uma única ferramenta, preparada em segundo plano.
+        _set_loading_message(
+            window,
+            "Preparando os componentes do Estúdio de Artes…",
+        )
         started = time.perf_counter()
         log.info("[ArtStudioLoad] INÍCIO %s.", stage)
         enhance(page)
